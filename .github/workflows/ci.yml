@@ -1,0 +1,166 @@
+# Build + test gate for the alohajet package.
+#
+# Two platforms, because this package claims two: macOS uses Foundation's
+# `URLSessionWebSocketTask` for the CDP transport, Linux cannot (see
+# Sources/CDP/LinuxWebSocketChannel.swift, a raw-POSIX WebSocket written precisely
+# because corelibs' URLSession does not work against Chrome). Those are different
+# transports under one test suite, so a green macOS run says nothing about Linux.
+#
+# THE LINUX STATE, MEASURED RATHER THAN INHERITED. The private repo's Linux gate has
+# been red, ending in a process crash at `ProtocolRouter/LLMWireLog.swift:41`
+# (`logged.url = redactedURL.flatMap { URL(string: $0) }`, a mutation of a `URLRequest`
+# that SIGILLs on corelibs). That line does NOT travel with this cut: ProtocolRouter is
+# not in the package and `grep -rn URLRequest Sources/` returns nothing. That claim was
+# checked by actually building for Linux in `swift:6.2.3-noble`, not by reading — and
+# the build found FOUR other Linux breaks the macOS build cannot see, all of which are
+# fixed in the tree this workflow gates:
+#
+#   1. `fputs(…, stderr)` / `fputs(…, stdout)` — Glibc declares those as `var`s of
+#      OPTIONAL pointer type where Darwin declares non-optional `let`s, so each was both
+#      a Swift 6 "shared mutable state" error and a type error: the package did not
+#      compile on Linux at all.
+#   2. `CFGetTypeID` / `CFBooleanGetTypeID` in `BrowserToolSession.workflowValue` —
+#      CoreFoundation does not exist off Apple. (Rewriting that also surfaced a real
+#      cross-platform bug: `{"index":0}` was arriving at the tools as `false`.)
+#   3. A test using `URLSession` without `import FoundationNetworking`.
+#   4. And the one that matters most, because it is the SAME CLASS as the crash the
+#      private gate has been dying on: the obvious fix for (1) —
+#      `FileHandle.standardOutput.write` — compiles everywhere and TRAPS on Linux.
+#      corelibs-Foundation implements it as a `try!` (Foundation/FileHandle.swift:699)
+#      that turns an ordinary `EINTR` into a fatal error, and it killed the test process
+#      on the first Linux run. Every standard-stream write now goes through
+#      `ToolABI/StandardStreams.swift`, a `write(2)` loop that retries on EINTR.
+#
+# So: the manifest's claim about the crashing line is TRUE, and "so Linux is fine" would
+# have been false four times over. This job is what keeps it true.
+#
+# Both jobs install a real Chromium and set ALOHAJET_REQUIRE_BROWSER=1. The
+# end-to-end suite skips itself when no browser is present, so that a contributor
+# without one still gets a green `swift test` — and in CI a silent skip is exactly
+# how a real-browser path goes untested for a month behind a green badge. The flag
+# turns the skip back into a failure.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS (Swift 6.2)
+    runs-on: macos-15
+    env:
+      ALOHAJET_REQUIRE_BROWSER: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select a toolchain that can build this package
+        # `swift-tools-version:6.2` plus SE-0466 default isolation: an older toolchain
+        # does not warn, it fails to parse the manifest. Rather than pin an Xcode version
+        # that the runner image may not carry, take the newest one installed and then
+        # ASSERT the Swift version — so an image change produces "found Swift 6.1" here
+        # instead of a hundred syntax errors three steps later.
+        run: |
+          set -euo pipefail
+          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1)"
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version
+          swift --version
+          version="$(swift -version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n 1)"
+          case "$version" in
+            6.2|6.[3-9]|6.[1-9][0-9]|[7-9].*) echo "toolchain $version is new enough" ;;
+            *) echo "This package needs Swift 6.2 or newer; the runner has $version." >&2; exit 1 ;;
+          esac
+
+      - name: Install Chrome for the end-to-end suite
+        # `ChromeLauncher.defaultExecutablePath` is
+        # `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` on macOS.
+        # GitHub's macOS images normally ship it; install it if the image changes,
+        # and fail loudly if it is still missing rather than skipping the suite.
+        run: |
+          set -euo pipefail
+          chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          if [ ! -x "$chrome" ]; then
+            brew install --cask google-chrome
+          fi
+          "$chrome" --version
+
+      - name: Build
+        run: swift build --build-tests 2>&1
+
+      - name: Test
+        run: swift test
+
+  linux:
+    name: Linux (Swift 6.2.3, Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    container:
+      image: swift:6.2.3-noble
+      # Chrome's sandbox needs syscalls the default seccomp profile blocks, and more
+      # than the default 64 MB of /dev/shm. Same relaxations the private repo's Linux
+      # gate applies, for the same reason.
+      options: --security-opt seccomp=unconfined --shm-size=1g
+    defaults:
+      run:
+        # A container job defaults to `sh` (dash), where `set -o pipefail` aborts the
+        # step. Every `run` here gets bash.
+        shell: bash
+    env:
+      ALOHAJET_REQUIRE_BROWSER: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report versions
+        run: swift --version
+
+      - name: Install Chrome and its runtime libraries
+        # The Swift image is thin: the browser needs these shared objects or it exits
+        # immediately, and the launcher sends its stderr to /dev/null, so the only
+        # symptom would be a bare discovery timeout.
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates gnupg \
+            libnss3 libnspr4 \
+            libatk1.0-0t64 libatk-bridge2.0-0t64 libatspi2.0-0t64 \
+            libcups2t64 libdrm2 libgbm1 \
+            libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+            libpango-1.0-0 libcairo2 libasound2t64 \
+            fonts-liberation
+          curl -fsSL -o /tmp/chrome.deb \
+            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          dpkg -i /tmp/chrome.deb || apt-get -f install -y
+          google-chrome --version
+
+      - name: Run as a non-root user
+        # A container job runs as root, and root ignores directory permissions — the
+        # privacy suite asserts that a 0600 log file and a 0700 directory are what they
+        # claim, and root makes several such assertions read backwards. Chrome also
+        # refuses to run its sandbox as root.
+        run: |
+          set -euo pipefail
+          useradd --create-home --shell /bin/bash ci
+          chown -R ci:ci "$GITHUB_WORKSPACE"
+
+      - name: Build
+        run: su ci -c "cd '$GITHUB_WORKSPACE' && swift build --build-tests"
+
+      - name: Test
+        # `--no-parallel` ON LINUX ONLY, and it is a workaround for a corelibs bug, not
+        # a preference. `FileHandle.write` on Linux is a `try!` that traps on `EINTR`
+        # (Foundation/FileHandle.swift:699), and swift-testing writes its own progress
+        # lines through it. The CLI suite spawns ~40 subprocesses; every one that exits
+        # raises SIGCHLD, which interrupts whatever write is in flight, and the test
+        # process dies with
+        #   Fatal error: 'try!' expression unexpectedly raised an error … EINTR
+        # in the middle of an otherwise green run. Reproduced here in the same container
+        # image: parallel dies at a different test every time, serial is green.
+        # Remove this when corelibs stops trapping. macOS runs parallel.
+        run: su ci -c "cd '$GITHUB_WORKSPACE' && swift test --no-parallel"

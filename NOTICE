@@ -1,0 +1,84 @@
+alohajet
+Copyright 2026 Aloha Browser
+
+This product is licensed under the Apache License, Version 2.0. The full text
+is in LICENSE at the root of this repository.
+
+This file records the third-party notices this repository is required to
+reproduce for code it does not own. One section per upstream, licence text
+verbatim.
+
+--------------------------------------------------------------------------------
+
+browser-use — MIT License
+https://github.com/browser-use/browser-use
+
+DERIVATION STATEMENT
+
+`Sources/BrowserTools/Runtime/DomTreeScript.swift` builds the JavaScript
+document walker this package injects into every page it reads. That walker is
+derived from browser-use's `buildDomTree` script.
+
+What travelled: the shape of the walk and its node-classification rules. A
+single recursive pass over the live document that, for each node, decides
+whether it is visible (`isElementVisible`), interactive, and the topmost
+element at its own coordinates (`isTopElement`, an `elementFromPoint` hit
+test); per-node `WeakMap` caches for bounding rects, computed styles and
+interactivity so those queries are not repeated per ancestor; and a flat node
+map returned to the host in one `Runtime.evaluate` round trip rather than a
+tree walked over the wire.
+
+What is this package's own: element identity and everything downstream of it.
+browser-use numbers the nodes it keeps with a per-walk highlight index;
+this package derives a stable id (`alohaIdFor`) by hashing an authored
+identity (`#id`, `[data-testid]`) or the node's frame-scoped xpath, writes it
+back onto the element as an `aloha-id` attribute so the node can be relocated
+by selector on a later call, and clears page-authored values of that attribute
+before each walk. Also this package's own: the occlusion probe
+(`probeOccluder`), the sensitive-field value masking injected into the walker
+(`Sources/BrowserTools/Runtime/SensitiveFieldScript.swift`), the packaging of
+the script as a Swift string template, and the markdown serialization of the
+returned node map (`Sources/BrowserTools/Context/`).
+
+The derived work is redistributed here under the Apache License, Version 2.0,
+as permitted by the MIT License below, whose terms continue to govern the
+portions taken from browser-use.
+
+LICENCE TEXT
+
+MIT License
+
+Copyright (c) 2024 Gregor Zunic
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+SCOPE OF THIS FILE
+
+browser-use is the only upstream this package carries code from. The package
+declares zero SwiftPM dependencies and vendors no source tree; the Chrome
+DevTools Protocol client, the WebSocket transport, the page-side runtime
+scripts other than the walker, the DOM serializer and the tool layer were
+written for this package.
+
+Two things a reader may recognise are not derived work and owe no attribution:
+the RFC 6455 client in `Sources/CDP/LinuxWebSocketChannel.swift` is an
+independent implementation of a published protocol, and `hashString` in the
+walker is the textbook `h * 31 + c` string hash.
