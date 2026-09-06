@@ -1,0 +1,97 @@
+# Release: build the CLI for every platform this package claims, publish one tarball
+# per platform plus one SHA256SUMS covering all of them.
+#
+# Deliberately not the release an app ships: that kind signs and notarizes a DMG of
+# a GUI app from a self-hosted runner holding a Developer ID. This package is a
+# command-line binary with no bundle, no app and no secrets, so it runs entirely on
+# GitHub-hosted runners and signs nothing. What that costs the user is stated in
+# RELEASING.md rather than hidden: an unsigned macOS binary is fine when fetched with
+# curl (no quarantine attribute) and is blocked by Gatekeeper when fetched with a
+# browser, which is the whole reason the install script exists.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, e.g. v0.2.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ONE macOS asset, built universal on the arm64 runner rather than two assets
+          # from two runners: GitHub's Intel macOS images are on their way out, and
+          # `swift build --arch arm64 --arch x86_64` produces a Mach-O carrying both —
+          # verified locally: `Mach-O universal binary with 2 architectures`.
+          - name: macos-universal
+            runner: macos-15
+            asset: alohajet-macos-universal
+            build_flags: "--arch arm64 --arch x86_64"
+          - name: linux-x86_64
+            runner: ubuntu-24.04
+            container: swift:6.2.3-noble
+            asset: alohajet-linux-x86_64
+            build_flags: ""
+    container: ${{ matrix.container || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the release binary
+        run: swift build -c release --product alohajet ${{ matrix.build_flags }}
+
+      - name: Stage, smoke test and pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME:-${{ inputs.version }}}"
+          # `--show-bin-path` because a universal build does NOT land in
+          # `.build/release`; it lands in `.build/apple/Products/Release`.
+          binary="$(swift build -c release --product alohajet ${{ matrix.build_flags }} --show-bin-path)/alohajet"
+          # A tarball whose binary cannot start is worse than no release. `--help`
+          # touches argument parsing and the usage table and launches no browser.
+          "$binary" --help > /dev/null
+          stage="dist/alohajet-${version}-${{ matrix.name }}"
+          mkdir -p "$stage"
+          cp "$binary" "$stage/alohajet"
+          cp LICENSE NOTICE README.md SECURITY.md "$stage/" 2>/dev/null || true
+          tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "alohajet-${version}-${{ matrix.name }}"
+          rm -rf "$stage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # ONE SHA256SUMS for the whole release, in the format `sha256sum -c` reads, so
+      # the install script can verify with a stock tool and no jq.
+      - name: Checksums
+        run: cd dist && sha256sum *.tar.gz | tee SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          generate_release_notes: true
