@@ -36,6 +36,24 @@ public nonisolated struct RemoteAutomationHTTPResponse: Sendable {
 /// terminal maps to a `.failed` `CLIRunResult` (this NEVER throws for those) — so the
 /// executable's `encodedJSON()` / exit-code contract is identical whichever driver
 /// ran (proven byte-for-byte by `DriverParityTests`).
+/// Which conversation a turn runs in, mirroring what a print-mode agent CLI offers:
+/// a fresh one unless the caller names one to continue.
+///
+/// The lane is SERVER-side state — `POST /agent/task` writes to whatever conversation
+/// the host is currently on, and carries no conversation of its own — so choosing one
+/// means moving the host's lane first via `POST /agent/new`.
+public enum AgentSession: Equatable, Sendable {
+    /// Mint a conversation for this turn. The default, because a turn that silently
+    /// appends to whatever the user last typed in the app is a surprise, and because
+    /// an id you were given back is the only thing you can resume.
+    case fresh
+    /// Continue the conversation with this id.
+    case resume(String)
+    /// Run in whatever conversation the host is already on, appending to it. This is
+    /// what every turn did before the default changed.
+    case current
+}
+
 public struct RemoteAutomationDriver: AlohaJetDriver {
     /// The transport seam: issue ONE HTTP request (method + absolute URL + optional
     /// body) and yield its status + body. Injected so tests are hermetic (a stub, no
@@ -61,46 +79,89 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     ///   - transport: the HTTP seam; defaults to the real `URLSession` transport.
     ///   - pollInterval: delay between `running` polls (default 250 ms).
     ///   - maxPollAttempts: cap on `running` polls (default 2400 ≈ 10 min at 250 ms).
+    ///   - session: which conversation the turn runs in. `.fresh` by default.
     public init(
         endpoint: URL,
         permissions: [CLIPermission] = [],
+        session: AgentSession = .fresh,
         transport: @escaping Transport = RemoteAutomationDriver.liveTransport,
         pollInterval: Duration = .milliseconds(250),
         maxPollAttempts: Int = 2400
     ) {
         self.endpoint = endpoint
         self.permissions = permissions
+        self.session = session
         self.transport = transport
         self.pollInterval = pollInterval
         self.maxPollAttempts = maxPollAttempts
     }
 
+    /// The conversation the turn ran in, reported so a caller can resume it. Filled by
+    /// `runTask(prompt:reportingSession:)`; `nil` when the host answered without one.
+    public let session: AgentSession
+
     public func runTask(prompt: String) async throws -> CLIRunResult {
+        await runTurn(prompt: prompt).result
+    }
+
+    /// The turn, plus the conversation it ran in so the caller can resume it.
+    ///
+    /// The id comes back from `POST /agent/new`; under `.current` the host is never
+    /// asked to move, so there is nothing to report and the id is `nil`.
+    public func runTurn(prompt: String) async -> (result: CLIRunResult, sessionId: String?) {
+        var reportedSession: String?
         do {
+            // 0) Choose the conversation BEFORE the turn, because `/agent/task` has no
+            //    conversation of its own — it writes to whichever lane the host is on.
+            switch session {
+            case .current:
+                break
+            case .fresh, .resume:
+                let body: Data?
+                if case let .resume(id) = session {
+                    body = Self.jsonBody(["sessionId": id])
+                } else {
+                    body = nil
+                }
+                let newResponse = try await transport("POST", agentURL(path: "/agent/new"), body)
+                guard newResponse.statusCode == 200 else {
+                    return (Self.failed("automation server refused /agent/new" + Self.detail(newResponse)), nil)
+                }
+                reportedSession = Self.stringValue(newResponse.body, key: "sessionId")
+                if case let .resume(id) = session, let got = reportedSession, got != id {
+                    // A host that ignores the requested id silently would append the turn
+                    // to the wrong conversation — the exact failure `--resume` exists to
+                    // prevent — so refuse rather than run somewhere the caller did not ask for.
+                    return (Self.failed(
+                        "automation server did not resume \(id): it answered with \(got). "
+                        + "That host predates per-id resume; rerun without --resume."), got)
+                }
+            }
+
             // 1) The permission set, on EVERY run including the empty deny list, so a
             //    run never inherits the previous one's grants.
             let permissionsResponse = try await transport(
                 "POST", agentURL(path: "/agent/permissions"), Self.permissionsBody(permissions))
             guard permissionsResponse.statusCode == 200 else {
-                return Self.failed("automation server rejected /agent/permissions" + Self.detail(permissionsResponse))
+                return (Self.failed("automation server rejected /agent/permissions" + Self.detail(permissionsResponse)), reportedSession)
             }
 
             // 2) Start ONE turn; the server mints a FRESH taskId (raw prompt body).
             let taskResponse = try await transport("POST", agentURL(path: "/agent/task"), Data(prompt.utf8))
             guard taskResponse.statusCode == 200 else {
-                return Self.failed("automation server refused /agent/task" + Self.detail(taskResponse))
+                return (Self.failed("automation server refused /agent/task" + Self.detail(taskResponse)), reportedSession)
             }
             guard let taskId = Self.stringValue(taskResponse.body, key: "taskId") else {
-                return Self.failed("automation server /agent/task returned no taskId")
+                return (Self.failed("automation server /agent/task returned no taskId"), reportedSession)
             }
 
             // 3) Poll the task's result to a terminal state.
-            return try await pollToTerminal(taskId: taskId)
+            return (try await pollToTerminal(taskId: taskId), reportedSession)
         } catch {
             // Any transport/URL/sleep-cancellation error is a turn failure, not a
             // thrown error — the exit-code contract stays identical whichever driver
             // ran, since every driver surfaces its failures inside the CLIRunResult.
-            return Self.failed("automation transport error: \(error)")
+            return (Self.failed("automation transport error: \(error)"), reportedSession)
         }
     }
 
@@ -168,6 +229,10 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
 
     /// `{ "permissions": [<raw name>…] }` — an object, not a bare array, like every
     /// other JSON route on the server.
+    private static func jsonBody(_ object: [String: Any]) -> Data {
+        (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+    }
+
     private static func permissionsBody(_ permissions: [CLIPermission]) -> Data {
         let object: [String: Any] = ["permissions": permissions.map(\.rawValue)]
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)

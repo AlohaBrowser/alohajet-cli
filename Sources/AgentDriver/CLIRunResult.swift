@@ -105,15 +105,19 @@ public nonisolated struct CLIRunResult: Sendable, Equatable, Codable {
     /// strings get correct JSON escaping and the byte stream is stable for a
     /// consuming harness to diff. The computed `isSuccess` is included explicitly
     /// (the synthesized `Codable` omits it).
-    public func encodedJSON() -> String {
+    /// `sessionId`, when given, is appended as a fifth key so a harness can resume the
+    /// conversation the turn ran in without parsing prose off stderr.
+    public func encodedJSON(sessionId: String? = nil) -> String {
         let finalTextValue: JSValue = finalText.map { .string($0) } ?? .null
         let failureReasonValue: JSValue = failureReason.map { .string($0) } ?? .null
-        return JSValue.object([
+        var fields: [(String, JSValue)] = [
             ("finalText", finalTextValue),
             ("completion", .string(completion.jsonValue)),
             ("isSuccess", .bool(isSuccess)),
             ("failureReason", failureReasonValue),
-        ]).stringify()
+        ]
+        if let sessionId { fields.append(("sessionId", .string(sessionId))) }
+        return JSValue.object(fields).stringify()
     }
 
     /// The process-to-process wire form: the synthesized `Codable` JSON — the stored

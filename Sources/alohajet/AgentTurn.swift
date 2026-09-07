@@ -37,24 +37,33 @@ enum AgentTurn {
             return error.code
         }
 
+        let session: AgentSession
+        switch resolveSession(args) {
+        case let .success(value): session = value
+        case let .failure(error):
+            writeToStandardError("alohajet: \(error.message)\n")
+            return error.code
+        }
+
         // Every failure the driver can meet — no socket, a 409 busy, a rejected task,
         // an unreadable envelope — comes back INSIDE the result as `.failed`, so this
-        // one call covers the lot. The `try` is the protocol's, not this driver's.
-        let result: CLIRunResult
-        do {
-            result = try await RemoteAutomationDriver(endpoint: endpointURL).runTask(prompt: prompt)
-        } catch {
-            result = CLIRunResult(finalText: nil, completion: .failed, failureReason: "\(error)")
-        }
+        // one call covers the lot.
+        let (result, sessionId) = await RemoteAutomationDriver(
+            endpoint: endpointURL, session: session).runTurn(prompt: prompt)
 
         // The headless eval surface: the whole result as ONE JSON object on stdout
         // (success and failure alike), with the exit code preserved.
         if json {
-            print(result.encodedJSON())
+            print(result.encodedJSON(sessionId: sessionId))
             return result.isSuccess ? exitOK : exitToolError
         }
         if result.isSuccess, let finalText = result.finalText {
             print(finalText)
+            // The id goes to stderr, not stdout: piping the answer somewhere must not
+            // pick this up. It is only useful when there IS something to resume.
+            if let sessionId, session != .current {
+                writeToStandardError("\nchat \(sessionId) — continue it with: --resume \(sessionId)\n")
+            }
             return exitOK
         }
         let reasonSuffix = result.failureReason.map { ": \($0)" } ?? ""
@@ -74,6 +83,28 @@ enum AgentTurn {
             writeToStandardError("alohajet: the turn ended without any assistant text\n")
         }
         return exitToolError
+    }
+
+    /// Which conversation the turn runs in.
+    ///
+    /// A fresh one by default. Before this, every `-p` appended to whatever conversation
+    /// the app was last on, so two unrelated turns from two terminals landed in one
+    /// transcript and neither could be addressed afterwards.
+    private static func resolveSession(_ args: Args) -> Result<AgentSession, CLIError> {
+        let resume = args.value("--resume")
+        let continueLast = args.has("--continue")
+        if resume != nil, continueLast {
+            return .failure(CLIError(
+                message: "--resume <id> and --continue both name a conversation; pass one",
+                code: exitUsage))
+        }
+        if let resume {
+            guard !resume.trimmingCharacters(in: .whitespaces).isEmpty else {
+                return .failure(CLIError(message: "--resume expects a chat id", code: exitUsage))
+            }
+            return .success(.resume(resume))
+        }
+        return .success(continueLast ? .current : .fresh)
     }
 
     /// The agent endpoint, or the message that names exactly what is missing.

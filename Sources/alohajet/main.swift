@@ -34,7 +34,7 @@ struct CLIError: Error {
 /// boolean; `--flag=value` works for any of them.
 let valueFlags: Set<String> = [
     "--cdp", "--port", "--tab", "--text", "--index", "--timeout-ms", "--max-chars", "--browser",
-    "-p", "--endpoint"
+    "-p", "--endpoint", "--resume"
 ]
 
 struct Args {
@@ -137,6 +137,15 @@ AGENT (the ONE thing here that is not a tool call)
                                     `-p` says so and exits 2. Every command above
                                     needs a browser and no agent; `-p` needs an
                                     agent and no browser flags.
+                                    Each `-p` runs in a FRESH conversation and
+                                    prints its id on stderr, so a piped answer is
+                                    still just the answer.
+  --resume <chat-id>                continue that conversation instead. A host that
+                                    answers with a different id is refused, not
+                                    silently written to.
+  --continue                        run in whichever conversation the agent is
+                                    already on — what every turn did before the
+                                    default became fresh.
 
 CONNECTION (global; with none of these, the SHARED browser below is used)
   (default)                 one Chromium, launched on first use and REUSED by every

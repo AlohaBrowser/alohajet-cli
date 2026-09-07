@@ -50,9 +50,24 @@ actor RemoteStubServer {
         self.resultBodies = resultBodies
     }
 
+    /// `/agent/new` status, and an id that overrides what it answers with.
+    var newStatus: Int = 200
+    private(set) var newSessionOverride: String?
+    func setNewSessionOverride(_ id: String?) { newSessionOverride = id }
+
     func handle(method: String, path: String, body: String) -> RemoteAutomationHTTPResponse {
         requests.append((method, path, body))
         switch path {
+        case "/agent/new":
+            // The host answers with the lane it moved to: the id it was handed, or a
+            // minted one. `newSessionOverride` lets a test play a host that ignores the
+            // request, which the driver must refuse rather than run in the wrong chat.
+            let requested = (try? JSONSerialization.jsonObject(with: Data(body.utf8)))
+                .flatMap { ($0 as? [String: Any])?["sessionId"] as? String }
+            let lane = newSessionOverride ?? requested ?? "minted-0001"
+            return RemoteAutomationHTTPResponse(
+                statusCode: newStatus,
+                body: Data(#"{"ok":true,"sessionId":"\#(lane)"}"#.utf8))
         case "/agent/permissions":
             let granted = permissionsStatus == 200
             let payload = granted ? #"{"ok":true}"# : #"{"ok":false,"error":"unknown permission"}"#
@@ -77,6 +92,8 @@ actor RemoteStubServer {
     }
 
     var paths: [String] { requests.map(\.path) }
+    var newCount: Int { requests.filter { $0.path == "/agent/new" }.count }
+    func firstNewBody() -> String? { requests.first { $0.path == "/agent/new" }?.body }
     var permissionsCount: Int { requests.filter { $0.path == "/agent/permissions" }.count }
     var taskCount: Int { requests.filter { $0.path == "/agent/task" }.count }
     var resultCount: Int { requests.filter { $0.path == "/agent/result" }.count }
@@ -89,7 +106,8 @@ actor RemoteStubServer {
 /// bounded). The endpoint host is unreachable on purpose — every byte flows through
 /// the injected transport, never a socket.
 func makeRemoteDriver(
-    stub: RemoteStubServer, permissions: [CLIPermission] = [], maxPollAttempts: Int = 50
+    stub: RemoteStubServer, permissions: [CLIPermission] = [],
+    session: AgentSession = .fresh, maxPollAttempts: Int = 50
 ) -> RemoteAutomationDriver {
     let transport: RemoteAutomationDriver.Transport = { method, url, body in
         let bodyStr = body.map { String(decoding: $0, as: UTF8.self) } ?? ""
@@ -98,6 +116,7 @@ func makeRemoteDriver(
     return RemoteAutomationDriver(
         endpoint: URL(string: "http://127.0.0.1:65535")!,
         permissions: permissions,
+        session: session,
         transport: transport,
         pollInterval: .milliseconds(1),
         maxPollAttempts: maxPollAttempts)
@@ -253,7 +272,7 @@ struct RemoteAutomationDriverTests {
 
         _ = try await driver.runTask(prompt: "grant me")
 
-        #expect(await stub.paths == ["/agent/permissions", "/agent/task", "/agent/result"])
+        #expect(await stub.paths == ["/agent/new", "/agent/permissions", "/agent/task", "/agent/result"])
     }
 
     // An empty set is an explicit revoke, not a no-op: it still goes over the wire.
@@ -378,5 +397,68 @@ struct RemoteAutomationDriverTests {
         let failure = await driver.quit()
 
         #expect(failure?.hasPrefix("error: automation transport error") == true)
+    }
+
+    // MARK: - Which conversation a turn runs in
+
+    // The default is a FRESH conversation. Before this, every turn appended to whichever
+    // one the host was last on, so two unrelated runs from two terminals landed in one
+    // transcript and neither could be addressed afterwards.
+    @Test("by default a turn mints a conversation and reports it")
+    func freshIsTheDefault() async throws {
+        let done = try remoteResultEnvelope(state: "done", result: remoteSuccessFixture)
+        let stub = RemoteStubServer(resultBodies: [done])
+        let driver = makeRemoteDriver(stub: stub)
+
+        let (result, sessionId) = await driver.runTurn(prompt: "two plus two")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(await stub.newCount == 1)
+        #expect(await stub.firstNewBody() == "")   // no id: mint one
+        #expect(sessionId == "minted-0001")
+    }
+
+    @Test("--resume names the conversation, and it is the one reported back")
+    func resumeMovesToTheNamedLane() async throws {
+        let done = try remoteResultEnvelope(state: "done", result: remoteSuccessFixture)
+        let stub = RemoteStubServer(resultBodies: [done])
+        let driver = makeRemoteDriver(stub: stub, session: .resume("chat-42"))
+
+        let (result, sessionId) = await driver.runTurn(prompt: "and again")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(await stub.firstNewBody()?.contains("chat-42") == true)
+        #expect(sessionId == "chat-42")
+    }
+
+    // A host that predates per-id resume answers /agent/new with a minted id instead of
+    // the requested one. Running anyway would append the turn to the WRONG conversation —
+    // the single thing --resume exists to prevent — so the driver refuses.
+    @Test("a host that ignores the requested id fails the turn instead of running elsewhere")
+    func resumeRefusesWhenTheHostIgnoresTheId() async throws {
+        let done = try remoteResultEnvelope(state: "done", result: remoteSuccessFixture)
+        let stub = RemoteStubServer(resultBodies: [done])
+        await stub.setNewSessionOverride("some-other-lane")
+        let driver = makeRemoteDriver(stub: stub, session: .resume("chat-42"))
+
+        let (result, sessionId) = await driver.runTurn(prompt: "and again")
+
+        #expect(!result.isSuccess)
+        #expect(result.failureReason?.contains("did not resume chat-42") == true)
+        #expect(sessionId == "some-other-lane")
+        #expect(await stub.taskCount == 0)   // the turn never ran
+    }
+
+    @Test("--continue leaves the host's lane alone")
+    func currentSkipsTheLaneMove() async throws {
+        let done = try remoteResultEnvelope(state: "done", result: remoteSuccessFixture)
+        let stub = RemoteStubServer(resultBodies: [done])
+        let driver = makeRemoteDriver(stub: stub, session: .current)
+
+        let (result, sessionId) = await driver.runTurn(prompt: "carry on")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(await stub.newCount == 0)
+        #expect(sessionId == nil)   // nothing was chosen, so there is nothing to report
     }
 }
