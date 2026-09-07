@@ -34,7 +34,7 @@ arm64 --arch x86_64` produces a binary carrying both slices (verified —
 `Mach-O universal binary with 2 architectures`), which costs one runner instead of
 two and does not depend on GitHub keeping an Intel macOS image around.
 
-Each tarball holds the binary plus `LICENSE`, `NOTICE`, `README.md` and
+Each tarball holds the binary plus `LICENSE`, `README.md` and
 `SECURITY.md` — the binary drives a browser holding the user's logged-in sessions,
 and the disclosure belongs next to it, not two links away.
 

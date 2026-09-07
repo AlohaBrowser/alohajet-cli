@@ -65,7 +65,7 @@ jobs:
           stage="dist/alohajet-${version}-${{ matrix.name }}"
           mkdir -p "$stage"
           cp "$binary" "$stage/alohajet"
-          cp LICENSE NOTICE README.md SECURITY.md "$stage/" 2>/dev/null || true
+          cp LICENSE README.md SECURITY.md "$stage/" 2>/dev/null || true
           tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "alohajet-${version}-${{ matrix.name }}"
           rm -rf "$stage"
 
