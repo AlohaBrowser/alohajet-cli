@@ -1,8 +1,3 @@
-// This file's in-page document walker is derived from browser-use
-// (https://github.com/browser-use/browser-use), which is distributed under the
-// MIT License. The verbatim MIT license text and the derivation statement are
-// in NOTICE at the root of this repository.
-
 import Foundation
 
 /// Produces the page-side document walker injected via the tab layer. It walks

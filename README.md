@@ -366,6 +366,8 @@ agent your logged-in sessions, by design.
 
 ## License
 
-Apache 2.0 — see [LICENSE](LICENSE). The in-page document walker is derived from
-[browser-use](https://github.com/browser-use/browser-use) (MIT); the notice and verbatim
-license text are in [NOTICE](NOTICE).
+Apache 2.0 — see [LICENSE](LICENSE).
+
+This package carries no third-party source. It declares zero SwiftPM dependencies and
+vendors no tree: the CDP client, the WebSocket transport, the page-side runtime scripts,
+the DOM serializer and the tool layer were written for it.
