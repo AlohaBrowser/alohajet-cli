@@ -272,7 +272,10 @@ struct RemoteAutomationDriverTests {
 
         _ = try await driver.runTask(prompt: "grant me")
 
-        #expect(await stub.paths == ["/agent/new", "/agent/permissions", "/agent/task", "/agent/result"])
+        // `/agent/lane` first: the probe that picks the protocol. This stub has no such
+        // route, so it answers 404 and the legacy sequence follows, unchanged.
+        #expect(await stub.paths
+                == ["/agent/lane", "/agent/new", "/agent/permissions", "/agent/task", "/agent/result"])
     }
 
     // An empty set is an explicit revoke, not a no-op: it still goes over the wire.

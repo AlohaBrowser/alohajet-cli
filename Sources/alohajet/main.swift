@@ -137,6 +137,8 @@ AGENT (the ONE thing here that is not a tool call)
                                     `-p` says so and exits 2. Every command above
                                     needs a browser and no agent; `-p` needs an
                                     agent and no browser flags.
+                                    <url> must be loopback http (127.0.0.1, ::1,
+                                    localhost) or https: see ALOHAJET_AGENT_TOKEN.
                                     Each `-p` runs in a FRESH conversation and
                                     prints its id on stderr, so a piped answer is
                                     still just the answer.
@@ -194,9 +196,13 @@ ENVIRONMENT
                             is not a registered install
   ALOHAJET_AGENT_TOKEN      the bearer token `-p` sends to --endpoint. Unset: read
                             from ~/Library/Application Support/Aloha/automation-token,
-                            where the Aloha browser provisions it. Absent entirely:
-                            no Authorization header is sent and the endpoint answers
-                            401 — never a silent unauthenticated retry
+                            where the Aloha browser provisions it — but that AMBIENT
+                            token is sent to a LOOPBACK --endpoint only, since it
+                            grants full control of the browser and rewrites the
+                            provider API key stored in it. An https --endpoint
+                            elsewhere is served only by this variable, set on purpose.
+                            Absent entirely: no Authorization header is sent and the
+                            endpoint answers 401 — never a silent unauthenticated retry
   ALOHAJET_DEBUG            log protocol chatter to stderr
 
 EXIT CODES

@@ -49,7 +49,12 @@ enum AgentTurn {
         // an unreadable envelope — comes back INSIDE the result as `.failed`, so this
         // one call covers the lot.
         let (result, sessionId) = await RemoteAutomationDriver(
-            endpoint: endpointURL, session: session).runTurn(prompt: prompt)
+            endpoint: endpointURL, session: session,
+            // Notices — a host that speaks only the legacy protocol, a resumed id that
+            // names no conversation yet — go to stderr, never stdout: a piped `--json`
+            // must stay one parseable object.
+            warn: { writeToStandardError("alohajet: note: \($0)\n") }
+        ).runTurn(prompt: prompt)
 
         // The headless eval surface: the whole result as ONE JSON object on stdout
         // (success and failure alike), with the exit code preserved.
@@ -61,7 +66,10 @@ enum AgentTurn {
             print(finalText)
             // The id goes to stderr, not stdout: piping the answer somewhere must not
             // pick this up. It is only useful when there IS something to resume.
-            if let sessionId, session != .current {
+            // Printed whenever the host named one — including under `--continue`, which
+            // against a protocol-2 host resolves to a concrete id that can be resumed by
+            // id from then on. A legacy `--continue` names nothing and prints nothing.
+            if let sessionId {
                 writeToStandardError("\nchat \(sessionId) — continue it with: --resume \(sessionId)\n")
             }
             return exitOK
@@ -85,33 +93,19 @@ enum AgentTurn {
         return exitToolError
     }
 
-    /// Which conversation the turn runs in.
+    /// Which conversation the turn runs in — the rule itself is `AgentSession.resolve`,
+    /// in the library, where a test can reach it; this only reads argv and maps the
+    /// refusal onto the usage exit code.
     ///
-    /// A fresh one by default. Before this, every `-p` appended to whatever conversation
-    /// the app was last on, so two unrelated turns from two terminals landed in one
-    /// transcript and neither could be addressed afterwards.
+    /// A fresh conversation by default. Before that, every `-p` appended to whatever
+    /// conversation the app was last on, so two unrelated turns from two terminals landed
+    /// in one transcript and neither could be addressed afterwards.
     private static func resolveSession(_ args: Args) -> Result<AgentSession, CLIError> {
-        // PRESENCE, not value: `args.value` reads an empty value as absent, so
-        // `--resume "$CHAT_ID"` with an unset variable would fall through to `.fresh` —
-        // a brand-new conversation reported as success, the exact bug --resume exists to end.
-        let hasResume = args.has("--resume")
-        // Trimmed ONCE, here, and the trimmed value is what goes on the wire: the server
-        // trims what it receives and echoes that back, so sending the padded id makes the
-        // resume guard refuse an id the host resumed correctly.
-        let resume = args.value("--resume")?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let continueLast = args.has("--continue")
-        if hasResume, continueLast {
-            return .failure(CLIError(
-                message: "--resume <id> and --continue both name a conversation; pass one",
-                code: exitUsage))
-        }
-        if hasResume {
-            guard let resume, !resume.isEmpty else {
-                return .failure(CLIError(message: "--resume expects a chat id", code: exitUsage))
-            }
-            return .success(.resume(resume))
-        }
-        return .success(continueLast ? .current : .fresh)
+        AgentSession.resolve(
+            resume: args.value("--resume"),
+            hasResume: args.has("--resume"),
+            continueLast: args.has("--continue")
+        ).mapError { CLIError(message: $0.message, code: exitUsage) }
     }
 
     /// The agent endpoint, or the message that names exactly what is missing.
@@ -133,6 +127,20 @@ enum AgentTurn {
         guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https", url.host != nil else {
             return .failure(CLIError(message: "--endpoint expects an http(s) URL — got \"\(raw)\"", code: exitUsage))
+        }
+        // Plaintext to somewhere that is not this machine is refused outright rather
+        // than downgraded to an unauthenticated request: the bearer token this sends
+        // grants /agent/task, /agent/config — which rewrites the user's LLM provider
+        // key — and /quit, and dropping the header would still ship the PROMPT off the
+        // machine in the clear, then misreport the resulting 401 as a token problem.
+        // https is allowed anywhere (TLS covers the wire); what such a host does NOT
+        // get is the ambient token off disk — see `AutomationToken.read(for:)`.
+        guard scheme == "https" || AutomationToken.isLoopback(url) else {
+            return .failure(CLIError(message: """
+                --endpoint must be loopback http or https — got \"\(raw)\".
+                  The bearer token this sends grants full control of the browser and rewrites
+                  the user's provider API key; it is not sent over plaintext to a remote host.
+                """, code: exitUsage))
         }
         return .success(url)
     }

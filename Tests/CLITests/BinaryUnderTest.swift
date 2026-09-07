@@ -59,7 +59,10 @@ struct RunOutput {
 /// took the whole test process down on the first Linux run. A file has no buffer limit
 /// and needs no writer.
 @discardableResult
-func runCLI(_ arguments: [String], stdin: String? = nil, timeout: TimeInterval = 30) throws -> RunOutput {
+func runCLI(
+    _ arguments: [String], stdin: String? = nil, environment overlay: [String: String] = [:],
+    timeout: TimeInterval = 30
+) throws -> RunOutput {
     let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
     let sandbox = FileManager.default.temporaryDirectory
         .appendingPathComponent("alohajet-cli-test-\(UUID().uuidString)")
@@ -78,6 +81,10 @@ func runCLI(_ arguments: [String], stdin: String? = nil, timeout: TimeInterval =
     process.arguments = arguments
     var environment = ProcessInfo.processInfo.environment
     environment["TMPDIR"] = sandbox.path
+    // The overlay LAST, and it is how the agent cases pin `ALOHAJET_AGENT_TOKEN`: the
+    // developer running this suite has a real one on disk, and a test must neither
+    // depend on it nor hand it to a stub.
+    environment.merge(overlay) { _, override in override }
     process.environment = environment
     process.standardInput = try FileHandle(forReadingFrom: inURL)
     process.standardOutput = try FileHandle(forWritingTo: outURL)

@@ -19,7 +19,24 @@ public nonisolated struct RemoteAutomationHTTPResponse: Sendable {
 
 /// The remote `AlohaJetDriver`, and the whole of `alohajet -p`: it drives an agent
 /// loop that already exists behind an HTTP endpoint (`--endpoint <url>`) instead of
-/// running one in this process. `runTask`:
+/// running one in this process.
+///
+/// It speaks TWO protocols and picks between them with one read-only probe,
+/// `GET /agent/lane`:
+///
+/// * **protocol 2** (`{"protocol":2,…}`) — ONE `POST /agent/run` carrying the prompt,
+///   the conversation and the permission set in a single JSON body. The turn therefore
+///   NAMES the conversation it runs in, so two terminals cannot write into each other's
+///   chats, and the grant write is no longer a separate request another turn can
+///   overwrite. `--continue` pins the probe's conversation once and is thereafter
+///   identical to `--resume`.
+/// * **protocol 1** (any other answer, including the `404` a pre-v2 host gives) — the
+///   legacy three-request handshake below, byte-for-byte unchanged. It cannot bind a
+///   task to a conversation, so concurrent turns against such a host are unsafe; the
+///   driver says so through `warn` and runs anyway, because the SERIAL flow works and
+///   refusing it would break every host that has not been updated yet.
+///
+/// The legacy sequence, retained for protocol 1:
 ///
 /// 1. writes the run's permission set via `POST /agent/permissions` — ALWAYS,
 ///    including the empty deny list, so a run never inherits the grants of the one
@@ -39,9 +56,10 @@ public nonisolated struct RemoteAutomationHTTPResponse: Sendable {
 /// Which conversation a turn runs in, mirroring what a print-mode agent CLI offers:
 /// a fresh one unless the caller names one to continue.
 ///
-/// The lane is SERVER-side state — `POST /agent/task` writes to whatever conversation
-/// the host is currently on, and carries no conversation of its own — so choosing one
-/// means moving the host's lane first via `POST /agent/new`.
+/// Under protocol 2 the choice rides ON the turn (`POST /agent/run`'s `conversation`).
+/// Under protocol 1 there is nowhere on the turn to put it — `POST /agent/task` writes
+/// to whatever conversation the host is currently on — so choosing one means moving the
+/// host's lane first via `POST /agent/new`, and two overlapping turns race for it.
 public enum AgentSession: Equatable, Sendable {
     /// Mint a conversation for this turn. The default, because a turn that silently
     /// appends to whatever the user last typed in the app is a surprise, and because
@@ -52,6 +70,53 @@ public enum AgentSession: Equatable, Sendable {
     /// Run in whatever conversation the host is already on, appending to it. This is
     /// what every turn did before the default changed.
     case current
+}
+
+public extension AgentSession {
+    /// Why the flags name no conversation. A type only because `Result` needs an
+    /// `Error`; the message is the whole of it, and the caller owns the exit code.
+    struct FlagError: Error, Equatable {
+        public let message: String
+    }
+
+    /// Which conversation the `--resume` / `--continue` flags name, or the usage message
+    /// that says why they name none.
+    ///
+    /// It lives here, beside the type it produces, rather than in the executable that
+    /// reads argv — an executable target cannot be imported by a test, and this rule had
+    /// NO test at all while it silently reported `.fresh` for every flag combination.
+    ///
+    /// - Parameters:
+    ///   - resume: `--resume`'s VALUE, or `nil` when it has none.
+    ///   - hasResume: whether `--resume` was PRESENT. Distinct from its value on purpose:
+    ///     an argument reader that treats an empty value as absent turns
+    ///     `--resume "$CHAT_ID"` with an unset variable into a brand-new conversation
+    ///     reported as a successful resume — the exact bug `--resume` exists to end.
+    ///   - continueLast: whether `--continue` was present.
+    static func resolve(
+        resume: String?, hasResume: Bool, continueLast: Bool
+    ) -> Result<AgentSession, FlagError> {
+        if hasResume, continueLast {
+            return .failure(FlagError(message: "--resume <id> and --continue both name a conversation; pass one"))
+        }
+        guard hasResume else { return .success(continueLast ? .current : .fresh) }
+
+        // Trimmed ONCE, here, and the trimmed value is what goes on the wire: the server
+        // trims what it receives and echoes that back, so sending the padded id makes the
+        // resume guard refuse an id the host resumed correctly.
+        let raw = resume?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty else { return .failure(FlagError(message: "--resume expects a chat id")) }
+        // A chat id IS a UUID, and a non-UUID is refused HERE rather than on the wire: a
+        // host that cannot parse one falls back to the user's most recent chat, so the
+        // turn lands in a conversation nobody named and is reported as a resume.
+        // Uppercased because that is the canonical spelling the host files chats under
+        // and echoes back; send the other one and the resume guard refuses a conversation
+        // that was in fact resumed correctly.
+        guard let id = UUID(uuidString: raw) else {
+            return .failure(FlagError(message: "--resume expects a chat id (a UUID) — got \"\(raw)\""))
+        }
+        return .success(.resume(id.uuidString))
+    }
 }
 
 public struct RemoteAutomationDriver: AlohaJetDriver {
@@ -68,6 +133,10 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     /// it rides on `init` rather than on the shared `AlohaJetDriver.runTask` signature.
     public let permissions: [CLIPermission]
     private let transport: Transport
+    /// Where a non-fatal notice goes — a legacy host, or a resumed id that named no
+    /// existing conversation. The CLI sends these to stderr so a piped `--json` stdout
+    /// stays clean; the default drops them, because a library must not print.
+    private let warn: @Sendable (String) -> Void
     private let pollInterval: Duration
     /// The maximum number of `running` polls before the wait is abandoned as a
     /// `.failed` timeout — bounds the loop so it never busy-spins forever.
@@ -80,10 +149,12 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     ///   - pollInterval: delay between `running` polls (default 250 ms).
     ///   - maxPollAttempts: cap on `running` polls (default 2400 ≈ 10 min at 250 ms).
     ///   - session: which conversation the turn runs in. `.fresh` by default.
+    ///   - warn: sink for non-fatal notices; dropped by default.
     public init(
         endpoint: URL,
         permissions: [CLIPermission] = [],
         session: AgentSession = .fresh,
+        warn: @escaping @Sendable (String) -> Void = { _ in },
         transport: @escaping Transport = RemoteAutomationDriver.liveTransport,
         pollInterval: Duration = .milliseconds(250),
         maxPollAttempts: Int = 2400
@@ -91,6 +162,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         self.endpoint = endpoint
         self.permissions = permissions
         self.session = session
+        self.warn = warn
         self.transport = transport
         self.pollInterval = pollInterval
         self.maxPollAttempts = maxPollAttempts
@@ -106,9 +178,137 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
 
     /// The turn, plus the conversation it ran in so the caller can resume it.
     ///
-    /// The id comes back from `POST /agent/new`; under `.current` the host is never
-    /// asked to move, so there is nothing to report and the id is `nil`.
+    /// The id is the one the SERVER answered with, never the one this asked for: under
+    /// protocol 2 it is the canonical (uppercase) spelling the store files the chat
+    /// under, which is what `--resume` must be given back. `nil` only when the host
+    /// answered without one — which under protocol 1 is every `--continue`, since
+    /// nothing is asked and nothing is told.
     public func runTurn(prompt: String) async -> (result: CLIRunResult, sessionId: String?) {
+        // Which protocol this host speaks, from the one route that is safe to call
+        // before anything is decided: `/agent/lane` is a pure read, and a pre-v2 host
+        // answers it 404 from its default arm. That 404 IS the protocol-1 signal — no
+        // version header, no capability negotiation, one GET the client needed anyway
+        // (it is also `--continue`'s resolver).
+        let lane: [String: Any]?
+        do {
+            let probe = try await transport("GET", agentURL(path: "/agent/lane"), nil)
+            let object = probe.statusCode == 200 ? Self.jsonObject(probe.body) : nil
+            lane = (object?["protocol"] as? Int) == 2 ? object : nil
+        } catch {
+            return (Self.failed("automation transport error: \(error)"), nil)
+        }
+
+        guard let lane else {
+            warn("this browser speaks the legacy agent protocol; concurrent alohajet"
+                 + " turns against it are not safe.")
+            return await runProtocol1(prompt: prompt)
+        }
+        return await runProtocol2(prompt: prompt, lane: lane)
+    }
+
+    // MARK: - Protocol 2
+
+    /// ONE request carries prompt + conversation + permissions, so there is no window
+    /// between naming a conversation and running in it, and no separate grant write for
+    /// another terminal's turn to overwrite.
+    private func runProtocol2(prompt: String, lane: [String: Any]) async -> (result: CLIRunResult, sessionId: String?) {
+        do {
+            // `.fresh` names nothing and the server mints one; `.current` PINS the lane
+            // read by the probe, so it stops meaning "wherever the app is when the POST
+            // lands" and becomes an ordinary id — which is why it can be printed and
+            // resumed like one.
+            let requested: String?
+            switch session {
+            case .fresh:
+                requested = nil
+            case let .resume(id):
+                requested = id
+            case .current:
+                guard let current = lane["conversation"] as? String else {
+                    return (Self.failed(
+                        "automation server did not name the conversation it is on, so there"
+                        + " is nothing for --continue to continue"), nil)
+                }
+                requested = current
+            }
+
+            var body: [String: Any] = ["prompt": prompt, "permissions": permissions.map(\.rawValue)]
+            if let requested { body["conversation"] = requested }
+            let response = try await transport("POST", agentURL(path: "/agent/run"), Self.jsonBody(body))
+            guard response.statusCode == 200, let object = Self.jsonObject(response.body) else {
+                return (Self.failed(Self.runFailure(response)), nil)
+            }
+            guard let taskId = object["taskId"] as? String else {
+                return (Self.failed("automation server /agent/run returned no taskId"), nil)
+            }
+            // The conversation the server says it ran in. It is the answer that is
+            // reported and resumed — the request only ASKED.
+            let ran = object["conversation"] as? String
+
+            if let requested {
+                // The guard that was load-bearing under protocol 1 (where the binding was
+                // implicit in a lane a later request read) is a tautology here: the turn
+                // named its own conversation. It stays as the cheap assertion it now is —
+                // against a server that lies or a route that silently changed shape — and
+                // the ONE thing it still genuinely catches is a missing field.
+                guard let ran else {
+                    return (Self.failed(
+                        "automation server did not name the conversation it ran in, so it cannot"
+                        + " be confirmed the turn ran in \(requested)."), nil)
+                }
+                // Case-insensitively: the server answers the canonical uppercase spelling,
+                // and a caller that sent lowercase asked for the same chat.
+                guard ran.caseInsensitiveCompare(requested) == .orderedSame else {
+                    return (Self.failed(
+                        "automation server did not run in \(requested): it answered with \(ran)."), ran)
+                }
+            }
+
+            // An id that named no existing conversation is a NOTE, not a refusal: an id
+            // printed by a turn that then failed before committing names nothing yet, and
+            // refusing it would make the printed id dead forever instead of retryable.
+            if case .resume = session, object["known"] as? Bool == false, let ran {
+                warn("\(ran) named no existing conversation; starting a new one there.")
+            }
+
+            return (try await pollToTerminal(taskId: taskId), ran)
+        } catch {
+            return (Self.failed("automation transport error: \(error)"), nil)
+        }
+    }
+
+    /// The refusals `/agent/run` can answer with, in the words the user needs. The
+    /// server writes `message` for the two it can explain better than this side can
+    /// (which conversation is busy with what grants, which id was malformed); the rest
+    /// are fixed texts, and anything unrecognised falls back to the raw status + body
+    /// rather than being smoothed into a lie.
+    private static func runFailure(_ response: RemoteAutomationHTTPResponse) -> String {
+        let object = jsonObject(response.body)
+        let message = object?["message"] as? String
+        let generic = "automation server refused /agent/run" + detail(response)
+        switch (response.statusCode, object?["error"] as? String) {
+        case (409, "permissions_conflict"), (400, "bad_conversation_id"):
+            return message ?? generic
+        case (409, _):
+            return "that conversation already has a turn running;"
+                + " wait for it or use a different --resume id"
+        case (400, "empty_prompt"):
+            return "-p needs a non-empty prompt"
+        case (415, _):
+            return "automation server rejected the request body (expected application/json)"
+                + " — this browser is likely too old for this alohajet; update it"
+        default:
+            return generic
+        }
+    }
+
+    // MARK: - Protocol 1 (legacy, frozen)
+
+    /// The three-request handshake, unchanged: move the lane, write the grants
+    /// process-globally, then post a prompt that carries no conversation of its own.
+    /// Safe serially — which is how it is proven to work — and racy under overlap, which
+    /// no client-side change can fix because the wire has nowhere to put the binding.
+    private func runProtocol1(prompt: String) async -> (result: CLIRunResult, sessionId: String?) {
         var reportedSession: String?
         do {
             // 0) Choose the conversation BEFORE the turn, because `/agent/task` has no
@@ -252,9 +452,12 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
     }
 
+    private static func jsonObject(_ data: Data) -> [String: Any]? {
+        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
     private static func stringValue(_ data: Data, key: String) -> String? {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return object[key] as? String
+        jsonObject(data)?[key] as? String
     }
 
     private static func detail(_ response: RemoteAutomationHTTPResponse) -> String {
@@ -278,17 +481,23 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     // MARK: - Live transport
 
     /// The production transport: a real `URLSession` request/response. The agent
-    /// endpoint reads only the request line + `Content-Length` body, so no
-    /// content-type header is required (the `/agent/task` body is a raw prompt, not
-    /// JSON).
+    /// endpoint reads only the request line + `Content-Length` body, so the sole
+    /// content-type header sent is the one `/agent/run` insists on.
     public static let liveTransport: Transport = { method, url, body in
         var request = URLRequest(url: url)
         request.httpMethod = method
         if let body { request.httpBody = body }
-        // Every agent route is bearer-token gated (401 otherwise). See
-        // `AutomationToken` for where the shared secret is read from and why this
-        // reads it per request.
-        if let token = AutomationToken.read() {
+        // `/agent/run` REQUIRES it (415 otherwise). Nothing else gets it: the legacy
+        // `/agent/task` body is a raw prompt, and labelling that JSON would be a lie the
+        // frozen handler happens not to read.
+        if url.path.hasSuffix("/agent/run") {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        // Every agent route is bearer-token gated (401 otherwise). The URL is passed
+        // in because WHERE decides WHICH: see `AutomationToken` for where the shared
+        // secret is read from, why this reads it per request, and why the ambient one
+        // goes to a loopback host only.
+        if let token = AutomationToken.read(for: url) {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         let (data, response) = try await URLSession.shared.data(for: request)
