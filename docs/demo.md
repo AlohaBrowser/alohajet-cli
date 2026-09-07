@@ -5,7 +5,10 @@ prettifying. Reproduce it in about a minute; the page is served from disk so the
 transcript does not depend on anyone else's website staying the same.
 
 Recorded on macOS 26.2 (arm64), Swift 6.2.3, Google Chrome 152.0.7977.77, at commit
-`9e168b6`.
+`9e168b6`, and re-run at `b43cd28`: every `aloha-id` below came back identical. Four
+things are per-run and will differ for you — the tab ids, the `K="..."` fence keys, the
+CDP port in the last line, and the order `alohajet tabs` lists tabs in, which comes from
+the browser rather than from alohajet.
 
 ## Set the page up
 

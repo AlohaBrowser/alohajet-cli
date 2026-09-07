@@ -43,10 +43,18 @@ curl -fsSL https://raw.githubusercontent.com/AlohaBrowser/alohajet-cli/main/scri
 alohajet --help
 ```
 
-Two things have to be true before that line works, and neither is true now: the
-repository has to be public (`raw.githubusercontent.com` serves no private content, so
-the command 404s before it reaches the script), and a tag has to have produced a release
-with the assets below.
+Three things have to be true before that line works, and none is true now:
+
+1. The repository has to be public. `raw.githubusercontent.com` serves no private
+   content, so the command 404s before it ever reaches the script — verified today,
+   with the correct repository name.
+2. A tag has to have produced a release carrying the assets below. There are none.
+3. `scripts/install.sh` has to name this repository. Its line 14 reads
+   `REPO="${ALOHAJET_REPO:-AlohaBrowser/alohajet}"`, and this package is
+   **`AlohaBrowser/alohajet-cli`** — `AlohaBrowser/alohajet` is a different, existing
+   repository. Until that default is corrected, the script fetches from the wrong
+   place; `ALOHAJET_REPO=AlohaBrowser/alohajet-cli` overrides it in the meantime.
+   (A one-line fix in `scripts/`, not a document fix.)
 
 ## What a release is
 

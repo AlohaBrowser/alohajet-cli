@@ -1,23 +1,32 @@
 # Working on alohajet
 
 Everything here was run on macOS 26.2 (arm64) with Swift 6.2.3 and Google Chrome
-152.0.7977.77, at commit `9e168b6`. Output is quoted as it came back.
+152.0.7977.77, at commit `b43cd28`. Output is quoted as it came back.
 
 ## Build
 
 ```console
 $ swift build -c release --product alohajet
-Build of product 'alohajet' complete! (19.40s)
+Build of product 'alohajet' complete! (19.94s)
 ```
 
 From a fresh clone, with nothing to resolve: the package has no SwiftPM
 dependencies, so there is no `Package.resolved` and no network step.
 
+The build is not warning-free. Two are live, both harmless and both worth fixing:
+
+```
+Sources/ToolABI/AbortSignal.swift:213:13: warning: no calls to throwing functions occur within 'try' expression
+Sources/BrowserTools/Tabs/CDPBrowserBacking.swift:223:27: warning: no 'async' operations occur within 'await' expression
+```
+
+An incremental build will not re-emit them; `touch` those two files, or build clean.
+
 ## Test
 
 ```console
 $ swift test
-✔ Test run with 404 tests in 64 suites passed after 8.995 seconds.
+✔ Test run with 404 tests in 64 suites passed after 17.542 seconds.
 ```
 
 Part of that is a real browser: the `end to end, real browser` suite drives a
