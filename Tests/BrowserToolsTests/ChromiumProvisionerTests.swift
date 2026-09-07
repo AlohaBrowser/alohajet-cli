@@ -69,7 +69,7 @@ private func tempCacheRoot() -> String {
 // MARK: - Suite
 
 // Grouped under a suite whose name contains "ChromiumProvisioner" so the
-// acceptance filter `--filter CLIKitTests.ChromiumProvisioner` selects
+// acceptance filter `--filter ChromiumProvisioner` selects
 // every case (Swift Testing's --filter matches the test's qualified name).
 @Suite("ChromiumProvisioner")
 struct ChromiumProvisionerTests {

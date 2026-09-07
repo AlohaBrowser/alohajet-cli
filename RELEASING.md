@@ -55,7 +55,7 @@ or Actions → **release** → Run workflow with an explicit version.
 
 ## Signing: what is not done, and what that costs
 
-**Nothing is signed and nothing is notarized.** The private repo's release does both
+**Nothing is signed and nothing is notarized.** A shipped desktop app does both
 — it ships a GUI app bundle from a self-hosted macOS runner holding a Developer ID,
 and `scripts/package.sh` there imports a `.p12` into a throwaway keychain and calls
 `notarytool`. This package is a single command-line binary with no bundle, so it runs
@@ -71,7 +71,7 @@ The consequence is precise and worth stating rather than discovering:
   bad thing to teach and a good reason to prefer the script.
 
 Adding signing later means a Developer ID secret and a notarization step in
-`release.yml`; the private repo's `release.yml` is the working reference for both.
+`release.yml`, which is where both would be added.
 
 ## Why no Homebrew formula
 

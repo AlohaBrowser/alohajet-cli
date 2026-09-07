@@ -732,9 +732,9 @@ public final class AgentBrowserBridge {
     /// Two consequences, from the one bad read. The grader is misinformed: the harness takes the URL of
     /// the last tool call as the attempt's `final_url` and a fresh browser is pointed at it, so three
     /// tasks whose live page matched the gold were scored against the page before the click. And the
-    /// BRAIN is misinformed: with `LLMDEX_OBS_ACTIVE_TAB=0` llmdex fingerprints the last tool result,
-    /// so two clicks that both falsely report "still at X" are byte-identical, `no_delta` climbs, and
-    /// `loop_break_advice` / `loop_break_hard` / `read_only_turn` all fire on a lie.
+    /// And the caller is misinformed in a way that compounds: an agent that fingerprints the last
+    /// tool result sees two clicks which both falsely report "still at X" as byte-identical, reads
+    /// that as no progress, and starts firing its loop-breaking heuristics on a lie.
     ///
     /// COSTS NOTHING WHEN NOTHING MOVES, which is the common case: the grace poll exits on the first
     /// tick that shows a different URL, and a click that genuinely did not navigate pays the window

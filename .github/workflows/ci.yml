@@ -6,14 +6,12 @@
 # because corelibs' URLSession does not work against Chrome). Those are different
 # transports under one test suite, so a green macOS run says nothing about Linux.
 #
-# THE LINUX STATE, MEASURED RATHER THAN INHERITED. The private repo's Linux gate has
-# been red, ending in a process crash at `ProtocolRouter/LLMWireLog.swift:41`
-# (`logged.url = redactedURL.flatMap { URL(string: $0) }`, a mutation of a `URLRequest`
-# that SIGILLs on corelibs). That line does NOT travel with this cut: ProtocolRouter is
-# not in the package and `grep -rn URLRequest Sources/` returns nothing. That claim was
-# checked by actually building for Linux in `swift:6.2.3-noble`, not by reading — and
-# the build found FOUR other Linux breaks the macOS build cannot see, all of which are
-# fixed in the tree this workflow gates:
+# THE LINUX STATE, MEASURED RATHER THAN INHERITED. Linux is not a macOS build with a
+# different label: Foundation on corelibs differs, and a green macOS run says nothing
+# about it. So the claim that this package builds on Linux was checked by actually
+# building it in `swift:6.2.3-noble`, not by reading the code — and that build found
+# FOUR Linux breaks the macOS build cannot see, all of which are fixed in the tree this
+# workflow gates:
 #
 #   1. `fputs(…, stderr)` / `fputs(…, stdout)` — Glibc declares those as `var`s of
 #      OPTIONAL pointer type where Darwin declares non-optional `let`s, so each was both
@@ -103,7 +101,7 @@ jobs:
     container:
       image: swift:6.2.3-noble
       # Chrome's sandbox needs syscalls the default seccomp profile blocks, and more
-      # than the default 64 MB of /dev/shm. Same relaxations the private repo's Linux
+      # than the default 64 MB of /dev/shm. The usual relaxations a headless Chromium
       # gate applies, for the same reason.
       options: --security-opt seccomp=unconfined --shm-size=1g
     defaults:

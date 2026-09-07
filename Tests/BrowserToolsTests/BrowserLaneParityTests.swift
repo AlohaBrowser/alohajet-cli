@@ -16,7 +16,7 @@ import ToolABI
 // The aloha lane runs its REAL `liveProbe` here, not a stub: it reads `/json/version` off
 // a live socket and parses `webSocketDebuggerUrl` out of it. That is the entire mechanism
 // the lane consists of, and it is the same endpoint contract the Aloha browser publishes
-// (`aloha-browser-desktop/Sources/MiniBrowser/CDP/CDPDiscovery.swift` serves exactly those
+// (the Aloha browser's own CDP server serves exactly those
 // three routes with exactly that field). Substituting a Chromium for the Aloha browser is
 // legitimate precisely BECAUSE the lane is only an endpoint — if that ever stopped being
 // true this test would be measuring the wrong thing, and so would the design.

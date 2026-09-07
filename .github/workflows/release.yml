@@ -1,7 +1,7 @@
 # Release: build the CLI for every platform this package claims, publish one tarball
 # per platform plus one SHA256SUMS covering all of them.
 #
-# Not a copy of the private repo's release: that one ships a signed, notarized DMG of
+# Deliberately not the release an app ships: that kind signs and notarizes a DMG of
 # a GUI app from a self-hosted runner holding a Developer ID. This package is a
 # command-line binary with no bundle, no app and no secrets, so it runs entirely on
 # GitHub-hosted runners and signs nothing. What that costs the user is stated in

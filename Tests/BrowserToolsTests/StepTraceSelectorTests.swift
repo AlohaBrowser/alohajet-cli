@@ -143,4 +143,4 @@ private func selectorNode(
 
 // PORT NOTE: the `StepTraceSelectorWiringTests` suite that followed here drives
 // `AgentStepTracer`, which is not part of this cut (only `StepTraceSelector` and the
-// two trace value types travelled). It is left in the private repo.
+// two trace value types travelled). It is out of this package's scope.

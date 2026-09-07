@@ -8,7 +8,7 @@ import Darwin
 // A loopback HTTP server for the end-to-end test, in ~70 lines of POSIX sockets.
 //
 // The page under test cannot be a `file://` URL — the tools reject that scheme on
-// purpose, and rightly — so an end-to-end run needs an origin. The private repo writes a
+// purpose, and rightly — so an end-to-end run needs an origin. This writes a
 // python3 script to a temp file and runs it; this package has no python dependency and
 // should not acquire one to serve four hundred bytes of HTML.
 //
