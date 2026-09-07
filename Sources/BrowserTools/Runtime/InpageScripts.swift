@@ -605,7 +605,6 @@ public func buildInpageAlohaRuntime() -> String {
 /// swapping in a private pending-CDP queue, compiling the source first as an
 /// expression body then as a statement body, and returning
 /// `{ result, error, pending }`.
-/// Wraps agent code in the pending-drain / console bookkeeping the bridge expects.
 ///
 /// `compile` decides HOW the source reaches the page, and on a site with a strict Content Security
 /// Policy that decision is the difference between working and not working at all.

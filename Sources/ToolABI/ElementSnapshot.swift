@@ -2,9 +2,7 @@ import Foundation
 
 // MARK: - Action label / snapshot building
 
-/// Default maximum length of a truncated action/element label.
 public let DEFAULT_LABEL_MAX_LENGTH = 80
-/// Maximum length of the preview of typed text.
 public let TYPED_TEXT_PREVIEW_MAX_LENGTH = 40
 
 /// Field-name fragments that indicate a sensitive (password-like) field.
@@ -27,7 +25,6 @@ public func truncateLabel_2(_ value: String, _ maxLength: Int = DEFAULT_LABEL_MA
     return trimmedHead + "…"
 }
 
-/// An element's bounding box.
 public struct ElementBBox: Sendable, Equatable {
     public var x: Double
     public var y: Double
@@ -41,7 +38,6 @@ public struct ElementBBox: Sendable, Equatable {
     }
 }
 
-/// An integer point.
 public struct ActionPoint: Sendable, Equatable {
     public var x: Int
     public var y: Int
@@ -51,7 +47,6 @@ public struct ActionPoint: Sendable, Equatable {
     }
 }
 
-/// Returns the rounded center point of a bounding box.
 public func getElementCenterPoint(_ bbox: ElementBBox) -> ActionPoint {
     ActionPoint(x: Int((bbox.x + bbox.width / 2).rounded()), y: Int((bbox.y + bbox.height / 2).rounded()))
 }
@@ -70,7 +65,6 @@ public func redactSensitiveUrlParams(_ url: String) -> String {
     return components.string ?? url
 }
 
-/// A captured element snapshot for action summaries.
 public struct ElementSnapshot: Sendable, Equatable {
     public var label: String
     public var role: String
@@ -101,8 +95,6 @@ public struct ElementSnapshot: Sendable, Equatable {
     }
 }
 
-/// Builds a compact, truncated/redacted snapshot summary from a raw element
-/// snapshot.
 public func buildElementSnapshotSummary(_ raw: ElementSnapshot) -> ElementSnapshot {
     var summary = ElementSnapshot(
         label: truncateLabel_2(raw.label),
@@ -129,7 +121,6 @@ public func buildElementSnapshotSummary(_ raw: ElementSnapshot) -> ElementSnapsh
     return summary
 }
 
-/// Returns whether an element snapshot describes a password/sensitive field.
 public func isPasswordField(_ element: ElementSnapshot) -> Bool {
     if element.inputType == "password" { return true }
     let haystack = "\(element.label) \(element.placeholder ?? "") \(element.name ?? "") \(element.htmlId ?? "") \(element.ariaLabel ?? "")".lowercased()
@@ -139,12 +130,10 @@ public func isPasswordField(_ element: ElementSnapshot) -> Bool {
     return false
 }
 
-/// The kind of a recorded agent action.
 public enum AgentActionKind: String, Sendable, Equatable {
     case click, type, select, scroll, hover, press_keys, navigate, upload, start_agent, snapshot
 }
 
-/// Data payload variants attached to a recorded action.
 public enum AgentActionData: Sendable, Equatable {
     case element(ElementSnapshot)
     case type(element: ElementSnapshot, textPreview: String, replace: Bool?, redacted: Bool)
@@ -171,7 +160,6 @@ public struct AgentAction: Sendable, Equatable {
     public var data: AgentActionData
 }
 
-/// Common inputs shared by every action builder.
 public struct ActionBuilderBase: Sendable {
     public var tabId: String?
     public var screenshotPath: String?
@@ -213,7 +201,6 @@ func buildBaseAction(_ base: ActionBuilderBase, _ icon: String, _ label: String,
     )
 }
 
-/// Builds a "click element" action.
 public func buildClickAction(_ base: ActionBuilderBase, element: ElementSnapshot) -> AgentAction {
     let summary = buildElementSnapshotSummary(element)
     let point = getElementCenterPoint(summary.bbox)
@@ -221,7 +208,6 @@ public func buildClickAction(_ base: ActionBuilderBase, element: ElementSnapshot
     return buildBaseAction(base, "MousePointerClick", label, point, kind: .click, data: .element(summary))
 }
 
-/// Builds a coordinate-based click action.
 public func buildCoordinateClickAction(_ base: ActionBuilderBase, x: Double, y: Double) -> AgentAction {
     let point = ActionPoint(x: Int(x.rounded()), y: Int(y.rounded()))
     let label = base.isError == true ? "Failed to click at (\(point.x), \(point.y))" : "Clicked at (\(point.x), \(point.y))"
@@ -252,7 +238,6 @@ public func buildTypeAction(_ base: ActionBuilderBase, element: ElementSnapshot,
     return buildBaseAction(base, "Keyboard", label, point, kind: .type, data: .type(element: summary, textPreview: preview, replace: replace, redacted: redacted))
 }
 
-/// Builds a "select option" action.
 public func buildSelectAction(_ base: ActionBuilderBase, element: ElementSnapshot, chosenLabel: String) -> AgentAction {
     let summary = buildElementSnapshotSummary(element)
     let point = getElementCenterPoint(summary.bbox)
@@ -261,7 +246,6 @@ public func buildSelectAction(_ base: ActionBuilderBase, element: ElementSnapsho
     return buildBaseAction(base, "List", label, point, kind: .select, data: .select(element: summary, chosenLabel: chosen))
 }
 
-/// Builds a "scroll to element" action.
 public func buildScrollAction(_ base: ActionBuilderBase, element: ElementSnapshot) -> AgentAction {
     let summary = buildElementSnapshotSummary(element)
     let point = getElementCenterPoint(summary.bbox)
@@ -269,7 +253,6 @@ public func buildScrollAction(_ base: ActionBuilderBase, element: ElementSnapsho
     return buildBaseAction(base, "ArrowDown", label, point, kind: .scroll, data: .element(summary))
 }
 
-/// Builds a "hover element" action.
 public func buildHoverAction(_ base: ActionBuilderBase, element: ElementSnapshot) -> AgentAction {
     let summary = buildElementSnapshotSummary(element)
     let point = getElementCenterPoint(summary.bbox)
@@ -277,7 +260,6 @@ public func buildHoverAction(_ base: ActionBuilderBase, element: ElementSnapshot
     return buildBaseAction(base, "MousePointer", label, point, kind: .hover, data: .element(summary))
 }
 
-/// Builds a "press keys" action.
 public func buildPressKeysAction(_ base: ActionBuilderBase, keys: String) -> AgentAction {
     let summary = truncateLabel_2(keys, 40)
     let label = base.isError == true ? "Failed to send keys \"\(summary)\"" : "Pressed \(summary)"
@@ -296,7 +278,6 @@ public func buildNavigateAction(_ base: ActionBuilderBase, url: String, previous
     return buildBaseAction(base, "Globe", label, nil, kind: .navigate, data: .navigate(url: redactedUrl, previousUrl: redactedPrevious, pageTitle: pageTitle.map { truncateLabel_2($0) }))
 }
 
-/// Builds an "upload files" action.
 public func buildUploadAction(_ base: ActionBuilderBase, element: ElementSnapshot, pathCount: Int) -> AgentAction {
     let summary = buildElementSnapshotSummary(element)
     let point = getElementCenterPoint(summary.bbox)
@@ -305,14 +286,12 @@ public func buildUploadAction(_ base: ActionBuilderBase, element: ElementSnapsho
     return buildBaseAction(base, "Upload", label, point, kind: .upload, data: .upload(element: summary, pathCount: pathCount))
 }
 
-/// Builds a "spawn sub-agent" action.
 public func buildStartAgentAction(_ base: ActionBuilderBase, agentId: String?, prompt: String) -> AgentAction {
     let preview = truncateLabel_2(prompt, 100)
     let label = base.isError == true ? "Failed to spawn sub-agent: \(preview)" : "Spawned sub-agent: \(preview)"
     return buildBaseAction(base, "Brain", label, nil, kind: .start_agent, data: .startAgent(agentId: agentId, prompt: preview))
 }
 
-/// Builds a "tab snapshot" action.
 public func buildSnapshotAction(_ base: ActionBuilderBase, reason: String?) -> AgentAction {
     buildBaseAction(base, "Eye", "Captured tab snapshot", nil, kind: .snapshot, data: .snapshot(reason: reason))
 }

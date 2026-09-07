@@ -4,14 +4,9 @@ import Foundation
 import FoundationNetworking
 #endif
 
-// MARK: - CDPEndpoint
-//
-// The "attach ANY CDP app" seam. A `CDPEndpoint` describes *where* to get a CDP
-// WebSocket from. `launchChrome` boots a local Chrome via `ChromeLauncher`; the
-// `attach`/`attachWebSocket` cases connect a `CDPClient` to an already-running
-// CDP-speaking application (Chrome, Edge, any browser exposing the protocol).
-
-/// Describes how to obtain a CDP (Chrome DevTools Protocol) WebSocket endpoint.
+/// Describes how to obtain a CDP (Chrome DevTools Protocol) WebSocket endpoint:
+/// the seam through which any CDP-speaking application, not only a Chrome this
+/// process launched, can be driven.
 public enum CDPEndpoint: Sendable {
     /// Launch a fresh local Google Chrome (via `ChromeLauncher`) with the
     /// remote-debugging port enabled, then attach to it.
@@ -25,8 +20,6 @@ public enum CDPEndpoint: Sendable {
     /// Attach to an explicit `webSocketDebuggerUrl` string.
     case attachWebSocket(String)
 
-    /// A short human-readable description of the resolved endpoint, useful for
-    /// printing alongside results.
     public var description: String {
         switch self {
         case .launchChrome(let headless):
@@ -39,27 +32,14 @@ public enum CDPEndpoint: Sendable {
     }
 }
 
-// MARK: - BrowserDemo
-
-/// A small, reusable, testable driver that opens one or more tabs in a
-/// CDP-speaking browser and returns the opened `targetId`s.
-///
-/// The same code path drives a freshly-launched headless Chrome and an
-/// already-running CDP application — the only difference is the `CDPEndpoint`.
 public struct BrowserDemo: Sendable {
 
-    /// Open a tab per URL in the browser described by `cdpEndpoint`, returning
-    /// the opened `targetId`s in the same order as `urls`.
+    /// Open a tab per URL, returning the opened `targetId`s in the order of `urls`.
     ///
     /// For `.launchChrome`, a Chrome instance is launched and kept alive for
     /// the duration of the call, then verified and terminated before returning.
     /// For `.attach`/`.attachWebSocket`, an existing endpoint is used and left
     /// running (only the client connection is closed).
-    ///
-    /// - Parameters:
-    ///   - cdpEndpoint: Where to obtain the CDP WebSocket from.
-    ///   - urls: The URLs to open, one tab each.
-    /// - Returns: The opened `targetId`s, in input order.
     public static func openTabs(
         cdpEndpoint: CDPEndpoint,
         urls: [String]
@@ -77,8 +57,6 @@ public struct BrowserDemo: Sendable {
         }
     }
 
-    // MARK: - launchChrome path
-
     private static func openTabsLaunchingChrome(
         headless: Bool,
         urls: [String]
@@ -94,21 +72,15 @@ public struct BrowserDemo: Sendable {
         let handle = try launcher.launch(port: port, headless: headless)
         defer { handle.terminate() }
 
-        // Poll until the CDP endpoint is up, then connect a client to it.
         let wsURL = try await launcher.discoverWebSocketURL(port: port, handle: handle)
         let client = CDPClient(webSocketURL: wsURL)
         try await client.connect()
 
-        // Open the tabs, then verify each opened target is really present in the
-        // browser's live target list before we tear Chrome down.
         let targetIds = try await openTabs(using: client, urls: urls, closeClient: true)
         try await verifyTargets(host: "127.0.0.1", port: port, targetIds: targetIds)
         return targetIds
     }
 
-    // MARK: - Shared open path
-
-    /// Open one tab per URL through an already-connected client.
     private static func openTabs(
         using client: CDPClient,
         urls: [String],
@@ -128,12 +100,9 @@ public struct BrowserDemo: Sendable {
         return targetIds
     }
 
-    // MARK: - Verification
-
     /// Confirm, via `GET http://host:port/json`, that every `targetId` exists in
-    /// the browser's live target list. Polls briefly to tolerate the async gap
-    /// between `Target.createTarget` returning and the target appearing in the
-    /// HTTP listing.
+    /// the browser's live target list. Polls to tolerate the async gap between
+    /// `Target.createTarget` returning and the target appearing in the listing.
     private static func verifyTargets(
         host: String,
         port: Int,
@@ -144,9 +113,6 @@ public struct BrowserDemo: Sendable {
         let deadline = Date().addingTimeInterval(timeout)
         var present: Set<String> = []
         while Date() < deadline {
-            // Read the live target list through the public `listTargets()` seam;
-            // the `try?` keeps a transiently-unreadable `/json` a no-op poll,
-            // identical to the previous inline `try?`-guarded read.
             if let targets = try? await CDPClient.listTargets(host: host, port: port) {
                 for target in targets {
                     present.insert(target.id)

@@ -20,7 +20,6 @@ import Glibc
 // localhost debug interface answering a tiny GET, and one path exercised everywhere
 // beats two where each is only ever tested on one platform.
 
-/// Failures reading a CDP JSON endpoint.
 public enum CDPJSONEndpointError: Error, CustomStringConvertible, Sendable {
     case invalidHost(String)
     case invalidPort(Int)
@@ -60,8 +59,6 @@ private let cdpSockStream = SOCK_STREAM
 private let cdpSockStream = Int32(SOCK_STREAM.rawValue)
 #endif
 
-/// `GET`s `path` from a CDP HTTP endpoint and returns the response body.
-///
 /// Runs the blocking socket work on its own thread so the cooperative pool is never
 /// occupied by a syscall wait.
 func cdpJSONEndpointGet(
@@ -83,8 +80,6 @@ func cdpJSONEndpointGet(
     }
 }
 
-/// The blocking implementation.
-///
 /// Reads until `Content-Length` bytes of body have arrived, falling back to EOF only
 /// when the response carries no length: Chrome ignores the `Connection: close` this
 /// request asks for, so waiting for EOF would block until the timeout.
@@ -196,8 +191,6 @@ func cdpJSONEndpointContentLength<Bytes: DataProtocol>(inHeaderBytes bytes: Byte
     return nil
 }
 
-/// Splits an HTTP response into status and body, checking the status is 2xx. Only the
-/// status line is interpreted; the body is whatever follows the blank line.
 func cdpJSONEndpointBody(of response: Data) throws -> Data {
     let separator = Data("\r\n\r\n".utf8)
     guard let headerEnd = response.range(of: separator) else {

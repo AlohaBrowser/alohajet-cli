@@ -38,9 +38,6 @@ public nonisolated struct ShimLogger: Sendable {
 @MainActor public let agentLogger = ShimLogger(scope: "agent")
 @MainActor public let rootLogger = ShimLogger(scope: "alohajet")
 
-/// Returns `value` unchanged when within `limit`, otherwise the first `limit`
-/// characters followed by a truncation suffix noting how many were dropped.
-///
 /// Copied from the logging module the shim replaces: `CDP.swift` truncates every
 /// outbound command payload through it.
 public nonisolated func truncateString(_ value: String, limit: Int) -> String {
@@ -49,7 +46,6 @@ public nonisolated func truncateString(_ value: String, limit: Int) -> String {
     return "\(head)… [truncated \(value.count - limit) chars]"
 }
 
-/// Severity for ``agentLog``.
 public nonisolated enum AgentLogLevel: String, Sendable {
     case debug, info, warn, error
 }

@@ -1,26 +1,18 @@
 import Foundation
 import ToolABI
 
-// MARK: - page_click executor tool
-
-/// The executable `page_click` tool: single/double/triple/right-clicks an
-/// element on the active tab by its `aloha_id`.
+/// The executable `page_click` tool: single/double/triple/right-clicks an element on the
+/// active tab by its `aloha_id`. The `aloha.<verb>(alohaId)` call text is built here from
+/// the typed `click_type`; the caller never supplies raw code through this tool.
 ///
-/// It resolves the active tab through ``resolveActivePageTab(_:_:)``, then
-/// drives the click through ``AgentBrowserBridge/executeAgentCode(_:)`` with ONE
-/// fixed, Swift-constructed `aloha.<verb>(alohaId)` call over `Runtime.evaluate`:
-/// the call text is built here from the typed `click_type`, the caller never
-/// supplies raw code through this tool. This is the ONLY way to reach the
-/// `click`/`doubleClick`/`tripleClick`/`rightClick` cases in
-/// `PageBridge.swift`'s `handlePendingRequest` switch — they require the
-/// element's aloha-id resolved to viewport coordinates, which only the in-page
-/// `window.__aloha` runtime can do, and `enqueueCdp` is a no-op outside the
-/// `buildAgentCodeRunnerScript` wrapper `executeAgentCode` installs.
+/// `executeAgentCode` is required, not incidental: the click cases need the aloha-id
+/// resolved to viewport coordinates, which only the in-page `window.__aloha` runtime can
+/// do, and `enqueueCdp` is a no-op outside the `buildAgentCodeRunnerScript` wrapper
+/// `executeAgentCode` installs.
 ///
-/// The file-input click-refusal guard (a plain click on a `[uploadable]` file
-/// input is refused outright — this package has no file-upload verb) lives in
-/// `handleClickPendingRequest` itself, so it applies unconditionally on the
-/// "single" click_type — this tool does not special-case or bypass it.
+/// A plain click on a `[uploadable]` file input is refused outright — this package has no
+/// file-upload verb. That guard lives in `handleClickPendingRequest`, so it applies
+/// unconditionally; this tool does not special-case or bypass it.
 @MainActor public final class PageClickExecutorTool: ExecutorTool {
     public let name = "page_click"
 
@@ -44,7 +36,7 @@ import ToolABI
             let bridge = makePageBridge(resolved.cdpTab, context.signal)
             let script = "aloha.\(route.call)(\(jsonStringLiteral(alohaId)))"
             // WHERE THE PAGE WAS BEFORE THE CLICK. Two cheap backend reads bracket the action so the
-            // receipt can state whether anything moved; see `describeDelta`.
+            // receipt can state whether anything moved; see `PageDelta`.
             let urlBefore = bridge.currentPageURL()
             // AND WHICH ELEMENT THIS WAS, in terms that survive the next DOM walk. Resolved here, before
             // the click, because afterwards the snapshot may no longer hold the node. Pure cache read —
@@ -76,17 +68,13 @@ import ToolABI
         }
     }
 
-    // MARK: click_type routing
-
-    /// One click_type's route: the `window.__aloha` method to call and the
-    /// `PendingResult.type` it enqueues under (`PageBridge.swift`'s
-    /// `handlePendingRequest` case name).
+    /// `pendingType` is the `PendingResult.type` the call enqueues under — the case name in
+    /// `PageBridge.swift`'s `handlePendingRequest` switch.
     struct ClickRoute: Equatable {
         let call: String
         let pendingType: String
     }
 
-    /// Maps a `click_type` to its route, or `nil` for an unrecognized value.
     static func route(for clickType: String) -> ClickRoute? {
         switch clickType {
         case "single": return ClickRoute(call: "click", pendingType: "click")
@@ -97,14 +85,9 @@ import ToolABI
         }
     }
 
-    // MARK: Result interpretation
-
-    /// Maps the `executeAgentCode` result to the tool's output. A script-level
-    /// failure (e.g. "Element with aloha-id X not found") is `isError` at the
-    /// top level; otherwise the specific pending click op's own
-    /// success/failure — file-input refusal included — decides the outcome,
-    /// since `executeAgentCode` itself stays `isError: false` even when an
-    /// individual drained pending op failed.
+    /// The pending click op's own success/failure decides the outcome — file-input refusal
+    /// included — because `executeAgentCode` stays `isError: false` even when an individual
+    /// drained pending op failed.
     static func interpret(_ result: AgentActionResult, route: ClickRoute, alohaId: String, clickType: String,
                           urlBefore: String = "", urlAfter: String = "",
                           selectorNote: String = "") -> RawToolResult {

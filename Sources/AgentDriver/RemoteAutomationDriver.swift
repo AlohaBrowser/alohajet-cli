@@ -50,7 +50,6 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     /// it rides on `init` rather than on the shared `AlohaJetDriver.runTask` signature.
     public let permissions: [CLIPermission]
     private let transport: Transport
-    /// The delay between `GET /agent/result` polls while the turn is still `running`.
     private let pollInterval: Duration
     /// The maximum number of `running` polls before the wait is abandoned as a
     /// `.failed` timeout — bounds the loop so it never busy-spins forever.
@@ -174,13 +173,11 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
     }
 
-    /// Read a top-level string field out of a JSON object body (`taskId`), or `nil`.
     private static func stringValue(_ data: Data, key: String) -> String? {
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         return object[key] as? String
     }
 
-    /// A short `(HTTP <code>: <body>)` suffix for a failure reason.
     private static func detail(_ response: RemoteAutomationHTTPResponse) -> String {
         " (HTTP \(response.statusCode): \(String(decoding: response.body, as: UTF8.self)))"
     }

@@ -5,8 +5,6 @@ import ToolABI
 import zlib
 #endif
 
-// MARK: - Constants
-
 public nonisolated let GZIP_MAGIC_BYTE_1 = 31
 public nonisolated let GZIP_MAGIC_BYTE_2 = 139
 public nonisolated let MAX_BODY_CAPTURE_BYTES = 50_000
@@ -35,8 +33,6 @@ public struct ActivityTrackingConfig: Sendable {
     public let awayThresholdMs: Double = 120_000
     public let maxActiveSessions: Int = 5
 }
-
-// MARK: - Base64 body decoding
 
 /// Decodes a base64-encoded response body, gunzipping when it carries the gzip
 /// magic bytes. Falls back to a `base64:`-prefixed marker when decoding fails.
@@ -91,8 +87,6 @@ private func gunzip(_ data: Data) -> Data? {
     #endif
 }
 
-// MARK: - Network event model
-
 public nonisolated struct NetworkRecord: Sendable, Equatable {
     public var ts: String
     public var type: String
@@ -146,8 +140,6 @@ private nonisolated struct PendingNetworkRequest {
     var responseMimeType: String?
     var responseHeaders: [String: String]?
 }
-
-// MARK: - NetworkRecorder
 
 /// Captures a tab's network activity over a CDP transport and emits structured
 /// records via a callback. Bodies are captured for a small allow-list of
@@ -209,9 +201,7 @@ public final class NetworkRecorder {
 
     /// Reacts to the CDP connection being torn down externally — either an
     /// `Inspector.detached` event or the event stream ending while recording is
-    /// still active. Stops recording without trying to issue `Network.disable`
-    /// over the now-dead transport, cancels the event loop, and clears any
-    /// in-flight pending requests, without issuing further CDP commands.
+    /// still active. Issues no further CDP commands: the transport is dead.
     func handleDetached() {
         if !running { return }
         running = false
@@ -379,8 +369,6 @@ private func isoTimestamp() -> String {
     return formatter.string(from: Date())
 }
 
-// MARK: - TypingSession
-
 /// Tracks a single in-page typing session, deciding when keystroke bursts belong
 /// to the same edit and emitting a debounced text-input event.
 public final class TypingSession {
@@ -454,7 +442,6 @@ public final class TypingSession {
     }
 }
 
-/// Classic Levenshtein edit distance between two strings.
 func levenshteinDistance(_ lhs: String, _ rhs: String) -> Int {
     let a = Array(lhs)
     let b = Array(rhs)

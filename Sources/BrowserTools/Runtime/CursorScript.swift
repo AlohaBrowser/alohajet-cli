@@ -49,7 +49,6 @@ nonisolated func stringToHexColor(_ seed: String, _ variant: String = "dark") ->
     return variant == "bright" ? hslToHex(hue, 56, 86) : hslToHex(hue, 60, 45)
 }
 
-/// The darker cursor color for a visuals seed.
 nonisolated func stringToDarkHexColor(_ seed: String) -> String {
     stringToHexColor(seed, "dark")
 }
@@ -102,9 +101,6 @@ public enum AgentCursorAppearance {
 /// free. The host has no synchronous way to read it back — `getAgentMousePosition()` is
 /// a nonisolated protocol read — and the alternative, a coordinate cached on the tab,
 /// would go on pointing at a place on a page that is gone.
-///
-/// With nothing remembered — the first action on a document — the marker appears AT the
-/// target rather than flying in from a corner it was never at.
 nonisolated func buildAgentCursorClickScript(
     targetX: Int,
     targetY: Int,

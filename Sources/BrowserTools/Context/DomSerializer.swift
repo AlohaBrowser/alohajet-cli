@@ -77,9 +77,7 @@ public struct OccluderRef: Sendable, Equatable {
     }
 }
 
-/// One scroll axis of a scrollable container: the current offset plus the full content size and
-/// the visible (client) size, all in CSS pixels. The fraction `offset / (scrollSize - clientSize)`
-/// gives how far through the content the container is scrolled.
+/// One scroll axis of a scrollable container, in CSS pixels.
 public struct ScrollAxis: Sendable, Equatable {
     public var offset: Int
     public var scrollSize: Int
@@ -94,8 +92,7 @@ public struct ScrollAxis: Sendable, Equatable {
 /// Scroll state of a container the walker found scrollable. `vertical`/`horizontal` are present
 /// only for the axes that actually overflow. `centeredChild` holds the trimmed text of the child
 /// sitting at the container's center when it looks like a value-selector wheel (e.g. "22:00"),
-/// giving the agent the current selection in addition to the scroll position. `nil` on every
-/// non-scrollable node (baseline behavior unchanged).
+/// giving the agent the current selection in addition to the scroll position.
 public struct ScrollDescriptor: Sendable, Equatable {
     public var vertical: ScrollAxis?
     public var horizontal: ScrollAxis?
@@ -115,7 +112,7 @@ public struct DomInteractivity: Sendable {
     public var isTopElement: Bool
     public var isFileInput: Bool
     /// What covers this interactive node, when the hit-test found it occluded. Drives the
-    /// `[occluded …]` annotation; `nil` for unoccluded nodes (baseline behavior unchanged).
+    /// `[occluded …]` annotation.
     public var occludedBy: OccluderRef?
     public init(isInteractive: Bool = false, isInput: Bool = false, isSelect: Bool = false, isHighlighted: Bool = false, isTopElement: Bool = false, isFileInput: Bool = false, occludedBy: OccluderRef? = nil) {
         self.isInteractive = isInteractive
@@ -133,7 +130,7 @@ public struct DomPositioning: Sendable {
     public var isInViewport: Bool
     public var isVisible: Bool
     /// Scroll geometry when this element is a scrollable container; drives the `[scrollable …]`
-    /// annotation. `nil` for non-scrollable nodes (baseline behavior unchanged).
+    /// annotation.
     public var scroll: ScrollDescriptor?
     public init(distanceToViewportBorder: Int = 0, isInViewport: Bool = true, isVisible: Bool = true, scroll: ScrollDescriptor? = nil) {
         self.distanceToViewportBorder = distanceToViewportBorder
@@ -151,43 +148,25 @@ public struct DomNode: Sendable {
     public var interactivity: DomInteractivity
     public var positioning: DomPositioning
     public var children: [String]
-    /// A statement that this node stands for something the page walker was REFUSED
-    /// access to, pre-rendered as the `[sealed: …]` suffix its line carries.
+    /// A statement that this node stands for a region the page walker was REFUSED access
+    /// to — a cross-origin frame, or a closed shadow root, both of which read back null to
+    /// page JavaScript — pre-rendered as the `[sealed: …]` suffix its line carries.
     ///
-    /// This is a fact about documents, not about any particular embedded widget. A
-    /// document can contain a region its own JavaScript may not read — a cross-origin
-    /// frame, or a closed shadow root — and a walker that runs as page JavaScript is
-    /// therefore describing something it cannot see into. The field is how it says so.
-    /// `nil` on every ordinary node, so a page with no such region serializes exactly
-    /// as it did before the field existed.
+    /// Pre-rendered rather than structured because two producers write it and only one of
+    /// them knows very much: the in-page walker can say no more than which boundary it hit,
+    /// while the host runtime — which alone can look past a closed shadow root — adds the
+    /// region's origin and whatever it identified about it.
     ///
-    /// Pre-rendered rather than structured because two producers write it and only one
-    /// of them knows very much: the in-page walker can say no more than which boundary
-    /// it hit, while the host runtime — which alone can look past a closed shadow root —
-    /// adds the region's origin and whatever it was able to identify about it.
-    ///
-    /// THE SERIALIZER READS THIS FIELD FOR TWO DIFFERENT JOBS, AND THE SECOND ONE IS
-    /// LOAD-BEARING.
-    ///
-    /// The obvious job is rendering: three call sites append the suffix to a node's
-    /// line (``renderInteractiveNode``, and the interactive and structural-landmark
-    /// branches of ``renderFullNode``).
-    ///
-    /// The job that is easy to miss is that it RESCUES THE NODE FROM BEING DROPPED. Two
-    /// keep tests — the early filter in ``renderInteractiveNode`` and the
-    /// ``nodeIsKeptInteractive`` predicate — would otherwise discard a node that is
-    /// neither highlighted-and-on-top nor carrying text, which is exactly the shape of
-    /// an `<iframe>` whose content the walker could not read. Without the rescue such a
-    /// node vanishes from the element list entirely, i.e. straight back into the silence
-    /// the marker exists to break. Visibility is still required in both keep tests, on
-    /// the same grounds as the occlusion and scrollable rules beside them: a
-    /// `display: none` frame occupies no pixels and must not be offered as clickable.
-    ///
-    /// So anyone considering removing this field has to replace two things, not one.
-    /// Folding the suffix into ordinary node content covers the rendering job; the
-    /// rescue additionally needs the keep tests to admit the node by some other route
-    /// (setting highlight flags, say), and both of those perturb the serialized element
-    /// list that agent behaviour is measured against.
+    /// The serializer reads it for two jobs, and the SECOND IS LOAD-BEARING. The obvious one
+    /// is rendering the suffix. The one easy to miss is that it RESCUES THE NODE FROM BEING
+    /// DROPPED: two keep tests (the early filter in ``renderInteractiveNode`` and
+    /// ``nodeIsKeptInteractive``) would otherwise discard a node that is neither
+    /// highlighted-and-on-top nor carrying text — exactly the shape of an `<iframe>` whose
+    /// content the walker could not read — putting it straight back into the silence the
+    /// marker exists to break. Visibility is still required in both, on the same grounds as
+    /// the occlusion and scrollable rules beside them: a `display: none` frame occupies no
+    /// pixels and must not be offered as clickable. So removing this field means replacing
+    /// two things, not one.
     public var sealedMarker: String?
     public init(
         id: String,
@@ -212,23 +191,18 @@ public struct DomNode: Sendable {
 
 // MARK: - DOM pre-cleaning
 //
-// An optional pass that removes page boilerplate from the parsed DOM tree before it is
-// serialized, so the observation the model reads is closer to the page's actual content.
-// It targets the categories that dominate raw page bytes: stylesheet and script bodies,
-// inline vector geometry, comment nodes, and presentational/framework attributes. The
-// pass is purely subtractive.
-//
-// This is OFF by default; the serialization path runs it only when the caller opts in.
+// A purely subtractive pass over the parsed tree, targeting the categories that dominate
+// raw page bytes: stylesheet and script bodies, inline vector geometry, comment nodes, and
+// presentational/framework attributes. OFF by default; the serialization path runs it only
+// when the caller opts in.
 
-/// Element tags whose entire subtree is dropped during a clean-DOM pass: stylesheet and
-/// script bodies (and the no-script fallbacks they pair with) plus inline vector graphics,
-/// none of which contribute readable content but all of which inflate the serialization.
+/// Tags whose entire subtree is dropped: none contributes readable content, all of them
+/// inflate the serialization.
 public let CLEAN_DOM_DROPPED_TAGS: Set<String> = ["style", "script", "noscript", "svg"]
 
-/// Attribute names that a clean-DOM pass removes outright: the framework/styling hooks
-/// (`class`, `style`) and any `data-*` dataset attribute. Everything else is preserved,
-/// so the meaningful attributes a reader needs — `href`, `src`, `alt`, `aria-label`, and
-/// the interactive/aria attributes the serializer consults — survive untouched.
+/// Everything not matched here is preserved, so the attributes a reader needs — `href`,
+/// `src`, `alt`, `aria-label`, and the interactive/aria attributes the serializer consults
+/// — survive untouched.
 public func cleanDomDropsAttribute(_ name: String) -> Bool {
     let lowered = name.lowercased()
     if lowered == "class" || lowered == "style" { return true }
@@ -243,9 +217,6 @@ public func cleanDomIsDataUri(_ value: String) -> Bool {
     value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("data:")
 }
 
-/// Whether a node is hidden and so should be pruned: a clean-DOM pass drops anything the
-/// layout already flagged invisible (`isVisible == false`) as well as the explicit
-/// `hidden` / `aria-hidden="true"` / inline `display:none` markers a page may carry.
 public func cleanDomIsHidden(_ node: DomNode) -> Bool {
     if !node.positioning.isVisible { return true }
     return cleanDomIsMarkedHidden(node)
@@ -273,21 +244,16 @@ public func cleanDomIsMarkedHidden(_ node: DomNode) -> Bool {
     return false
 }
 
-/// Pre-clean a parsed DOM forest before serialization: drop comment nodes, the
-/// stylesheet/script/inline-vector subtrees, and hidden elements (along with everything
-/// beneath them), then strip the framework/styling attributes and any inline `data:` URI
-/// from each survivor. Surviving nodes keep their parent/child links, with references to
-/// dropped children removed, so the serializer walks the same (lighter) tree.
+/// Pre-clean a parsed DOM forest before serialization. Surviving nodes keep their
+/// parent/child links, with references to dropped children removed, so the serializer walks
+/// the same (lighter) tree.
 public func cleanDomTree(_ nodes: [DomNode]) -> [DomNode] {
-    // Resolve survivors transitively from the roots: a node is dropped if it is a comment,
-    // a dropped tag, or hidden, and a dropped node takes its whole subtree with it because
-    // descent stops there. Walking from the roots prevents an orphaned subtree under a
-    // dropped parent from leaking back in via the original flat array.
+    // Walking from the roots (rather than filtering the flat array) is what prevents an
+    // orphaned subtree under a dropped parent from leaking back in.
     var byId: [String: DomNode] = [:]
     for node in nodes { byId[node.id] = node }
 
-    /// Dropped along with everything beneath it: a comment, a stylesheet/script/vector
-    /// subtree, or an authored hide marker (all three describe the whole region).
+    /// Dropped along with everything beneath it — all three cases describe a whole region.
     func dropsSubtree(_ node: DomNode) -> Bool {
         if node.nodeType == "COMMENT_NODE" { return true }
         let tag = node.element.tagName.lowercased()
@@ -296,7 +262,6 @@ public func cleanDomTree(_ nodes: [DomNode]) -> [DomNode] {
         return false
     }
 
-    // Compute the set of ids reachable from the roots through only-surviving nodes.
     var childIds = Set<String>()
     for node in nodes { for child in node.children { childIds.insert(child) } }
     let rootIds = nodes.filter { !childIds.contains($0.id) }.map { $0.id }
@@ -320,8 +285,6 @@ public func cleanDomTree(_ nodes: [DomNode]) -> [DomNode] {
         stack.append(contentsOf: node.children)
     }
 
-    // Second pass: emit survivors in original order, pruning dropped children from each
-    // child list and cleaning the surviving node's attributes.
     var result: [DomNode] = []
     for node in nodes where keep.contains(node.id) {
         var cleaned = node
@@ -343,15 +306,12 @@ public func cleanDomTree(_ nodes: [DomNode]) -> [DomNode] {
 // Many commerce and content pages publish their canonical facts as machine-readable
 // JSON the renderer also consumes — schema.org JSON-LD in <script type="application/ld+json">,
 // the framework hydration payload in <script id="__NEXT_DATA__">, and the Shopify
-// /products.json feed. Reading that directly sidesteps the blind-selector problem (where a
+// /products.json feed. Reading that directly sidesteps the blind-selector problem: a
 // product's name/price never lands in the visual serialization because it is painted by a
-// component the DOM walk does not surface as text), so when enabled we parse the page's own
-// data and prepend a small, deterministic summary to the observation.
+// component the DOM walk does not surface as text.
 //
-// This pass is OFF by default; the read path collects the raw JSON only when the caller
-// opts in, and prepends the block this function returns.
+// OFF by default; the read path collects the raw JSON only when the caller opts in.
 
-/// One product fact distilled from a page's embedded structured data.
 public struct SiteJsonProduct: Equatable, Sendable {
     public var name: String
     public var price: String?
@@ -378,9 +338,8 @@ public func siteJsonNormalizeAvailability(_ raw: String) -> String? {
     return trimmed
 }
 
-/// Render a JSON scalar (string or number) as its plain string, so a `price` that a page
-/// writes as either `"19.99"` or `19.99` reads the same in the summary. Booleans/objects/
-/// arrays/null have no scalar form and yield `nil`.
+/// Render a JSON scalar as its plain string, so a `price` that a page writes as either
+/// `"19.99"` or `19.99` reads the same in the summary. Booleans/objects/arrays/null yield `nil`.
 private func siteJsonScalarString(_ value: Any?) -> String? {
     switch value {
     case let s as String:
@@ -393,7 +352,6 @@ private func siteJsonScalarString(_ value: Any?) -> String? {
         #else
         if n.objCType.pointee == CChar(99) /* 'c' */ { return nil }
         #endif
-        // Prefer an integral rendering for whole numbers, else the shortest round-trip.
         if n.doubleValue == n.doubleValue.rounded() && abs(n.doubleValue) < 1e15 {
             return String(n.intValue)
         }
@@ -429,8 +387,6 @@ private func siteJsonOffer(_ offers: Any?) -> (price: String?, currency: String?
     return (nil, nil, nil)
 }
 
-/// Distill a single JSON-LD node into a `SiteJsonProduct` when it is a Product (or a node
-/// otherwise carrying a name + offer). Returns `nil` for nodes with nothing to summarize.
 private func siteJsonProduct(from node: [String: Any]) -> SiteJsonProduct? {
     let types = siteJsonTypes(node).map { $0.lowercased() }
     let looksLikeProduct = types.contains { $0.hasSuffix("product") }
@@ -441,10 +397,9 @@ private func siteJsonProduct(from node: [String: Any]) -> SiteJsonProduct? {
     return SiteJsonProduct(name: name, price: price, currency: currency, availability: availability)
 }
 
-/// Walk a JSON-LD payload (a Foundation object from `JSONSerialization`) collecting products.
-/// Pages nest these freely: a top-level array of nodes, a single node, an `ItemList` whose
-/// `itemListElement` holds `ListItem`/`Product` entries, and the `@graph` envelope. We descend
-/// each of those shapes and accumulate every Product we find, in document order.
+/// Walk a JSON-LD payload collecting products, in document order. Pages nest these freely:
+/// a top-level array of nodes, a single node, an `ItemList` whose `itemListElement` holds
+/// `ListItem`/`Product` entries, and the `@graph` envelope — all four shapes are descended.
 private func siteJsonCollect(_ value: Any, into out: inout [SiteJsonProduct]) {
     if let arr = value as? [Any] {
         for element in arr { siteJsonCollect(element, into: &out) }
@@ -492,8 +447,8 @@ private func siteJsonShopifyProducts(_ value: Any) -> [SiteJsonProduct] {
     return out
 }
 
-/// Render the collected products as one line each, e.g. `- Acme Widget — 19.99 USD — InStock`,
-/// dropping any missing field so the line carries only what the page actually published.
+/// One line per product, e.g. `- Acme Widget — 19.99 USD — InStock`, dropping any missing
+/// field so the line carries only what the page actually published.
 private func siteJsonProductLine(_ product: SiteJsonProduct) -> String {
     var parts: [String] = [product.name]
     if let price = product.price {
@@ -509,11 +464,9 @@ private func siteJsonProductLine(_ product: SiteJsonProduct) -> String {
     return "- " + parts.joined(separator: " — ")
 }
 
-/// Build the compact structured block prepended to an observation when site-JSON extraction is
-/// on, from the raw JSON the page published: the text of every `<script type="application/ld+json">`
-/// block (`jsonLdScripts`), an optional `__NEXT_DATA__` payload, and an optional Shopify
-/// `/products.json` body. Returns `nil` when nothing usable is found (so the OFF-equivalent
-/// "no data" case prepends nothing and stays byte-identical to baseline).
+/// The compact structured block prepended to an observation, built from the raw JSON the page
+/// published. Returns `nil` when nothing usable is found, so the observation stays exactly as
+/// it would be with extraction off.
 ///
 /// Malformed JSON in any single source is skipped, not fatal — pages routinely ship one broken
 /// block among several good ones.
@@ -613,20 +566,17 @@ public func truncateLabel(_ raw: String, _ maxLength: Int = 20) -> String {
 // The READ observation (serializeFullMarkdown → renderFullNode) renders page CONTENT as
 // clean, id-free markdown (headings `#`, list items `- `, table rows `| a | b |`, paragraphs)
 // while every ACTIONABLE element keeps a trailing `{aloha-id="ID" tag}` marker so navigation
-// never degrades (tab.click(id) / findByText still resolve). Content text is capped generously;
-// interactive control labels are kept short.
+// never degrades (tab.click(id) / findByText still resolve).
 
-/// Cap for page-content text (headings / paragraphs / list items / table cells).
 public let FULL_CONTENT_TEXT_CAP = 1000
 /// Shortest standalone content-leaf text worth surfacing. Below this it's almost always UI chrome
 /// (a bare vote/count "0", a separator "."), never a price or label the reader needs.
 let CONTENT_LEAF_MIN_CHARS = 3
-/// Cap for an interactive control's human-readable label.
 public let INTERACTIVE_LABEL_CAP = 120
 
 /// The trailing actionable marker appended to every interactive element's line, e.g.
-/// ` {aloha-id="1f3a9c2b" button}`. Keeps the literal `aloha-id="…"` token (so id capture in
-/// `findAlohaIdsInMarkdown` is unchanged) plus a tag hint the parser can read back.
+/// ` {aloha-id="1f3a9c2b" button}`. The literal `aloha-id="…"` token is a contract: id capture
+/// in `findAlohaIdsInMarkdown` reads it back.
 public func interactiveTrailer(_ node: DomNode, _ tag: String) -> String {
     return " {aloha-id=\"\(node.id)\" \(tag)}"
 }
@@ -756,10 +706,6 @@ private func openInteractiveTag(_ node: DomNode, _ tag: String) -> String {
     return c
 }
 
-/// The `[occluded …]` suffix for an interactive element the in-page hit-test found covered.
-/// Names the covering element — including its `aloha-id` when it is itself actionable — so the
-/// model can dismiss the overlay instead of clicking a button it cannot reach. Empty for
-/// unoccluded nodes, so callers can append it unconditionally.
 /// The overlay's own aloha-id, or `nil` when it has none.
 ///
 /// It used to fall back to the covering element's TAG NAME, which put `[occ:div]` into the slot an
@@ -777,10 +723,9 @@ func occlusionMarker(_ node: DomNode) -> String {
     // the authoritative signal here — independent of the lenient `isTopElement` heuristic, which
     // a sibling overlay can slip past.
     guard let occ = node.interactivity.occludedBy else { return "" }
-    // Short, deduplicated reference. The covering overlay is described ONCE in the
-    // occlusion legend that `getInteractMarkdown` prepends (keyed by this same
-    // id), instead of repeating a ~60-char "[occluded by … dismiss to interact]" suffix
-    // on every covered element. Keep the key actionable (the overlay's aloha-id).
+    // Short, deduplicated reference: the overlay is described ONCE in the occlusion legend
+    // `getInteractMarkdown` prepends (keyed by this same id), instead of repeating a ~60-char
+    // "[occluded by … dismiss to interact]" suffix on every covered element.
     guard let key = occlusionKey(occ) else { return " [occluded]" }
     return " [occ:\(key)]"
 }
@@ -812,9 +757,8 @@ public func occlusionLegend(_ nodes: [DomNode]) -> [String] {
     return ["--- overlays covering the page (dismiss to interact) ---"] + lines + ["---"]
 }
 
-/// Maps a vertical scroll axis to a directional phrase the model can act on: `top` when fully
-/// scrolled up (only "more below" remains), `bottom` when fully scrolled down, otherwise the
-/// direction with more content to reveal.
+/// Maps a vertical scroll axis to a directional phrase the model can act on, with a 4px
+/// tolerance at each end.
 func scrollPositionPhrase(_ axis: ScrollAxis) -> String {
     let maxOffset = axis.scrollSize - axis.clientSize
     if axis.offset <= 4 { return "top" }
@@ -865,8 +809,6 @@ func scrollMarker(_ node: DomNode) -> String {
     return out
 }
 
-/// The human-readable label of an interactive element: its accessible name when present, else
-/// its own/descendant text, capped at `INTERACTIVE_LABEL_CAP` and whitespace-normalized.
 private func interactiveLabel(_ node: DomNode, _ nodesById: [String: DomNode]) -> String {
     if let ariaLabel = node.element.attributes["aria-label"], !ariaLabel.isEmpty {
         return truncateText(normalizeWhitespace(ariaLabel), INTERACTIVE_LABEL_CAP)
@@ -880,7 +822,6 @@ private func interactiveLabel(_ node: DomNode, _ nodesById: [String: DomNode]) -
     return truncateText(text, INTERACTIVE_LABEL_CAP)
 }
 
-/// Compact, human-readable form of an `<input>` control, e.g. `input(text, placeholder="Search")`.
 private func renderInputControl(_ node: DomNode) -> String {
     var parts: [String] = []
     let data = node.content.inputData
@@ -894,10 +835,8 @@ private func renderInputControl(_ node: DomNode) -> String {
     return "input(\(parts.joined(separator: ", ")))"
 }
 
-/// Renders an interactive element as compact, human-readable markdown plus its actionable
-/// `{aloha-id="ID" tag}` trailer. Used for the READ observation: links become markdown links,
-/// buttons/controls become bracketed labels, so the model reads page-shaped text yet every
-/// actionable id survives for `tab.click(id)` / `findByText`.
+/// Renders an interactive element as compact markdown plus its actionable trailer, so the
+/// model reads page-shaped text yet every id survives for `tab.click(id)` / `findByText`.
 func emitInViewportElement(_ node: DomNode, _ depth: Int, _ nodesById: [String: DomNode], _ options: DomSerializeOptions = DomSerializeOptions()) -> String {
     let tag = node.element.tagName.lowercased()
     if tag == "code" { return "" }
@@ -924,8 +863,7 @@ func emitInViewportElement(_ node: DomNode, _ depth: Int, _ nodesById: [String: 
         } else {
             c = "[\(label)]"
         }
-        // Reuse the anchor-metadata helper only for the [new tab]/[download] flags (the href is
-        // already folded into the markdown link above, so pass includeUrls=false to avoid a dup).
+        // includeUrls=false: the href is already folded into the markdown link above.
         c = appendAnchorMetadata(c, node, tag, false)
     case "input":
         c = renderInputControl(node)
@@ -1038,8 +976,7 @@ private let dedupWrapperTags: Set<String> = [
     "h1", "h2", "h3", "h4", "h5", "h6", "span", "li", "p", "strong", "em", "small", "label", "div"
 ]
 
-/// Whether `node` has a genuinely-actionable descendant (a/button/input/…) — the one that
-/// keeps the aloha-id when a pure text wrapper around it is deduped.
+/// The descendant that keeps the aloha-id when a pure text wrapper around it is deduped.
 private func hasInteractiveDescendant(_ node: DomNode, _ nodesById: [String: DomNode]) -> Bool {
     for childId in node.children {
         guard let child = nodesById[childId] else { continue }
@@ -1098,11 +1035,10 @@ func renderInteractiveNode(_ node: DomNode, _ depth: Int, _ nodesById: [String: 
     // A scrollable container is often a plain non-interactive div that the keep test would drop;
     // keep it so its tag and `[scrollable …]` readout reach the model alongside its aloha-id.
     let scrollableKept = node.positioning.scroll != nil && node.positioning.isVisible
-    // A sealed region is kept for the same reason an occluded element is: the whole point
-    // of marking it is that it stops being invisible, and an <iframe> carrying no text
-    // would otherwise be dropped right back into the silent gap it came from. Visibility
-    // is required exactly as the two rules above require it — a display:none tracking
-    // frame occupies no pixels, cannot be clicked, and must not be offered as if it could.
+    // A sealed region is kept for the same reason an occluded element is: an <iframe>
+    // carrying no text would otherwise be dropped right back into the silent gap the marker
+    // exists to break. Visibility is required as in the two rules above — a display:none
+    // tracking frame occupies no pixels and must not be offered as clickable.
     let sealedKept = node.sealedMarker != nil && node.positioning.isVisible
     if (!node.interactivity.isHighlighted || !isTop) && !occludedInteractive && !scrollableKept && !sealedKept { return "" }
     let distance = abs(node.positioning.distanceToViewportBorder)
@@ -1120,14 +1056,11 @@ func renderInteractiveNode(_ node: DomNode, _ depth: Int, _ nodesById: [String: 
     return line + occlusionMarker(node) + scrollMarker(node) + (node.sealedMarker ?? "")
 }
 
-/// Heading prefix (`#`×n) for `h1`–`h6`, else nil.
 private func headingPrefix(_ tag: String) -> String? {
     guard tag.count == 2, tag.hasPrefix("h"), let n = Int(tag.dropFirst()), n >= 1, n <= 6 else { return nil }
     return String(repeating: "#", count: n)
 }
 
-/// Clean content text for a structural node (heading / paragraph / list item / cell),
-/// capped at `FULL_CONTENT_TEXT_CAP` and whitespace-normalized.
 private func contentText(_ node: DomNode) -> String {
     let raw = node.content.comprehensiveText ?? node.element.textContent ?? ""
     return truncateText(normalizeWhitespace(raw), FULL_CONTENT_TEXT_CAP)
@@ -1138,8 +1071,7 @@ private func contentText(_ node: DomNode) -> String {
 /// into their row).
 private let STRUCTURAL_CONTAINER_TAGS: Set<String> = ["ul", "ol", "table", "thead", "tbody", "tfoot", "th", "td", "colgroup", "col"]
 
-/// Renders a `<tr>` as one or more pipe rows. A header row (cells are `<th>`) is followed by a
-/// `| --- |` separator. Returns "" when the row has no visible cell text.
+/// A header row (cells are `<th>`) is followed by a `| --- |` separator.
 private func renderTableRow(_ node: DomNode, _ nodesById: [String: DomNode]) -> String {
     var cells: [String] = []
     var sawTh = false
@@ -1161,8 +1093,6 @@ private func renderTableRow(_ node: DomNode, _ nodesById: [String: DomNode]) -> 
 }
 
 /// Whether a node renders as a kept interactive element (gets an actionable `{aloha-id …}` trailer).
-/// Highlighted top elements, plus occluded-but-interactive and scrollable containers, are kept so
-/// navigation never degrades.
 func nodeIsKeptInteractive(_ node: DomNode) -> Bool {
     let tag = node.element.tagName.lowercased()
     let isCheckOrRadio = tag == "input" && (node.content.inputData?.type == "checkbox" || node.content.inputData?.type == "radio")
@@ -1182,8 +1112,8 @@ func nodeIsKeptInteractive(_ node: DomNode) -> Bool {
     return (node.interactivity.isHighlighted && isTop) || occludedInteractive || scrollableKept || sealedKept
 }
 
-/// Normalised key for dedup: lowercased letters+digits only, so "£89.95" → "8995" and the same
-/// title text matches whether or not punctuation/whitespace differ.
+/// Lowercased letters+digits only, so the same title text matches whether or not
+/// punctuation/whitespace differ.
 private func dedupKey(_ s: String) -> String {
     return s.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined()
 }
@@ -1193,11 +1123,9 @@ private func dedupKey(_ s: String) -> String {
 private let VALUE_SYMBOLS: Set<Character> = ["£", "$", "€", "¥", "₽", "₹", "%"]
 
 /// A content-bearing leaf that `renderFullNode` would otherwise drop — a non-highlighted element
-/// with no content branch, e.g. `<div class="price">£89.95</div>`. We surface its text **once** so
-/// values like prices reach the model, but only when it is in-viewport/visible, is a leaf among the
-/// kept nodes (never an aggregating container like `<ul>`/`<table>` whose text is just its children
-/// joined), and its text is not already shown by an emitted ancestor (so a card title the
-/// `<li>`/`<a>` already shows is not reprinted). Returns nil when nothing new should be emitted.
+/// with no content branch, e.g. `<div class="price">£89.95</div>`. Its text is surfaced **once**,
+/// and only when it is a leaf among the KEPT nodes (never an aggregating container like
+/// `<ul>`/`<table>`, whose text is just its children joined).
 ///
 /// `emittedAncestorKeys` holds the dedup keys of the *emitted* ancestor lines (the enclosing card).
 /// Dedup is EXACT key membership, not substring containment: a title is dropped because it equals an
@@ -1215,8 +1143,6 @@ private func contentLeafLine(_ node: DomNode, _ listLevel: Int, _ nodesById: [St
                ? node.content.comprehensiveText : nil) ?? node.element.textContent ?? ""
     let text = normalizeWhitespace(raw)
     guard text.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
-    // Skip trivial fragments (bare "0"/"1"/"." vote-and-count chrome) but keep short *values* that
-    // carry a currency/percent symbol ("£5", "20%"). Real prices/titles clear this comfortably.
     let hasValueSymbol = text.contains(where: { VALUE_SYMBOLS.contains($0) })
     guard text.count >= CONTENT_LEAF_MIN_CHARS || hasValueSymbol else { return nil }
     let key = dedupKey(text)
@@ -1225,22 +1151,19 @@ private func contentLeafLine(_ node: DomNode, _ listLevel: Int, _ nodesById: [St
     return indent + truncateText(text, FULL_CONTENT_TEXT_CAP)
 }
 
-/// Renders a PROSE block (`<p>`, `<h1>`…`<h6>`, `<caption>`, `<figcaption>`, `<dt>`, `<legend>`)
-/// as ONE line in document order, keeping inline link/button text IN PLACE with its
-/// `{aloha-id …}` trailer, and reporting every node id it consumed so the walker does not
-/// re-emit the same sentence again as loose fragments.
+/// Punctuation that never takes a space before it when prose parts are rejoined.
+private let CLINGING_PUNCTUATION: Set<Character> = [".", ",", ";", ":", "!", "?", ")", "]", "}", "%", "\u{2019}"]
+
+/// Renders a PROSE block as ONE line in document order, keeping inline link/button text IN
+/// PLACE with its `{aloha-id …}` trailer, and reporting every node id it consumed so the walker
+/// does not re-emit the same sentence as loose fragments. Returns nil when the node has no
+/// serializable children, in which case the caller falls back to `contentText`.
 ///
 /// The walker's own `comprehensiveText` cannot carry prose: the in-page collector builds it from
 /// the element's direct text nodes PLUS `getFirstDescendantText`, which deliberately stops at
 /// every interactive descendant (right for a control's label, fatal for a sentence). So a
 /// paragraph with inline `<a>`s came back as the sentence TWICE — once without `<b>`, once with —
 /// and with every link's words deleted from both, then a third time as one line per fragment.
-///
-/// Returns nil when the node has no serializable children, in which case the caller falls back to
-/// `contentText` (the leaf case, where `comprehensiveText` is the whole and only text).
-/// Punctuation that never takes a space before it when prose parts are rejoined.
-private let CLINGING_PUNCTUATION: Set<Character> = [".", ",", ";", ":", "!", "?", ")", "]", "}", "%", "\u{2019}"]
-
 private func proseLine(
     _ node: DomNode,
     _ nodesById: [String: DomNode],
@@ -1261,10 +1184,10 @@ private func proseLine(
         }
         let childTag = child.element.tagName.lowercased()
         if nodeIsKeptInteractive(child) {
-            // A PROMOTED text wrapper (a `<span>`/`<div>` that is "interactive" only because it
-            // carries text) is left entirely to the walker, which already knows how to dedup its
-            // redundant `{aloha-id}` label line against the content line above it. Only a
-            // genuinely actionable element (a / button / input / …) is folded in here.
+            // A PROMOTED text wrapper (a `<span>`/`<div>` "interactive" only because it carries
+            // text) is left to the walker, which already dedups its redundant `{aloha-id}` label
+            // line against the content line above it. Only a genuinely actionable element is
+            // folded in here.
             if dedupWrapperTags.contains(childTag) {
                 taken.remove(id)
                 return
@@ -1282,9 +1205,9 @@ private func proseLine(
     for childId in node.children { visit(childId) }
     if parts.isEmpty { return nil }
     consumed.formUnion(taken)
-    // The whitespace that separated the original nodes is already gone (`normalizeWhitespace`), so
-    // the parts are rejoined with a single space — except before clinging punctuation, which
-    // belongs to the word before it ("… the community. It uses …", not "… the community . It …").
+    // The whitespace that separated the original nodes is already gone (`normalizeWhitespace`),
+    // so the parts are rejoined with a single space — except before clinging punctuation
+    // ("… the community. It uses …", not "… the community . It …").
     var joined = ""
     for part in parts {
         if !joined.isEmpty, !(part.first.map { CLINGING_PUNCTUATION.contains($0) } ?? false) { joined += " " }
@@ -1314,23 +1237,20 @@ func renderFullNode(
         return line.isEmpty ? "" : line + occlusionMarker(node) + scrollMarker(node) + (node.sealedMarker ?? "")
     }
 
-    // Headings → `#`×n + clean text (id-free content), inline links kept in place.
     if let prefix = headingPrefix(tag), node.positioning.isVisible {
         let text = proseLine(node, nodesById, options, &consumed) ?? contentText(node)
         return text.isEmpty ? "" : "\(prefix) \(text)"
     }
 
-    // List items → "- text". A top-level list is flush-left; each further nesting adds 2 spaces
-    // (cap at level 4). `depth` here is the list-nesting level supplied by the walker (1 inside
-    // the outermost <ul>/<ol>), so the indent is `(level - 1)` clamped to [0, 4].
+    // `depth` here is the list-nesting level supplied by the walker (1 inside the outermost
+    // <ul>/<ol>), so the indent is `(level - 1)` clamped to [0, 4].
     if tag == "li" && node.positioning.isVisible {
         let text = contentText(node)
         let indentLevel = min(max(depth - 1, 0), 4)
         return String(repeating: " ", count: indentLevel * 2) + "- " + text
     }
 
-    // Table rows → pipe rows (+ separator after a header row). Containers/cells render nothing
-    // on their own line; their content is folded into the row.
+    // Containers and cells render nothing on their own line; their content is folded into the row.
     if tag == "tr" {
         return renderTableRow(node, nodesById)
     }
@@ -1356,8 +1276,6 @@ func renderFullNode(
         return c + occlusionMarker(node) + scrollMarker(node)
     }
 
-    // Remaining inline-text content tags (p/caption/figcaption/dt/legend) → one plain-text line,
-    // inline links kept in place with their trailers.
     if INLINE_TEXT_TAGS.contains(tag) && node.positioning.isVisible {
         let text = proseLine(node, nodesById, options, &consumed) ?? contentText(node)
         return text.isEmpty ? "" : text
@@ -1375,13 +1293,11 @@ public func serializeFullMarkdown(_ nodes: [DomNode], _ options: DomSerializeOpt
     let roots = nodes.filter { !childIds.contains($0.id) }
     var output: [String] = []
     var visited = Set<String>()
-    // `listLevel` is the list-nesting depth (number of <ul>/<ol> ancestors), which drives
-    // `<li>` indentation — replacing the old DOM-depth indent. Other structural lines render
-    // flush-left, so they ignore it.
-    // `emittedAncestorKeys` holds the dedup keys of ancestors that actually emitted a line (the
-    // enclosing "card"), so a content leaf can skip reprinting text the card already showed (e.g. a
-    // title the `<li>`/`<a>` rendered) — by EXACT key match, never substring, so values like prices
-    // are never mistaken for the title.
+    // `listLevel` is the list-nesting depth (number of <ul>/<ol> ancestors), which drives `<li>`
+    // indentation; other structural lines render flush-left and ignore it. `emittedAncestorKeys`
+    // holds the dedup keys of ancestors that actually emitted a line (the enclosing "card"), so a
+    // content leaf can skip reprinting text the card already showed — by EXACT key match, never
+    // substring, so values like prices are never mistaken for the title.
     func walk(_ id: String, _ listLevel: Int, _ emittedAncestorKeys: Set<String>, _ shownTextKeys: Set<String>) {
         guard let node = nodesById[id], !visited.contains(id) else { return }
         visited.insert(id)
@@ -1400,9 +1316,8 @@ public func serializeFullMarkdown(_ nodes: [DomNode], _ options: DomSerializeOpt
                 return
             }
         }
-        // A prose block renders its whole subtree into ONE line (text and inline links in
-        // document order), and reports those ids here so the walker does not print the same
-        // sentence a second time, fragment by fragment.
+        // A prose block renders its whole subtree into ONE line and reports those ids here, so
+        // the walker does not print the same sentence again fragment by fragment.
         var consumed = Set<String>()
         let rendered = renderFullNode(node, listLevel, nodesById, options, &consumed)
         visited.formUnion(consumed)

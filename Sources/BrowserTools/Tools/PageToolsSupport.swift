@@ -1,32 +1,21 @@
 import Foundation
 import ToolABI
 
-// MARK: - Shared active-tab resolution for the atomic page_* / get_text tools
-//
-// Tab-addressing decision (documented here once, applies to all seven tools):
-// these tools are single-page INTERACTION primitives (click/type/select/read/
-// navigate/press-keys/wait), not a tab MANAGEMENT surface like `manage_tabs`.
-// `manage_tabs` takes an explicit `tab_id` because it addresses ANY tab by
-// identity (open/close/use/read a tab that is not necessarily the one currently
-// shown to the model). These tools instead operate on "the page in front of the
-// agent right now" — every one of their descriptions says "on the active tab" —
-// mirroring how a human driving a browser never names a window to click into it.
-// Structurally, the mechanism they wrap (`AgentBrowserBridge` / the in-page
-// `window.__aloha` runtime) is ALSO single-tab: it is constructed against one
-// concrete `CDPTabHandle` at a time, with no multi-tab addressing built in.
-// So: no tab-id parameter.
+// Tab-addressing decision, applying to all seven atomic page_* / get_text tools: they are
+// single-page INTERACTION primitives, not a tab MANAGEMENT surface like `manage_tabs`,
+// which takes an explicit `tab_id` because it addresses ANY tab by identity. These operate
+// on "the page in front of the agent right now". Structurally, the mechanism they wrap
+// (`AgentBrowserBridge` / the in-page `window.__aloha` runtime) is ALSO single-tab: it is
+// constructed against one concrete `CDPTabHandle` at a time, with no multi-tab addressing
+// built in. So: no tab-id parameter.
 
-/// The active tab, resolved and awake, plus the concrete CDP handle these tools
-/// need to construct an ``AgentBrowserBridge``.
 struct ResolvedPageTab {
     let tab: TabHandle
     let cdpTab: CDPTabHandle
 }
 
-/// The outcome of resolving the active page tab: the resolved tab, or the
-/// tool-facing error result to return instead. A plain `enum` rather than
-/// `Result<_, Error>` — the failure case is already a finished, user-facing
-/// ``RawToolResult``, not a `Swift.Error` to further translate.
+/// A plain `enum` rather than `Result<_, Error>` — the failure case is already a finished,
+/// user-facing ``RawToolResult``, not a `Swift.Error` to further translate.
 enum ResolvePageTabOutcome {
     case success(ResolvedPageTab)
     case failure(RawToolResult)
@@ -41,16 +30,13 @@ func activeTabIdForPageTools(_ context: ToolExecutionContext, _ tabsWindow: Tabs
         ?? tabsWindow.tabs.orderedTabs.first?.id
 }
 
-/// The tracked handle for `id`, or a live page target adopted on the miss. `nil`
-/// when nothing live carries it — which is what keeps a typo a failure.
+/// Falls back to adopting a live page target on a miss. `nil` when nothing live carries the
+/// id — which is what keeps a typo a failure.
 func resolveOrAdoptTab(_ id: String, _ tabs: TabsModel) async -> TabHandle? {
     if let tracked = tabs.getOrRestoreTab(id, restoreIfNeeded: false) { return tracked }
     return await (tabs as? LivePageTargetAdopting)?.adoptLiveTarget(id)
 }
 
-/// Resolves the active browser tab for one of the atomic page tools, waking it
-/// and requiring it to be a live CDP website tab.
-///
 /// `requireReady` is true for click/type/read (the DOM must be live). It is
 /// false for `page_navigate` goto: a tab whose renderer is asleep fails `wake`
 /// with "operation exceeded deadline" and would then never `Page.navigate`.
@@ -103,13 +89,9 @@ func resolveActivePageTab(
     return .success(ResolvedPageTab(tab: tab, cdpTab: cdpTab))
 }
 
-/// Builds the `AgentBrowserBridge` these tools drive their operation through,
-/// over the tab's flat CDP session, threading the tool call's own abort signal.
 func makePageBridge(_ cdpTab: CDPTabHandle, _ signal: AbortSignal) -> AgentBrowserBridge {
     AgentBrowserBridge(backend: CDPAgentBridgeBackend(tab: cdpTab, signal: signal))
 }
-
-// MARK: - Shared input reading (mirrors UploadFileExecutorTool / ManageTabsExecutorTool)
 
 /// A caller-supplied `Double` as an `Int`, saturating instead of trapping.
 ///
@@ -140,19 +122,15 @@ enum PageToolInput {
         return value
     }
 
-    /// The elements of an array-valued parameter, for tools that take a LIST of operations in one call.
-    ///
-    /// Returns the elements as `WorkflowValue`s so the same `string`/`bool` readers above work on each one —
-    /// they already accept any `WorkflowValue?` and check for `.object` themselves.
+    /// Elements come back as `WorkflowValue`s so the `string`/`bool` readers above work on
+    /// each one unchanged.
     static func array(_ input: WorkflowValue?, _ key: String) -> [WorkflowValue]? {
         guard case let .object(fields)? = input, case let .array(items)? = fields[key] else { return nil }
         return items
     }
 }
 
-// MARK: - The durable selector, on the receipt the trace already carries
-//
-// WHY THIS EXISTS. An `aloha_id` is a hash — of an authored name or of a frame-scoped xpath — so it
+// WHY THE DURABLE SELECTOR EXISTS. An `aloha_id` is a hash — of an authored name or of a frame-scoped xpath — so it
 // is stable across walks of the same page and still useless to anyone reading the transcript
 // afterwards: there is no page to resolve it against and no way to recompute it. The receipt records
 // WHICH handle was clicked and nothing about which element that was.
@@ -174,16 +152,14 @@ enum PageToolReceipt {
         return " [selector=\(selector)]"
     }
 
-    /// The durable selector for an `aloha_id`, or `nil` at every gap — no tab, unknown id, or nothing
-    /// stable on the node. Best-effort by contract: a guessed selector is worse than none, because a
-    /// script replayed against one fails silently.
+    /// `nil` at every gap — no tab, unknown id, or nothing stable on the node. Best-effort by
+    /// contract: a guessed selector is worse than none, because a script replayed against one
+    /// fails silently.
     static func durableSelector(alohaId: String, tab: StepTraceTab?) -> String? {
         guard let tab, !alohaId.isEmpty, let node = tab.traceDomNode(forAlohaId: alohaId) else { return nil }
         return stableCSSSelector(for: node)
     }
 }
-
-// MARK: - Naming the page a page tool acted on
 
 extension TabHandle {
     /// Stamps the page this call acted on onto the result, read off the LIVE tab

@@ -26,7 +26,6 @@ public protocol AbortChainLogger: Sendable {
     func debug(_ message: String)
 }
 
-/// A logger whose methods do nothing.
 public struct NoopAbortChainLogger: AbortChainLogger {
     public init() {}
     public func info(_ message: String) {}
@@ -35,7 +34,6 @@ public struct NoopAbortChainLogger: AbortChainLogger {
     public func debug(_ message: String) {}
 }
 
-/// The shared no-op logger used as the default chaining logger.
 public let NOOP_LOGGER: AbortChainLogger = NoopAbortChainLogger()
 
 // MARK: - Abort signal
@@ -155,7 +153,6 @@ private final class AbortWaitState {
     }
 }
 
-/// Controls an ``AbortSignal``, exposing `abort(_:)` to trigger cancellation.
 public final class AbortController {
     public let signal: AbortSignal
 
@@ -224,7 +221,6 @@ public func raceAbort<T: Sendable>(
     }
 }
 
-/// Whether `error` represents an abort.
 nonisolated public func isAbortError(_ error: Error) -> Bool {
     error is AbortSignalError
 }

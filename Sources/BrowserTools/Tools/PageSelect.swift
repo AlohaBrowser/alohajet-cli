@@ -1,20 +1,12 @@
 import Foundation
 import ToolABI
 
-// MARK: - page_select executor tool
-
-/// The executable `page_select` tool: selects an option in a `<select>`
-/// dropdown on the active tab by its `aloha_id`, matching by visible `text`
-/// and/or `index`.
+/// The executable `page_select` tool: selects an option in a `<select>` on the active tab
+/// by its `aloha_id`, matching by visible `text` and/or `index`.
 ///
-/// NEW invocation path: `window.__aloha.select()` (see
-/// `InpageScripts.swift`) has no `handlePendingRequest` / CDP `Input.*`
-/// case to wrap — it mutates the `<select>` element's value directly in-page
-/// and dispatches `input`/`change` events itself, so no host-side dispatch is
-/// needed. This tool drives the narrow ``AgentBrowserBridge/selectOptionById(_:text:index:)``
-/// driver method, which evaluates ONE fixed, Swift-constructed
-/// `window.__aloha.select(...)` call over `Runtime.evaluate`. The call text is
-/// built here in Swift; no caller-authored code reaches the page.
+/// The selection happens in-page, which dispatches the `input`/`change` events itself, so
+/// no host-side CDP dispatch is needed. The `window.__aloha.select(...)` call text is built
+/// in Swift; no caller-authored code reaches the page.
 @MainActor public final class PageSelectExecutorTool: ExecutorTool {
     public let name = "page_select"
 

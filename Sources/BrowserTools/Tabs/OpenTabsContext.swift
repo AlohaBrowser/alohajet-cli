@@ -1,9 +1,6 @@
 import Foundation
 import ToolABI
 
-// MARK: - Prompt section builder
-
-/// A built prompt section with an estimated token count.
 public nonisolated struct PromptSection: Sendable, Equatable {
     public var name: String
     public var tokens: Int
@@ -67,25 +64,19 @@ public final class PromptSectionBuilder {
         return self
     }
 
-    /// Returns the joined prompt string.
     public func build() -> String {
         parts.joined()
     }
 
-    /// Returns a copy of the recorded sections.
     public func getSections() -> [PromptSection] {
         sections
     }
 
-    /// Returns the token estimate of the entire built prompt.
     public func getTotalTokens() -> Int {
         estimateTokenCount(build())
     }
 }
 
-// MARK: - Open tabs context provider
-
-/// A tab summarized in the open-tabs context.
 public struct OpenTabSummary: Sendable, Equatable {
     public var id: String
     public var url: String
@@ -95,7 +86,6 @@ public struct OpenTabSummary: Sendable, Equatable {
     }
 }
 
-/// The open-tabs data snapshot.
 public struct OpenTabsData: Sendable, Equatable {
     public var activeTab: OpenTabSummary?
     public var otherTabs: [OpenTabSummary]
@@ -157,5 +147,4 @@ public final class OpenTabsContextProvider {
     }
 }
 
-/// Disclaimer appended to the open-tabs prompt section built above.
 private let openTabsDisclaimer = "These are open tabs from the browser. They represent general browser state across sessions and may not be relevant to the current chat unless the user refers to them or attaches one."

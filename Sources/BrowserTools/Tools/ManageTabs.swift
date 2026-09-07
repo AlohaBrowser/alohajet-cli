@@ -1,13 +1,8 @@
 import Foundation
 import ToolABI
 
-// MARK: - manage_tabs executor tool
-
-/// The executable `manage_tabs` tool: the tab-management surface — list, read,
-/// open, close, and choose which tab the page_* tools address. It resolves the
-/// tabs window and the browser session from the context's services, dispatches
-/// on the requested `action`, and returns the per-action text output (unwrapped
-/// — the executor wraps it in the tool-result envelope).
+/// The executable `manage_tabs` tool. Returns the per-action text output unwrapped — the
+/// executor wraps it in the tool-result envelope.
 @MainActor public final class ManageTabsExecutorTool: ExecutorTool {
     public let name = "manage_tabs"
 
@@ -57,9 +52,8 @@ import ToolABI
             guard let tabId else {
                 return RawToolResult(output: "tab_id is required for the read action", isError: true)
             }
-            // When the call omits `include_screenshot`, fall back to the configured
-            // default. The baseline default is `true`, so the OFF path is exactly the
-            // prior `!= false` behavior; an explicit value always wins.
+            // The baseline default is `true`, so an omitted argument keeps the prior
+            // `!= false` behavior.
             let includeScreenshot = resolveIncludeScreenshot(
                 explicit: Self.bool(input, "include_screenshot"),
                 default: webExtractionOptions.defaultIncludeScreenshot)
@@ -69,9 +63,8 @@ import ToolABI
                 return RawToolResult(output: "url is required for open action", isError: true)
             }
             let use = Self.bool(input, "use") != false
-            // `open` now returns the page, so it resolves `include_screenshot` exactly like
-            // `read` — same explicit flag, same configured default. Two actions that return the
-            // same thing must not disagree about what "the page" includes.
+            // `open` returns the page too: two actions that return the same thing must not
+            // disagree about what "the page" includes.
             let openIncludeScreenshot = resolveIncludeScreenshot(
                 explicit: Self.bool(input, "include_screenshot"),
                 default: webExtractionOptions.defaultIncludeScreenshot)
@@ -107,52 +100,34 @@ import ToolABI
             images: result.images)
     }
 
-    // MARK: Input reading
-
     static func string(_ input: WorkflowValue?, _ key: String) -> String? {
         guard case let .object(fields)? = input, case let .string(value)? = fields[key] else { return nil }
         return value
     }
 
-    /// Returns the boolean field, or `nil` when absent. Callers use this with
-    /// `!= false` defaulting, where any non-`false` value (including a missing
-    /// key) is treated as "true".
     static func bool(_ input: WorkflowValue?, _ key: String) -> Bool? {
         guard case let .object(fields)? = input, case let .bool(value)? = fields[key] else { return nil }
         return value
     }
 }
 
-// MARK: - Read screenshot resolution
-
-/// Decide whether a `manage_tabs` read attaches a viewport screenshot. An explicit
-/// `include_screenshot` argument always wins; when the call omits it, the configured
-/// `default` is used. The baseline `default` is `true`, so an omitted argument yields a
-/// screenshot exactly as before; a text-first policy passes `default: false`, where the
-/// model must explicitly pass `include_screenshot: true` to get one.
+/// Baseline `default` is `true`, so an omitted argument still yields a screenshot; a
+/// text-first policy passes `default: false` and the model must ask for one explicitly.
 func resolveIncludeScreenshot(explicit: Bool?, default fallback: Bool) -> Bool {
     explicit ?? fallback
 }
 
-// MARK: - Per-action context
-
-/// The per-action context passed to each handler, built from the tool's runtime.
 struct ManageTabsActionContext {
     let sessionId: String
     let toolCallId: String
     let session: ChatModeSession
     let abortSignal: AbortSignal?
-    /// The toggleable web-extraction options for this read (resolved at the CLI
-    /// composition root). Defaults to `.baseline` so any unwired call site keeps the
+    /// Resolved at the CLI composition root; `.baseline` keeps an unwired call site at the
     /// exact prior behavior.
     var webExtractionOptions: AgentWebExtractionOptions = .baseline
 }
 
-// MARK: - Wake into a tab-tool response
-
-/// Wake a tab inside a manage_tabs action, normalizing abort + wake failure into
-/// tool-result shaped responses. Returns `nil` on success, or the error result
-/// the action should return.
+/// Returns `nil` on success, or the error result the calling action should return.
 func ensureTabAwake(_ tab: TabHandle, _ signal: AbortSignal?) async -> TabToolResult? {
     if let abortedBefore = abortedResultOrNull(signal?.aborted == true) { return abortedBefore }
 
@@ -173,12 +148,9 @@ func ensureTabAwake(_ tab: TabHandle, _ signal: AbortSignal?) async -> TabToolRe
     return TabToolResult(output: wakeResult.message ?? "", isError: true)
 }
 
-/// Whether the live tab is an interactive website tab with an attached agent DOM.
 func tabIsInteractiveWeb(_ tab: TabHandle) -> Bool {
     isInteractiveWebTab(InteractiveTabDescriptor(tabType: tab.tabType, hasAgentDom: tab.agentDOM != nil))
 }
-
-// MARK: - Action: list
 
 func manageTabsList(_ tabsWindow: TabsWindow) -> TabToolResult {
     let tabsModel = tabsWindow.tabs
@@ -202,8 +174,6 @@ func manageTabsList(_ tabsWindow: TabsWindow) -> TabToolResult {
     }
     return listTabs(summaries)
 }
-
-// MARK: - Action: read
 
 func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ includeScreenshot: Bool) async -> TabToolResult {
     let tabsModel = tabsWindow.tabs
@@ -237,7 +207,6 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
         // its real Chrome target id is the one that outlives this process.
         let tabId = tab.id
 
-        // --- Interactive (agentDOM) markdown path ---
         if tabIsInteractiveWeb(tab), let agentDOM = tab.agentDOM {
             let includeUrls = includeUrlsInMarkdownEnabled()
 
@@ -248,12 +217,9 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
             // `Runtime.evaluate` calls are each bounded by `CDPClient.send`'s
             // cancellation-aware backstop, so a wedged page cannot hang the turn, and
             // an interrupt unwinds the read via the abort signal.
-            // Thread the resolved web-extraction options through serialization. At the
-            // baseline (every improvement off) this produces exactly
+            // At the baseline (every improvement off) this is exactly
             // `DomSerializeOptions(includeUrls: includeUrls)` — the prior call.
             let serializeOptions = ctx.webExtractionOptions.domSerializeOptions(includeUrls: includeUrls)
-            // ONE definition of "read this page", used both for the first read and for
-            // the re-read that a cleared CAPTCHA earns.
             let readPage: () async throws -> ToolABI.InteractMarkdownResult = {
                 try await agentDOM.getInteractMarkdown(
                     includeScreenshot, false, serializeOptions: serializeOptions,
@@ -291,7 +257,7 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
                 images: images)
         }
 
-        // --- Legacy / non-interactive markdown path ---
+        // Legacy non-interactive path.
         if let abortedBeforeContext = abortedResultOrNull(ctx.abortSignal?.aborted == true) { return abortedBeforeContext }
 
         let tabContext = try await tabsModel.getTabContext(windowId: tabsWindow.id, tab: tab, signal: ctx.abortSignal)
@@ -321,14 +287,10 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
     }
 }
 
-/// Probes the tab's layer bounds and renders the `\nViewport: WxH` suffix, or an
-/// empty string when no live, positive-size layer is available.
 private func viewportLineFor(_ tab: TabHandle) -> String {
     guard let bounds = tab.viewportBounds(), bounds.width > 0, bounds.height > 0 else { return "" }
     return "\nViewport: \(bounds.width)x\(bounds.height)"
 }
-
-// MARK: - Action: open
 
 func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ use: Bool, _ includeScreenshot: Bool) async -> TabToolResult {
     let normalized: String
@@ -339,7 +301,6 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
         return TabToolResult(output: reason, isError: true)
     }
 
-    // Reuse an existing agent-controlled tab for the same agent + same URL.
     let existingTab = tabsWindow.tabs.orderedTabs.first { tab in
         guard let agentId = tab.browserAgentControlledAgentId, agentId == ctx.sessionId else { return false }
         return tab.url == normalized
@@ -410,8 +371,6 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
     )
 }
 
-// MARK: - Action: close
-
 func manageTabsClose(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext) async -> TabToolResult {
     guard let tab = tabsWindow.tabs.tab(tabId) else {
         return TabToolResult(output: "Tab \"\(tabId)\" not found.", isError: true)
@@ -447,8 +406,6 @@ func manageTabsClose(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTab
     )
 }
 
-// MARK: - Action: use
-
 func manageTabsUse(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext) async -> TabToolResult {
     guard let tab = tabsWindow.tabs.getOrRestoreTab(tabId, restoreIfNeeded: false) else {
         return TabToolResult(output: "Tab \"\(tabId)\" not found.", isError: true)
@@ -473,8 +430,6 @@ func manageTabsUse(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsA
     )
 }
 
-// MARK: - Action: unuse
-
 func manageTabsUnuse(_ ctx: ManageTabsActionContext) -> TabToolResult {
     let previousTabId = ctx.session.getActiveBrowserTabId()
     ctx.session.setActiveBrowserTab(nil)
@@ -487,16 +442,9 @@ func manageTabsUnuse(_ ctx: ManageTabsActionContext) -> TabToolResult {
     return TabToolResult(output: "No tab was in use.")
 }
 
-// MARK: - Markdown URL inclusion
-
-/// Whether interactive markdown carries the `href` of anchor elements.
-///
-/// Replaces a feature-flag read (`FeatureFlagsCache` -> a remote flag table) with the
-/// env-var pattern the rest of this package already uses. OFF by default, which is what
-/// the flag's own default was: URLs multiply the size of a link-dense page's markdown,
-/// and the ids are what the page tools address, not the hrefs. Set
-/// `ALOHAJET_MARKDOWN_URLS=1` to include them. Read via `getenv` so a test's `setenv`
-/// is observed immediately.
+/// OFF by default: hrefs multiply the size of a link-dense page's markdown, and the page
+/// tools address ids, not hrefs. `ALOHAJET_MARKDOWN_URLS=1` includes them. Read via
+/// `getenv` so a test's `setenv` is observed immediately.
 func includeUrlsInMarkdownEnabled() -> Bool {
     guard let raw = getenv("ALOHAJET_MARKDOWN_URLS") else { return false }
     switch String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
