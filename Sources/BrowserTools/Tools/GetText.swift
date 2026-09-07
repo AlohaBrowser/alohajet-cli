@@ -1,17 +1,9 @@
 import Foundation
 import ToolABI
 
-// MARK: - get_text executor tool
-
-/// The executable `get_text` tool: reads the visible text (or input value) of
-/// one element on the active tab by its `aloha_id`.
-///
-/// `window.__aloha.getText()` (see `InpageScripts.swift`) has no
-/// `handlePendingRequest` / CDP `Input.*` case to wrap — it is a pure in-page
-/// read with nothing to dispatch. This tool drives the narrow
-/// ``AgentBrowserBridge/getTextById(_:)`` driver method, which evaluates ONE
-/// fixed, Swift-constructed `window.__aloha.getText(...)` call over
-/// `Runtime.evaluate`; no caller-authored code reaches the page.
+/// The executable `get_text` tool: reads the visible text (or input value) of one element
+/// on the active tab by its `aloha_id`. The `window.__aloha.getText(...)` call text is
+/// built in Swift; no caller-authored code reaches the page.
 @MainActor public final class GetTextExecutorTool: ExecutorTool {
     public let name = "get_text"
 
@@ -65,7 +57,6 @@ import ToolABI
         case let .success(resolved):
             let bridge = makePageBridge(resolved.cdpTab, context.signal)
             if capped.count == 1 {
-                // The single-id path adds no labelling: one call, one text back (capped).
                 let result = await bridge.getTextById(capped[0])
                 let text = result.isError ? result.output : Self.truncate(result.output, perId)
                 // ONE OPTIONAL LINE, at the moment a round was spent on one element. The schema has advertised
@@ -98,9 +89,8 @@ import ToolABI
         }
     }
 
-    /// `text` truncated to `limit` characters, with the cut named in place. Naming it matters more
-    /// than the truncation: a silently clipped read looks like a complete one, and a caller that
-    /// cannot tell will answer from half a page.
+    /// Naming the cut matters more than the truncation: a silently clipped read looks like a
+    /// complete one, and a caller that cannot tell will answer from half a page.
     static func truncate(_ text: String, _ limit: Int) -> String {
         guard text.count > limit else { return text }
         return String(text.prefix(limit))

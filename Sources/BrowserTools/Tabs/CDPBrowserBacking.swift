@@ -2,8 +2,6 @@ import Foundation
 import CDP
 import ToolABI
 
-// MARK: - Navigation pacing
-
 /// The gate a navigation asks for its turn at before `Page.navigate` is sent, so
 /// a host that wants to pace how fast the agent walks a site can impose one. The
 /// default is ``NoPacing``: every turn is granted immediately.
@@ -12,13 +10,10 @@ public protocol PacingGate: Sendable {
     func waitForTurn(_ url: String) async throws
 }
 
-/// The default gate: no pacing at all.
 public struct NoPacing: PacingGate {
     public init() {}
     public func waitForTurn(_ url: String) async throws {}
 }
-
-// MARK: - JSValue dictionary bridging
 
 /// Converts an ordered `JSValue` object into the unordered `[String: JSValue]`
 /// dictionary the CDP transport's `send` expects. Non-object values yield an
@@ -30,12 +25,9 @@ func cdpParams(_ value: JSValue) -> [String: JSValue] {
     return dict
 }
 
-// MARK: - CDP tab session
-
-/// Tracks a single page target attached over a flat CDP session: its stable
-/// external id, the real Chrome target id (created lazily for new tabs), the
-/// flat-session id, last-known url/title, and lifecycle flags. The session is
-/// the unit a ``CDPTabLayer`` / ``CDPTabDebugger`` route their commands through.
+/// Tracks a single page target attached over a flat CDP session. The session is
+/// the unit a ``CDPTabLayer`` / ``CDPTabDebugger`` route their commands through;
+/// for a tab the agent opened the real Chrome target is created lazily.
 @MainActor
 final class CDPTabSession {
     nonisolated let client: CDPClient
@@ -118,9 +110,8 @@ final class CDPTabSession {
     }
 
     /// Creates the real Chrome target (for an agent-opened tab) when none exists
-    /// yet and attaches a flat session, caching the session id. Runs inside the
-    /// single in-flight task held by ``ensureAttached()`` so the create happens
-    /// once even under concurrent callers.
+    /// yet and attaches a flat session. Runs inside the single in-flight task held
+    /// by ``ensureAttached()`` so the create happens once under concurrent callers.
     private func performAttach() async throws -> String {
         let destroyed = _destroyed
         var effective = _effectiveTargetId
@@ -193,12 +184,9 @@ final class SessionScopedCDPTransport: CDPTransport {
     }
 }
 
-// MARK: - Console capture
-
 /// Subscribes to `Runtime.consoleAPICalled` on a tab's flat CDP session and
 /// accumulates up to 50 ``ConsoleCapture`` entries while active. Only the three
-/// levels `log` / `warn` / `error` are recorded, and the accumulation stops
-/// once 50 entries are held.
+/// levels `log` / `warn` / `error` are recorded.
 final class ConsoleCaptureSession {
     private let session: CDPTabSession
     private var entries: [ConsoleCapture] = []
@@ -206,7 +194,6 @@ final class ConsoleCaptureSession {
     private var consumer: Task<Void, Never>?
     private var continuation: AsyncStream<JSValue>.Continuation?
 
-    /// The maximum number of console entries retained.
     static let maxEntries = 50
 
     nonisolated init(session: CDPTabSession) {
@@ -260,7 +247,6 @@ final class ConsoleCaptureSession {
         return entries
     }
 
-    /// Records one `Runtime.consoleAPICalled` payload, honoring the 50-entry cap.
     private func record(_ params: JSValue) {
         let level = Self.mapConsoleLevel(params["type"]?.stringValue)
         let message = Self.renderArgs(params["args"])
@@ -269,7 +255,6 @@ final class ConsoleCaptureSession {
         }
     }
 
-    /// Maps a CDP console-API call `type` to one of the three recorded levels.
     private static func mapConsoleLevel(_ type: String?) -> String {
         switch type {
         case "warning": return "warn"
@@ -278,9 +263,6 @@ final class ConsoleCaptureSession {
         }
     }
 
-    /// Renders the `args` array of a `Runtime.consoleAPICalled` payload into a
-    /// single space-joined message string, preferring each argument's `value`,
-    /// then its `description`, then its `type`.
     private static func renderArgs(_ args: JSValue?) -> String {
         guard let array = args?.arrayValue else { return "" }
         let pieces: [String] = array.map { arg in
@@ -304,10 +286,8 @@ final class ConsoleCaptureSession {
     }
 }
 
-// MARK: - CDP tab layer
-
 /// A ``TabLayer`` that evaluates page-side scripts over a tab's flat CDP session
-/// using `Runtime.evaluate`. Destruction tracking follows the detach lifecycle.
+/// using `Runtime.evaluate`.
 @MainActor
 final class CDPTabLayer: TabLayer {
     nonisolated let session: CDPTabSession
@@ -351,8 +331,6 @@ final class CDPTabLayer: TabLayer {
         false
     }
 }
-
-// MARK: - CDP tab debugger
 
 /// A ``TabDebugger`` that routes raw CDP commands and synthetic input to a tab's
 /// flat session. `simulateMouseClick` dispatches a mousePressed + mouseReleased
@@ -414,8 +392,6 @@ nonisolated struct CDPTabDebuggerFactory: TabDebuggerFactory {
     }
 }
 
-/// A debugger that fails every command; used only when a non-CDP tab is handed
-/// to the CDP factory.
 nonisolated struct NoopTabDebugger: TabDebugger {
     func simulateMouseClick(_ x: Int, _ y: Int, _ button: String, _ count: Int, _ signal: AbortSignal?) async throws {
         throw SimpleBrowserError("No CDP debugger for this tab")
@@ -425,8 +401,6 @@ nonisolated struct NoopTabDebugger: TabDebugger {
         throw SimpleBrowserError("No CDP debugger for this tab")
     }
 }
-
-// MARK: - CDP browser tab
 
 /// A ``BrowserTab`` backed by a flat CDP page session. Screenshots use
 /// `Page.captureScreenshot`; the agent mouse position is tracked in-process and
@@ -543,8 +517,6 @@ final class CDPBrowserTab: BrowserTab {
     }
 }
 
-// MARK: - CDP cursor animator
-
 /// Animates an arrow cursor toward a target and performs a press flourish in the
 /// page, then dispatches a real `Input.dispatchMouseEvent` `mouseMoved`. Any
 /// failure is swallowed so a missing animation never blocks the click.
@@ -592,17 +564,11 @@ nonisolated struct CDPAgentCursorAnimator: AgentCursorAnimator {
     }
 }
 
-// MARK: - DOM tree script provider
-
-/// A ``DomTreeScriptProvider`` that returns the page-side document walker built
-/// by ``buildAgentDomTreeScript(highlight:focusInteractive:)``.
 nonisolated struct CDPDomTreeScriptProvider: DomTreeScriptProvider {
     func buildDomTreeScript(highlight: Bool, focusInteractive: Bool) -> String {
         buildAgentDomTreeScript(highlight: highlight, focusInteractive: focusInteractive)
     }
 }
-
-// MARK: - CDP agent bridge backend
 
 /// An ``AgentBridgeBackend`` that drives a single ``CDPTabHandle`` over its flat
 /// CDP session. It carries the navigation seam (rate-limited `Page.navigate`,
@@ -672,8 +638,6 @@ public final class CDPAgentBridgeBackend: AgentBridgeBackend {
         }
     }
 
-    /// Guards the one-time focus-emulation enable so it runs at most once per
-    /// backend.
     private var focusEmulationEnabled = false
 
     /// Tells the renderer to treat this frame as focused, once per backend. On a
@@ -723,8 +687,6 @@ public final class CDPAgentBridgeBackend: AgentBridgeBackend {
 
     // MARK: Console capture
 
-    /// The active console-capture session, set between ``beginConsoleCapture()``
-    /// and ``endConsoleCapture()``.
     private var consoleCapture: ConsoleCaptureSession?
 
     /// Enables the `Runtime` domain and subscribes to `Runtime.consoleAPICalled`
@@ -825,16 +787,11 @@ public final class CDPAgentBridgeBackend: AgentBridgeBackend {
     }
 }
 
-// MARK: - Shared error
-
-/// A simple error carrying a message, used by the CDP browser backing.
 nonisolated struct SimpleBrowserError: Error, CustomStringConvertible {
     let message: String
     init(_ message: String) { self.message = message }
     var description: String { message }
 }
-
-// MARK: - Bounded operation helper
 
 /// Runs `operation`, throwing ``SimpleBrowserError`` if it does not finish within
 /// `milliseconds`. The hung operation is cancelled and **abandoned**.

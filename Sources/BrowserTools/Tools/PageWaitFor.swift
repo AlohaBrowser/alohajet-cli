@@ -1,28 +1,18 @@
 import Foundation
 import ToolABI
 
-// MARK: - page_wait_for executor tool
-
-/// The executable `page_wait_for` tool: polls the active tab until an element
-/// matching a CSS `selector` appears, or `timeout_ms` elapses. This is the ONE
-/// tool in the atomic page-tools set addressed by a raw CSS selector rather
-/// than an `aloha_id` — `waitFor` has to wait for elements that do not exist
-/// yet, so there is no aloha-id to reference. That is intentional, not an
+/// The executable `page_wait_for` tool. This is the ONE tool in the atomic page-tools set
+/// addressed by a raw CSS selector rather than an `aloha_id` — it has to wait for elements
+/// that do not exist yet, so there is no aloha-id to reference. That is intentional, not an
 /// inconsistency with the other six tools.
 ///
-/// NEW invocation path: `window.__aloha.waitFor()` (see
-/// `InpageScripts.swift`) has no `handlePendingRequest` / CDP `Input.*`
-/// case to wrap — it is MutationObserver-based and resolves/rejects entirely
-/// in-page, nothing to dispatch. This tool drives the narrow
-/// ``AgentBrowserBridge/waitForSelector(_:timeoutMs:)`` driver method, which
-/// evaluates ONE fixed, Swift-constructed `window.__aloha.waitFor(...)` call
-/// over `Runtime.evaluate` — the call text is built here in Swift, no
-/// caller-authored code reaches the page — preserving the MutationObserver
-/// behaviour rather than reimplementing it as a blind poll/sleep loop.
+/// The wait itself is MutationObserver-based and resolves entirely in-page; keep it that
+/// way rather than reimplementing it as a blind poll/sleep loop. The
+/// `window.__aloha.waitFor(...)` call text is built in Swift — no caller-authored code
+/// reaches the page.
 @MainActor public final class PageWaitForExecutorTool: ExecutorTool {
     public let name = "page_wait_for"
 
-    /// The default `timeout_ms` when the argument is omitted.
     static let defaultTimeoutMs: Double = 10_000
 
     public init() {}

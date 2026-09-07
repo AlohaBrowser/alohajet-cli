@@ -1,8 +1,5 @@
 import Foundation
 
-// MARK: - Context injector dependencies
-
-/// The interactive-markdown snapshot returned by a tab's agent DOM.
 public struct InteractMarkdownResult: Sendable {
     public struct Diagnostics: Sendable {
         public var domError: String?
@@ -24,7 +21,6 @@ public struct InteractMarkdownResult: Sendable {
     }
 }
 
-/// The agent DOM surface used to snapshot an interactive page.
 public protocol AgentDOMSnapshotting: Sendable {
     func getInteractMarkdown(_ includeScreenshot: Bool, _ b: Bool, includeUrls: Bool) async throws -> InteractMarkdownResult
     /// Signal-bearing overload: manage_tabs passes the per-action abort signal
@@ -53,7 +49,6 @@ public extension AgentDOMSnapshotting {
     }
 }
 
-/// A browser tab the injectors snapshot.
 public protocol InjectorTab: AnyObject, Sendable {
     var id: String { get }
     var tabType: String { get }

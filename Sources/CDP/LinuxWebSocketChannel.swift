@@ -7,11 +7,8 @@ import Glibc
 // WebSocket I/O through libcurl, and the system libcurl on Ubuntu is built without
 // the (experimental) WebSocket feature, so every frame fails with "WebSockets not
 // supported by libcurl". CDP only needs a single, unencrypted `ws://` connection to
-// a localhost debugger that exchanges text frames, which this implements directly
-// over a POSIX socket: HTTP/1.1 Upgrade handshake, client-masked text frames out,
-// frame reassembly + ping/pong + close in, on a dedicated blocking reader thread.
-// Inbound complete text messages are handed to `receive()` through a tiny
-// continuation mailbox so the async `CDPMessageChannel` contract is preserved.
+// a localhost debugger exchanging text frames, so this implements just that much
+// directly over a POSIX socket, on a dedicated blocking reader thread.
 //
 // All mutable state is guarded by `stateLock`. Swift 6.2 forbids `NSLock.lock()/
 // unlock()` inside async functions, so every critical section lives in a SYNCHRONOUS

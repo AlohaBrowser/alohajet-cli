@@ -2,12 +2,9 @@ import Foundation
 import CDP
 import ToolABI
 
-// MARK: - CDP agent DOM snapshotting
-
 /// A ``AgentDOMSnapshotting`` backed by an ``AgentDOMService`` driving the page
-/// over CDP. It runs the document walker through the tab layer, serializes the
-/// result to interactive markdown, and captures a viewport screenshot, mapping
-/// the file-processing result type onto the runtime's snapshot type.
+/// over CDP, mapping the file-processing result type onto the runtime's snapshot
+/// type.
 final class CDPAgentDOMSnapshotting: AgentDOMSnapshotting {
     private let service: AgentDOMService
 
@@ -45,8 +42,6 @@ final class CDPAgentDOMSnapshotting: AgentDOMSnapshotting {
         )
     }
 }
-
-// MARK: - CDP tab handle
 
 /// A ``TabHandle`` over a CDP page target. It owns the target session, an
 /// ``AgentDOMService`` (for interactive snapshots, click, type, etc.), and the
@@ -136,7 +131,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     }
 
     public var agentDOM: AgentDOMSnapshotting? {
-        // Only interactive website tabs expose an agent DOM.
         tabType == "website" ? snapshotting : nil
     }
 
@@ -159,8 +153,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     public var traceTabURL: String { url }
     public var traceTabTitle: String? { title }
 
-    /// Snapshots the page's interactive DOM markdown plus a screenshot for the
-    /// step trace. Maps the DOM service's result onto the tracer's pair type.
     public func captureInteractMarkdown() async throws -> StepTraceMarkdown {
         let result = try await withCDPDeadline(milliseconds: 8_000) {
             try await self.domService.getInteractMarkdown(
@@ -465,13 +457,12 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         _ = try await waitForMainFrameLoad(timeoutMs: timeoutMs, signal: signal)
     }
 
-    /// Waits for the page to settle under `options`: enables the CDP Network
-    /// domain and tracks the in-flight (non-persistent) request count from
-    /// `requestWillBeSent` / `loadingFinished` / `loadingFailed`, injects the
-    /// debounced DOM-stability observer to feed `domStableForMs`, and runs the
-    /// 100ms poll loop feeding the portable ``PageReadinessClassifier``. Returns
-    /// the wait outcome. The CDP transport is the injected boundary; it carries the
-    /// debugger-attached network and DOM observation the classifier consumes.
+    /// Waits for the page to settle under `options`: tracks the in-flight
+    /// (non-persistent) request count from CDP Network events, injects the
+    /// debounced DOM-stability observer, and polls the portable
+    /// ``PageReadinessClassifier`` every 100ms. The CDP transport is the injected
+    /// boundary; it carries the debugger-attached network and DOM observation the
+    /// classifier consumes.
     func waitForReady(_ options: PageReadinessOptions, signal: AbortSignal?) async -> PageReadinessResult {
         let classifier = PageReadinessClassifier()
         let start = Date()
@@ -594,8 +585,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
 }
 
 
-
-// MARK: - CDP tabs model
 
 /// A ``TabsModel`` over a CDP browser. It seeds the open page targets from
 /// `Target.getTargets`, creates tabs via `Target.createTarget`, closes via
@@ -816,8 +805,6 @@ public final class CDPTabsModel: TabsModel {
     }
 }
 
-// MARK: - Click-spawned tab adoption
-
 extension CDPTabsModel: ClickSpawnedTabAdopting {
     public func currentPageTargetIds() async -> Set<String> {
         await pageTargetIds()
@@ -858,7 +845,6 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
         return adopted
     }
 
-    /// The set of real target ids for live `page` targets.
     private func pageTargetIds() async -> Set<String> {
         guard let infos = await pageTargetInfos() else { return [] }
         var ids: Set<String> = []
@@ -879,11 +865,7 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     }
 }
 
-// MARK: - Live tab metadata refresh
-
 extension CDPTabsModel: LiveTabMetadataRefreshing {}
-
-// MARK: - Live page target adoption
 
 extension CDPTabsModel: LivePageTargetAdopting {
     /// Human-opened with no agent attribution (like ``seedFromBrowser``, unlike
@@ -911,9 +893,7 @@ extension CDPTabsModel: LivePageTargetAdopting {
 
 /// Tracks the in-flight (non-persistent) request count from CDP Network events
 /// for the page-readiness waiter, and the timestamp at which the network most
-/// recently fell to or below the idle threshold. Persistent / streaming /
-/// telemetry connections (classified by ``PageReadinessClassifier``) never count
-/// towards the in-flight total.
+/// recently fell to or below the idle threshold.
 final class PageReadinessNetworkTracker {
     private let classifier: PageReadinessClassifier
     private var inFlight: Set<String> = []
@@ -948,9 +928,6 @@ final class PageReadinessNetworkTracker {
         return inFlight.count
     }
 
-    /// Milliseconds the network has been idle (in-flight count at or below
-    /// `threshold`). Records the first idle moment and resets it whenever the
-    /// count rises back above the threshold.
     func networkIdleForMs(threshold: Int, now: Date) -> Int {
         if inFlight.count <= threshold {
             if idleSince == nil { idleSince = now }
@@ -962,8 +939,6 @@ final class PageReadinessNetworkTracker {
     }
 }
 
-/// Records the moment the DOM-stability observer resolved, exposing how long the
-/// DOM has been stable since.
 final class DomStableTimestamp {
     private var stableAt: Date?
 
@@ -1057,8 +1032,6 @@ final class MainFrameLoadFlag {
     }
 }
 
-/// A thread-safe boolean flag distinguishing a timeout-driven abort from any
-/// other error in the tab-context timeout race.
 final class TimeoutFlag {
     private var _value = false
     var value: Bool {
@@ -1106,8 +1079,6 @@ func raceContextTimeout<T: Sendable>(
     }
 }
 
-/// The extraction leg of ``raceContextTimeout``: runs the extraction and, on a
-/// post-timeout error, swallows it to `nil`.
 @MainActor
 private func runRaceExtraction<T: Sendable>(
     _ extraction: @escaping @MainActor @Sendable (AbortSignal) async throws -> T?,
@@ -1127,8 +1098,6 @@ private func runRaceExtraction<T: Sendable>(
     }
 }
 
-/// The timeout leg of ``raceContextTimeout``: sleeps `timeoutMs`, marks the flag,
-/// and aborts the shared controller so the extraction unwinds.
 @MainActor
 private func runRaceTimeout<T: Sendable>(
     timeoutMs: Int,
@@ -1144,9 +1113,6 @@ private func runRaceTimeout<T: Sendable>(
     return nil
 }
 
-// MARK: - CDP tabs window & service
-
-/// A ``TabsWindow`` that holds a single CDP-backed tabs model.
 public final class CDPTabsWindow: TabsWindow {
     public let id: String
     private let model: CDPTabsModel
@@ -1159,7 +1125,6 @@ public final class CDPTabsWindow: TabsWindow {
     public var tabs: TabsModel { model }
 }
 
-/// A ``TabsService`` exposing a single CDP-backed window.
 public final class CDPTabsService: TabsService {
     private let cdpWindow: CDPTabsWindow
 
@@ -1169,8 +1134,6 @@ public final class CDPTabsService: TabsService {
 
     public var window: TabsWindow? { cdpWindow }
 }
-
-// MARK: - Assembly factory
 
 /// Builds a fully CDP-backed ``TabsService`` from a connected ``CDPClient``: the
 /// window, the tabs model (seeded from the browser's open page targets), the
@@ -1194,8 +1157,6 @@ public func makeCDPBrowserTabsService(
     let window = CDPTabsWindow(id: windowId, model: model)
     return CDPTabsService(window: window)
 }
-
-// MARK: - Network JSONL writer
 
 /// Appends captured network records to a `<tabId>.jsonl` file, one JSON object
 /// per line, serializing each record's fields in a stable order.

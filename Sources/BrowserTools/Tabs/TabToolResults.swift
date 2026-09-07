@@ -84,7 +84,6 @@ public nonisolated struct AgentTabIdentity: Equatable, Sendable {
         return out
     }
 
-    /// The identity a tab tool's result carried, or `nil` when it carried none.
     public static func decode(toolMetadata: [String: WorkflowValue]?) -> AgentTabIdentity? {
         func string(_ key: String) -> String? {
             if case let .string(value)? = toolMetadata?[key], !value.isEmpty { return value }
@@ -107,7 +106,6 @@ extension TabToolResult {
     }
 }
 
-/// SDK-facing representation: either an error or a typed success payload.
 public enum SdkTabResult: Equatable, Sendable {
     case error(String)
     case read(String)
@@ -119,7 +117,6 @@ public enum SdkTabResult: Equatable, Sendable {
     case findByText([AlohaIdMatch])
 }
 
-/// Coerces a failed tool result into a stable error string.
 public func toolErrorToSdkError(_ result: TabToolResult) -> SdkTabResult {
     if let output = result.output, !output.isEmpty {
         return .error(output)
@@ -173,7 +170,6 @@ public func sdkFindByTextResult(_ result: TabToolResult) -> SdkTabResult {
     return .findByText(result.matches ?? [])
 }
 
-/// Renders the open-tab list into the agent-facing text block plus structured tabs.
 public func listTabs(_ tabs: [TabSummary]) -> TabToolResult {
     let lines = tabs.enumerated().map { index, tab -> String in
         let activeMarker = tab.isActive ? "● " : ""
@@ -188,7 +184,6 @@ public func listTabs(_ tabs: [TabSummary]) -> TabToolResult {
         tabs: tabs)
 }
 
-/// Returns an aborted-execution result when the signal is set, else `nil`.
 public func abortedResultOrNull(_ aborted: Bool) -> TabToolResult? {
     aborted ? TabToolResult(output: executionStoppedError, isError: true) : nil
 }
@@ -197,7 +192,6 @@ public func abortedSdkErrorOrNull(_ aborted: Bool) -> SdkTabResult? {
     aborted ? .error(executionStoppedError) : nil
 }
 
-/// Heuristically classifies an error as an abort/timeout.
 public func isAbortLikeError(_ error: Error?) -> Bool {
     guard let error else { return false }
     if let named = error as? NamedAbortError, named.name == "AbortError" || named.name == "TimeoutError" {
@@ -217,7 +211,6 @@ public struct NamedAbortError: Error, Equatable, Sendable {
     }
 }
 
-/// An error carrying a plain message string.
 public protocol LocalizedMessageError: Error {
     var message: String { get }
 }
@@ -229,8 +222,6 @@ public func clampScreenshotTimeout(_ timeoutMs: Double?) -> Double {
     return max(1, min(timeoutMs - 1, Double(maxScreenshotCaptureTimeoutMs)))
 }
 
-/// The output a tool returns when its abort signal is already set.
 public let executionStoppedError = "Execution stopped"
 
-/// The ceiling a screenshot capture timeout is clamped to.
 public let maxScreenshotCaptureTimeoutMs = 5_000

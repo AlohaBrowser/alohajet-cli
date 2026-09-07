@@ -1156,7 +1156,6 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       const kr = getBoundingRect(kids[i]);
       if (!kr || kr.height <= 0) continue;
       const kc = kr.top + kr.height / 2;
-      // Restrict to children whose center is within the container's visible window.
       if (kc < cr.top - 2 || kc > cr.bottom + 2) continue;
       const d = Math.abs(kc - cy);
       if (d < bestDist) {

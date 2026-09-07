@@ -25,9 +25,8 @@ public nonisolated enum JSValue: Equatable, Sendable {
 
     // MARK: Equatable (structural)
     //
-    // Plain structural equality used for assertions and collection membership.
-    // We hand-roll this because the associated values (tuple arrays, and
-    // `Double` with its NaN quirk) are not auto-`Equatable`.
+    // Hand-rolled because the associated values (tuple arrays, and `Double` with
+    // its NaN quirk) are not auto-`Equatable`.
     public static func == (lhs: JSValue, rhs: JSValue) -> Bool {
         switch (lhs, rhs) {
         case (.null, .null):
@@ -60,9 +59,8 @@ public nonisolated enum JSValue: Equatable, Sendable {
 
 // MARK: - Literal conveniences
 //
-// These let call sites build values with Swift literals, e.g. `["a": 1]` or
-// `[1, 2, 3]`. Dictionary literals preserve their written order, which becomes
-// the object's insertion order.
+// A dictionary literal preserves its written order, which becomes the object's
+// insertion order.
 
 nonisolated extension JSValue: ExpressibleByNilLiteral {
     public init(nilLiteral: ()) { self = .null }
@@ -116,31 +114,26 @@ public nonisolated extension JSValue {
         return elements[index]
     }
 
-    /// Fetch an object member as a `String`, or `nil` if absent / not a string.
     func string(_ key: String) -> String? {
         if case let .string(s)? = self[key] { return s }
         return nil
     }
 
-    /// Object member as a `Double`.
     func number(_ key: String) -> Double? {
         if case let .number(n)? = self[key] { return n }
         return nil
     }
 
-    /// Object member as a `Bool`.
     func bool(_ key: String) -> Bool? {
         if case let .bool(b)? = self[key] { return b }
         return nil
     }
 
-    /// Object member as a nested object (its ordered members).
     func object(_ key: String) -> [(String, JSValue)]? {
         if case let .object(o)? = self[key] { return o }
         return nil
     }
 
-    /// Object member as an array.
     func array(_ key: String) -> [JSValue]? {
         if case let .array(a)? = self[key] { return a }
         return nil
@@ -150,7 +143,6 @@ public nonisolated extension JSValue {
 // MARK: - Direct value accessors
 
 public nonisolated extension JSValue {
-    /// The value as a `String`, if this is a `.string`.
     var stringValue: String? {
         if case .string(let value) = self { return value }
         return nil
@@ -169,31 +161,26 @@ public nonisolated extension JSValue {
         return nil
     }
 
-    /// The value as a `Double`, if this is a `.number`.
     var doubleValue: Double? {
         if case .number(let value) = self { return value }
         return nil
     }
 
-    /// The value as a `Bool`, if this is a `.bool`.
     var boolValue: Bool? {
         if case .bool(let value) = self { return value }
         return nil
     }
 
-    /// The value as its ordered object members, if this is an `.object`.
     var objectValue: [(String, JSValue)]? {
         if case .object(let value) = self { return value }
         return nil
     }
 
-    /// The value as an array, if this is an `.array`.
     var arrayValue: [JSValue]? {
         if case .array(let value) = self { return value }
         return nil
     }
 
-    /// Construct a `.number` from an `Int`.
     static func number(_ value: Int) -> JSValue {
         .number(Double(value))
     }
@@ -295,7 +282,6 @@ public nonisolated extension JSValue {
         var parser = JSONParser(Array(json.unicodeScalars))
         guard let value = parser.parseValue() else { return nil }
         parser.skipWhitespace()
-        // Reject trailing garbage after the top-level value.
         guard parser.isAtEnd else { return nil }
         return value
     }
@@ -373,7 +359,6 @@ public nonisolated extension JSValue {
         depth: Int,
         into out: inout String
     ) {
-        // Members whose value is `.undefined` are dropped entirely.
         let kept = members.filter { member in
             if case .undefined = member.1 { return false }
             return true
@@ -401,8 +386,6 @@ public nonisolated extension JSValue {
         out += String(repeating: " ", count: width * depth)
     }
 
-    /// Encode a string with the mandatory JSON escapes plus the short escapes for
-    /// `\b \t \n \f \r " \\`, and `\uXXXX` for other control characters.
     private static func encodeString(_ s: String) -> String {
         var result = "\""
         for scalar in s.unicodeScalars {
@@ -454,17 +437,13 @@ nonisolated func formatJSONNumber(_ value: Double) -> String {
 
     var body: String
     if k <= n && n <= 21 {
-        // Integer with trailing zeros.
         body = digits + String(repeating: "0", count: n - k)
     } else if 0 < n && n <= 21 {
-        // Decimal point sits inside the digits.
         let idx = digits.index(digits.startIndex, offsetBy: n)
         body = String(digits[..<idx]) + "." + String(digits[idx...])
     } else if -6 < n && n <= 0 {
-        // 0.[zeros][digits]
         body = "0." + String(repeating: "0", count: -n) + digits
     } else {
-        // Exponential form.
         let exp = n - 1
         let mantissa: String
         if k == 1 {
@@ -644,7 +623,6 @@ nonisolated private struct JSONParser {
         return nil  // unterminated
     }
 
-    /// Parse the four hex digits after `\u`, handling UTF-16 surrogate pairs.
     private mutating func parseUnicodeEscape() -> Unicode.Scalar? {
         guard let high = parseHex4() else { return nil }
         if high >= 0xD800 && high <= 0xDBFF {

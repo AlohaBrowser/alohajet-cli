@@ -1,24 +1,16 @@
 import Foundation
 import ToolABI
 
-// MARK: - page_type executor tool
-
-/// The executable `page_type` tool: types text into an input/textarea/
-/// contenteditable element on the active tab by its `aloha_id`, optionally
-/// pressing Enter to submit afterward.
+/// The executable `page_type` tool: types text into an input/textarea/contenteditable
+/// element on the active tab by its `aloha_id`, optionally pressing Enter to submit
+/// afterward.
 ///
-/// Wraps `PageBridge.swift`'s `type` case directly: that case is a thin
-/// `handlePendingRequest` wrapper around the PUBLIC `AgentBrowserBridge.type`
-/// method, which resolves + focuses the element and types over real CDP key
-/// events itself — no in-page `enqueueCdp` round trip is needed (unlike click),
-/// so this tool calls `type` straight, without going through
-/// `executeAgentCode`. `submit: true` chains a `pressKeys("Enter")` call
-/// afterward, using the same public method the `pressKeys` case wraps.
+/// `AgentBrowserBridge.type` resolves + focuses the element and types over real CDP key
+/// events itself, so unlike click this tool calls it straight, without `executeAgentCode`.
 ///
-/// `replace` defaults to `true`: `PageBridge.swift`'s own `type` case comment
-/// is explicit that an APPEND default silently doubles a re-typed field ("login
-/// username -> loop") — that default is preserved exactly here, not
-/// re-derived.
+/// `replace` defaults to `true`: an APPEND default silently doubles a re-typed field
+/// ("login username -> loop"). That default matches `PageBridge.swift`'s `type` case; it is
+/// preserved here, not re-derived.
 @MainActor public final class PageTypeExecutorTool: ExecutorTool {
     public let name = "page_type"
 
@@ -48,15 +40,12 @@ import ToolABI
             isError: true)
     }
 
-    /// One field of a batched fill, in the order the caller listed it.
     struct Field: Equatable {
         let alohaId: String
         let text: String
         let replace: Bool
     }
 
-    /// The `fields` array, or nil when the caller used the single-field form.
-    ///
     /// AN ARRAY RATHER THAN A DELIMITED STRING, unlike `get_text`. Ids are opaque tokens so a comma-separated
     /// list is safe for them; typed VALUES are user text, and addresses, prices and sentences contain commas
     /// routinely. A delimited `text` parameter would split "Springfield, IL" into two fields and no amount of
@@ -158,8 +147,6 @@ import ToolABI
         }
     }
 
-    /// Fills several fields in one round, in the caller's order, and submits only if every field took.
-    ///
     /// WHY A PARTIAL FILL MUST NOT SUBMIT. Batching a read is harmless when one id is stale — the caller gets
     /// the rest and asks again. A form is not like that: submitting with field two missing sends a WRONG
     /// request that the site accepts, and the agent then reasons over a result that answers a different

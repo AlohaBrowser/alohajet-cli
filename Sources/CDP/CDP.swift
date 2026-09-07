@@ -5,23 +5,15 @@ import ToolABI
 import FoundationNetworking
 #endif
 
-// MARK: - CDPTarget
-
 /// A single CDP target (a tab/page, worker, etc.) as advertised by the
 /// browser's `GET /json` discovery listing.
-///
-/// This is the public, parsed shape of one entry in the `/json` array: the
-/// stable fields a caller actually reads when listing what a CDP-speaking
-/// browser currently has open.
 public struct CDPTarget: Sendable, Equatable {
     /// The target id (`id` in the `/json` entry); the same value
     /// `Target.createTarget` returns as `targetId`.
     public let id: String
     /// The target type, e.g. `"page"`, `"background_page"`, `"worker"`.
     public let type: String
-    /// The target's title (may be empty).
     public let title: String
-    /// The target's current URL (may be empty).
     public let url: String
 
     public init(id: String, type: String, title: String, url: String) {
@@ -39,7 +31,6 @@ public struct CDPTarget: Sendable, Equatable {
 public struct CDPEvent: Sendable, Equatable {
     /// The CDP domain event name, e.g. `"Target.attachedToTarget"`.
     public let method: String
-    /// The event payload.
     public let params: JSValue
     /// The session the event belongs to, when using the flat-session model.
     public let sessionId: String?
@@ -51,28 +42,21 @@ public struct CDPEvent: Sendable, Equatable {
     }
 }
 
-/// Errors raised by the CDP transport.
 public enum CDPError: Error, Sendable {
     /// The `/json/version` endpoint did not yield a usable WebSocket URL.
     case discoveryFailed(String)
-    /// The provided WebSocket URL string could not be parsed.
     case invalidURL(String)
     /// A `send(...)` was issued before `connect()`.
     case notConnected
-    /// The remote end reported a JSON-RPC error for a request.
     case remote(code: Int, message: String)
     /// The socket closed before a pending request was answered.
     case connectionClosed
-    /// A response or event could not be (de)serialized.
     case malformedMessage(String)
-    /// A required field was missing from a CDP result.
     case missingField(String)
-    /// A `send(...)` exceeded the per-call backstop deadline without a response.
-    ///
-    /// Raised when a CDP command (e.g. a `Runtime.evaluate` with `awaitPromise:
-    /// true` against a wedged page) never resolves: rather than block the caller
-    /// forever, the client removes the orphaned pending continuation and fails the
-    /// call so structured-concurrency timeouts and turn-interrupts can unwind.
+    /// A command went unanswered past the per-call backstop deadline. The client
+    /// drops the orphaned pending continuation and fails the call so
+    /// structured-concurrency timeouts and turn-interrupts can unwind, instead of
+    /// blocking forever on e.g. an `awaitPromise` evaluate against a wedged page.
     case timeout(method: String)
 }
 
@@ -83,15 +67,10 @@ public enum CDPError: Error, Sendable {
 /// Any browser application that exposes a CDP endpoint can be driven through a
 /// conforming transport, regardless of which app it is.
 public protocol CDPTransport: Sendable {
-    /// Establish the underlying connection (e.g. open the WebSocket).
     func connect() async throws
 
-    /// Send a CDP command and await its result.
-    ///
-    /// - Parameters:
-    ///   - method: The CDP method, e.g. `"Page.navigate"`.
-    ///   - params: The method params as a JSON object.
-    /// - Returns: The `result` object of the JSON-RPC response.
+    /// Send a CDP command (e.g. `"Page.navigate"`) and await the `result` object
+    /// of its JSON-RPC response.
     func send(method: String, params: [String: JSValue]) async throws -> JSValue
 
     /// A stream of asynchronous CDP events (JSON-RPC messages with no `id`).
@@ -99,7 +78,6 @@ public protocol CDPTransport: Sendable {
 }
 
 public extension CDPTransport {
-    /// Send a CDP command with no params.
     func send(method: String) async throws -> JSValue {
         try await send(method: method, params: [:])
     }
@@ -108,25 +86,21 @@ public extension CDPTransport {
 // MARK: - CDPMessageChannel
 
 /// The raw bidirectional text frame channel the ``CDPClient`` speaks JSON-RPC
-/// over. The production channel is a `URLSession` WebSocket; an injected channel
-/// lets a test drive the real client's JSON-RPC correlation, flat-session
-/// routing, receive loop, and event fan-out against a fake browser without a
-/// socket.
+/// over. The production channel is a `URLSession` WebSocket; the seam exists so a
+/// test can drive the real client's JSON-RPC correlation, flat-session routing,
+/// receive loop and event fan-out against a fake browser without a socket.
 public protocol CDPMessageChannel: Sendable {
     /// Open the channel (the WebSocket `resume()` equivalent).
     func open() async
 
-    /// Send one text frame.
     func send(_ text: String) async throws
 
     /// Await the next inbound text frame. Throws when the channel closes.
     func receive() async throws -> String
 
-    /// Close the channel.
     func close() async
 }
 
-/// The production ``CDPMessageChannel``: a `URLSession` WebSocket task.
 final class URLSessionWebSocketChannel: CDPMessageChannel, Sendable {
     private let task: URLSessionWebSocketTask
 
@@ -136,9 +110,7 @@ final class URLSessionWebSocketChannel: CDPMessageChannel, Sendable {
         // DOM-tree snapshot from `buildDomTree`), Page.captureScreenshot, or a
         // network body easily exceeds Foundation's 1 MiB default
         // `maximumMessageSize`, which would throw EMSGSIZE ("Message too long")
-        // on `receive()` and wedge the connection. Raise it to 64 MiB so large
-        // CDP messages reassemble — matching what Playwright / Puppeteer /
-        // chrome-remote-interface configure on their WebSocket layer.
+        // on `receive()` and wedge the connection. 64 MiB so they reassemble.
         self.task.maximumMessageSize = 64 * 1024 * 1024
     }
 
@@ -176,10 +148,7 @@ final class URLSessionWebSocketChannel: CDPMessageChannel, Sendable {
 public actor CDPClient: CDPTransport {
     /// The default per-call backstop deadline applied to every `send(...)`.
     ///
-    /// Without a per-request timeout a `Runtime.evaluate` against a wedged page
-    /// could block forever. This backstop fails a command that goes unanswered for
-    /// this long with ``CDPError/timeout(method:)`` rather than hanging. It is
-    /// intentionally generous (30s) — longer than the runtime's own 15s read race —
+    /// Deliberately generous (30s) — longer than the runtime's own 15s read race —
     /// so it only catches a truly stuck call, never a merely slow page.
     public static let defaultCallTimeout: TimeInterval = 30
 
@@ -197,7 +166,6 @@ public actor CDPClient: CDPTransport {
     private var receiveLoop: Task<Void, Never>?
     private var isClosed = false
 
-    /// Create a client bound to an explicit CDP WebSocket URL.
     public init(
         webSocketURL: URL,
         session: URLSession = .shared,
@@ -213,7 +181,6 @@ public actor CDPClient: CDPTransport {
         self.callTimeout = callTimeout
     }
 
-    /// Create a client bound to a CDP WebSocket URL string.
     public init(
         webSocketURLString: String,
         session: URLSession = .shared,
@@ -225,10 +192,8 @@ public actor CDPClient: CDPTransport {
         self.init(webSocketURL: url, session: session, callTimeout: callTimeout)
     }
 
-    /// Create a client over an injected message channel. The client's JSON-RPC
-    /// correlation, flat-session routing, receive loop, and event fan-out run
-    /// unchanged over the supplied channel — the seam a fake browser is driven
-    /// through.
+    /// Create a client over an injected message channel: the seam a fake browser
+    /// is driven through, exercising the real correlation and routing paths.
     public init(
         channel: @autoclosure @escaping @Sendable () -> CDPMessageChannel,
         callTimeout: TimeInterval = CDPClient.defaultCallTimeout
@@ -275,16 +240,9 @@ public actor CDPClient: CDPTransport {
     /// List the browser's live targets by reading `GET http://host:port/json`,
     /// the CDP discovery listing.
     ///
-    /// Returns the parsed targets in the order the browser advertised them, and
-    /// an empty array — NOT a throw — when the browser reports no targets. A
-    /// non-array or otherwise unreadable `/json` payload is treated as "no
-    /// targets" (an empty array) rather than an error, matching how the legacy
-    /// `BrowserDemo.verifyTargets` reader tolerated a transiently-empty listing
-    /// while polling.
-    ///
-    /// This is the public read seam complementing the write seams
-    /// (`openTab`/`attachToTarget`/`navigate`): callers that need to know what a
-    /// CDP-speaking browser currently has open read it here.
+    /// Returns the targets in the order the browser advertised them. An empty or
+    /// unreadable `/json` payload yields an empty array — NOT a throw — so a caller
+    /// polling a transiently-empty listing is not forced to treat it as a failure.
     public static func listTargets(
         host: String = "127.0.0.1",
         port: Int
@@ -295,11 +253,7 @@ public actor CDPClient: CDPTransport {
     }
 
     /// Parse the raw bytes of a `GET /json` discovery listing into `CDPTarget`s.
-    ///
-    /// Pure (no I/O), so the parsing of a stubbed/local `/json` HTTP response can
-    /// be exercised directly. A payload that is not a JSON array of objects (or
-    /// is empty) yields `[]`; entries missing the required `id` are skipped while
-    /// `type`/`title`/`url` default to the empty string when absent.
+    /// Kept pure (no I/O) so a stubbed `/json` payload can be parsed directly.
     static func parseTargets(from data: Data) -> [CDPTarget] {
         guard let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             return []
@@ -370,44 +324,32 @@ public actor CDPClient: CDPTransport {
 
     /// The shared command/response core for both `send` overloads.
     ///
-    /// It registers a pending continuation keyed by JSON-RPC `id`, fires the wire
-    /// write, and then awaits the response under TWO guards:
-    ///
-    /// 1. **Cancellation-aware** — wrapped in `withTaskCancellationHandler`. The
-    ///    handler is `nonisolated`, so it hops back onto the actor to remove the
-    ///    orphaned pending entry and resume it throwing `CancellationError`. This
-    ///    is what lets the runtime's 15s read race and a turn-interrupt actually
-    ///    unwind a stuck `send`: without it the orphaned continuation would never
-    ///    be resumed, so cancellation could not propagate and the call would hang.
-    ///
-    /// 2. **Per-call backstop timeout** — a child task races the configured
-    ///    `callTimeout`; on the deadline it removes the pending entry and fails the
-    ///    call with ``CDPError/timeout(method:)``. This bounds a `Runtime.evaluate`
-    ///    (e.g. `awaitPromise: true`) against a wedged page that never resolves.
+    /// The awaited response is guarded twice. The cancellation handler is what
+    /// lets the runtime's 15s read race and a turn-interrupt unwind a stuck `send`:
+    /// without it the orphaned continuation is never resumed, so cancellation
+    /// cannot propagate and the call hangs forever. The backstop timeout bounds a
+    /// command the browser never answers at all (e.g. an `awaitPromise: true`
+    /// evaluate against a wedged page).
     ///
     /// Resume-once safety: every resume path — the response in `handle(message:)`,
     /// the cancel handler, the timeout task, the write-failure path, and
     /// `close()`/`handleReceiveFailure` — funnels through ``removePending(_:)``,
     /// which atomically removes and returns the continuation (or `nil` if it has
-    /// already been consumed). Whoever wins the race takes the continuation; every
-    /// loser sees `nil` and resumes nothing, so the continuation is resumed exactly
-    /// once.
+    /// already been consumed). Whoever wins the race takes it; every loser sees
+    /// `nil` and resumes nothing, so it is resumed exactly once.
     private func awaitResponse(
         id: Int,
         method: String,
         channel: CDPMessageChannel,
         payload: String
     ) async throws -> JSValue {
-        // A child task that fires the configured backstop deadline. Created up
-        // front (started below) so the cancel handler can also tear it down.
+        // Declared up front (started below) so every exit path can cancel it.
         var timeoutTask: Task<Void, Never>?
         defer { timeoutTask?.cancel() }
 
-        // CDP wire logging (flag `agent`): every command + outcome is recorded.
-        // The outbound payload (method + params) is truncated; the response BODY is
-        // intentionally summarized (ok/timing only) — CDP results can be multi-MB
-        // (screenshots, DOM snapshots), so logging them verbatim would render the
-        // log unusable. Tool-level results are logged with sizes by the registry.
+        // The response BODY is deliberately summarized (ok/timing only): CDP results
+        // can be multi-MB (screenshots, DOM snapshots) and logging them verbatim
+        // renders the log unusable. Tool-level results get sizes from the registry.
         await agentLogger.debug("[CDP] → \(method) id=\(id) \(truncateString(payload, limit: 800))")
         let cdpStartedAt = Date()
 
@@ -424,7 +366,6 @@ public actor CDPClient: CDPTransport {
 
                     pending[id] = continuation
 
-                    // Fire the wire write; a write failure fails this exact call.
                     Task {
                         do {
                             try await channel.send(payload)
@@ -447,7 +388,6 @@ public actor CDPClient: CDPTransport {
                     }
                 }
             } onCancel: {
-                // Nonisolated: hop onto the actor to remove + fail the orphaned call.
                 Task { await self.failPendingWithCancellation(id: id) }
             }
             await agentLogger.debug("[CDP] ← \(method) id=\(id) ok ms=\(Int(Date().timeIntervalSince(cdpStartedAt) * 1000))")
@@ -458,16 +398,12 @@ public actor CDPClient: CDPTransport {
         }
     }
 
-    /// Resume the pending call `id` (if still in flight) throwing
-    /// ``CDPError/timeout(method:)``. A no-op if the response/cancel already won.
     private func failPendingWithTimeout(id: Int, method: String) {
         if let waiter = removePending(id) {
             waiter.resume(throwing: CDPError.timeout(method: method))
         }
     }
 
-    /// Resume the pending call `id` (if still in flight) throwing
-    /// `CancellationError`. A no-op if the response/timeout already won.
     private func failPendingWithCancellation(id: Int) {
         if let waiter = removePending(id) {
             waiter.resume(throwing: CancellationError())
@@ -520,9 +456,6 @@ public actor CDPClient: CDPTransport {
     // MARK: High-level helpers
 
     /// Open a new tab/target navigated to `url` and return its `targetId`.
-    ///
-    /// Built on `Target.createTarget`, the flat-session entry point for creating
-    /// a new page in a CDP-speaking browser.
     @discardableResult
     public func openTab(url: String) async throws -> String {
         let result = try await send(
@@ -644,7 +577,6 @@ public actor CDPClient: CDPTransport {
         }
 
         if let id = object["id"]?.intValue {
-            // Response to a command.
             guard let continuation = removePending(id) else { return }
             if let error = object["error"], case .object = error {
                 let code = error["code"]?.intValue ?? -1
@@ -657,7 +589,6 @@ public actor CDPClient: CDPTransport {
         }
 
         if let method = object["method"]?.stringValue {
-            // Asynchronous event.
             let params = object["params"] ?? .object([])
             let sessionId = object["sessionId"]?.stringValue
             let event = CDPEvent(method: method, params: params, sessionId: sessionId)
@@ -675,21 +606,14 @@ public actor CDPClient: CDPTransport {
         return value.stringify()
     }
 
-    /// Parse incoming JSON bytes into a `JSValue`, or `nil` if invalid.
     private static func decode(_ data: Data) -> JSValue? {
         guard let text = String(data: data, encoding: .utf8) else { return nil }
         return JSValue.parse(text)
     }
 }
 
-// MARK: - ChromeLauncher
-
 /// Launches a local Google Chrome instance with the CDP remote-debugging port
 /// enabled, and discovers its WebSocket endpoint.
-///
-/// This is one concrete way to obtain a CDP endpoint; any CDP-speaking browser
-/// app reachable over a remote-debugging port works equally well with
-/// `CDPClient`.
 public struct ChromeLauncher: Sendable {
     /// The conventional path to a system browser executable for the running platform.
     ///
@@ -717,7 +641,6 @@ public struct ChromeLauncher: Sendable {
         #endif
     }()
 
-    /// Path to the browser executable to launch.
     public let executablePath: String
 
     public init(executablePath: String = ChromeLauncher.defaultExecutablePath) {
@@ -729,13 +652,9 @@ public struct ChromeLauncher: Sendable {
         FileManager.default.isExecutableFile(atPath: executablePath)
     }
 
-    /// A running browser process plus the user-data directory it uses.
     public final class Handle: Sendable {
-        /// The launched process.
         public let process: Process
-        /// The remote-debugging port the process was started with.
         public let port: Int
-        /// The user-data directory the process was started with.
         public let userDataDir: URL
         /// Whether this launcher created the `userDataDir` (a throwaway temp profile) and
         /// may delete it on `terminate()`. `false` for a user-provided real profile, which
@@ -760,19 +679,16 @@ public struct ChromeLauncher: Sendable {
         /// Call it when the browser is DELIBERATELY handed to something that outlives this
         /// process (a shared instance a later invocation attaches to). The reaper's whole
         /// ownership test is the owner file, so removing it is the same statement as "this
-        /// is no longer a browser whose run ended". Nothing else changes: `terminate()`
-        /// still terminates and still removes the directory if this handle is the one that
-        /// ends up calling it.
+        /// is no longer a browser whose run ended". `terminate()` is unaffected.
         public func disownProfile() {
             guard ownsUserDataDir else { return }
             try? FileManager.default.removeItem(
                 at: userDataDir.appendingPathComponent(ChromeLauncher.ownerPidFileName))
         }
 
-        /// The tail of the browser's stderr, trimmed, or `nil` when nothing was captured.
-        ///
-        /// Chrome explains its own refusals here and nowhere else (e.g. "Failed to create
-        /// <profile>/SingletonLock: File exists" when another instance holds the profile).
+        /// Chrome explains its own refusals on stderr and nowhere else (e.g. "Failed to
+        /// create <profile>/SingletonLock: File exists" when another instance holds the
+        /// profile). `nil` when nothing was captured.
         public func stderrTail(maxBytes: Int = 4_096) -> String? {
             guard let stderrLogURL,
                   let data = try? Data(contentsOf: stderrLogURL),
@@ -786,19 +702,12 @@ public struct ChromeLauncher: Sendable {
 
         /// Terminate the process and clean up the temporary profile. The exit is
         /// reaped with a bounded escalation (SIGTERM, then SIGINT, then — for our
-        /// own launched child only — SIGKILL) so a browser process that ignores
-        /// the gentler signals cannot wedge the caller on an unbounded
-        /// `waitUntilExit()`. That hang is what stalls a long single-process run
-        /// when a launched browser is slow to die.
-        ///
-        /// A wedged Chromium must be reaped on EVERY platform, and neither the
-        /// temporary `userDataDir` nor the binary may leak. The hard-kill
-        /// escalation below therefore also runs on Windows (`taskkill /F`) so the
-        /// same "the child ignored the gentle signal" path that exists on
-        /// macOS/Linux does not silently leave a wedged Chromium (and its profile
-        /// dir) behind there. Calling `terminate()` more than once is safe: the
-        /// second call finds the process already exited and the `removeItem` is a
-        /// no-op.
+        /// own launched child only — SIGKILL) so a browser that ignores the gentler
+        /// signals cannot wedge the caller on an unbounded `waitUntilExit()`; that
+        /// hang is what stalls a long single-process run when a browser is slow to
+        /// die. Windows gets the same escalation (`taskkill /F`) so a wedged
+        /// Chromium and its profile dir cannot leak there either. Calling this more
+        /// than once is safe.
         public func terminate() {
             if process.isRunning {
                 process.terminate()
@@ -840,10 +749,8 @@ public struct ChromeLauncher: Sendable {
         }
 
         #if os(Windows)
-        /// Windows hard-kill fallback: `taskkill /F /PID <pid>` forcibly reaps a
-        /// wedged child that ignored the graceful close, mirroring the SIGKILL
-        /// last resort used on macOS/Linux. Best-effort; failures are swallowed
-        /// because the subsequent `waitUntilExit()` reaps whatever state remains.
+        /// The SIGKILL last resort's Windows equivalent, for a child that ignored the
+        /// graceful close. Best-effort: `waitForExit` reaps whatever state remains.
         private func hardKillOnWindows(pid: Int32) {
             let killer = Process()
             killer.executableURL = URL(fileURLWithPath: "C:\\Windows\\System32\\taskkill.exe")
@@ -854,13 +761,10 @@ public struct ChromeLauncher: Sendable {
                 try killer.run()
                 killer.waitUntilExit()
             } catch {
-                // Best effort only; waitUntilExit() below still reaps the child.
             }
         }
         #endif
 
-        /// Polls `process.isRunning` until it clears or `deadline` seconds elapse,
-        /// reaping the process when it exits. Returns `true` once it has exited.
         private func waitForExit(deadline: TimeInterval) -> Bool {
             let limit = Date().addingTimeInterval(deadline)
             while process.isRunning {
@@ -958,15 +862,12 @@ public struct ChromeLauncher: Sendable {
     /// - Parameters:
     ///   - port: The remote-debugging port to bind. A concrete port is
     ///     recommended so `/json/version` can be polled for readiness.
-    ///   - headless: When `true` (the default) Chrome is launched with
-    ///     `--headless=new`; when `false` a visible (headful) window is shown.
-    ///   - userDataDir: When non-`nil`, Chrome is launched against this existing
-    ///     user-data directory (e.g. the user's real Chrome profile, so its extensions
-    ///     and logged-in sessions are available) and the directory is preserved on
-    ///     `terminate()`. When `nil`, a throwaway temp profile is created and deleted on
-    ///     `terminate()`.
-    ///   - profileDirectory: The `--profile-directory` to open within `userDataDir`
-    ///     (e.g. `"Default"`); ignored when `userDataDir` is `nil`.
+    ///   - userDataDir: When non-`nil`, an existing user-data directory (e.g. the
+    ///     user's real Chrome profile, so its extensions and logged-in sessions are
+    ///     available) that `terminate()` PRESERVES. When `nil`, a throwaway temp
+    ///     profile is created and deleted on `terminate()`.
+    ///   - profileDirectory: The `--profile-directory` to open within `userDataDir`;
+    ///     ignored when `userDataDir` is `nil`.
     public func launch(
         port: Int,
         headless: Bool = true,
@@ -990,8 +891,6 @@ public struct ChromeLauncher: Sendable {
         if let providedDir {
             userDataDir = providedDir
         } else {
-            // Before creating another one, clear the ones abandoned by runs that died
-            // without cleaning up. See `reapStaleProfiles()`.
             Self.reapStaleProfiles()
             userDataDir = temporaryDirectory
                 .appendingPathComponent("alohajet-cdp-\(UUID().uuidString)", isDirectory: true)
@@ -1116,8 +1015,6 @@ public struct ChromeLauncher: Sendable {
         )
     }
 
-    /// Explains a browser that exited before serving the debug port, quoting its own
-    /// stderr so the reason travels with the error instead of being lost.
     private func browserExitedMessage(_ handle: Handle, host: String, port: Int) -> String {
         var message = "The browser exited without serving the CDP endpoint on \(host):\(port)"
             + " (exit status \(handle.process.terminationStatus))"

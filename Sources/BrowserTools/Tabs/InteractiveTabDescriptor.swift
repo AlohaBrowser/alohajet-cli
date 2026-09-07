@@ -1,7 +1,5 @@
 import Foundation
 
-// MARK: - Interactive web tab
-
 /// A minimal tab descriptor for the interactive-web-tab predicate.
 public struct InteractiveTabDescriptor: Equatable, Sendable {
     public var tabType: String

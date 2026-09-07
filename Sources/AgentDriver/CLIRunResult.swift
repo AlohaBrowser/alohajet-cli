@@ -18,7 +18,6 @@ import ToolABI
 
 // MARK: - Completion
 
-/// How a single run terminated.
 public nonisolated enum CLITurnCompletion: String, Sendable, Equatable, Codable {
     /// A normal end of turn — the only ending that can be a success.
     case endTurn
@@ -32,9 +31,7 @@ public nonisolated enum CLITurnCompletion: String, Sendable, Equatable, Codable 
     /// run's ending as the wrong one of those sends the next change in the wrong
     /// direction.
     case stuckRepeat
-    /// The run published a failure.
     case failed
-    /// The run was interrupted before it could complete.
     case interrupted
 
     /// The wire spelling (snake_case). DISTINCT from `rawValue` (the camelCase case
@@ -77,13 +74,10 @@ public nonisolated enum CLITurnCompletion: String, Sendable, Equatable, Codable 
 
 // MARK: - Result
 
-/// The outcome of one run: the final assistant answer (when there is one) and how
-/// the run terminated.
 public nonisolated struct CLIRunResult: Sendable, Equatable, Codable {
     /// The final assistant answer, or `nil` when the run produced none (a
     /// tool-call-last / truncated transcript).
     public let finalText: String?
-    /// How the run terminated.
     public let completion: CLITurnCompletion
     /// When the run did not end cleanly, the reason carried by the terminal event,
     /// so a caller can show WHY instead of a generic string. `nil` on a clean end

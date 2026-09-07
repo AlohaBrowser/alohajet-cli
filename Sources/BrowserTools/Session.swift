@@ -8,12 +8,9 @@ import Darwin
 import Glibc
 #endif
 
-// MARK: - The composition root
-//
-// Everything below the tools already existed; nothing ever ASSEMBLED it. This file is
-// the one place a browser, a CDP client, a tabs service, and the eight tools are wired
-// into something that can execute a call. The CLI and the MCP server are front ends over
-// `BrowserToolSession.run`; neither builds any of this itself.
+// This file is the one place a browser, a CDP client, a tabs service, and the eight tools
+// are wired into something that can execute a call. The CLI and the MCP server are front
+// ends over `BrowserToolSession.run`; neither builds any of this itself.
 
 /// The web-extraction defaults this package ships. NOT `.baseline` — that carrier is the
 /// A/B control arm (every improvement off), which is the wrong thing for a binary whose
@@ -42,7 +39,6 @@ public extension AgentWebExtractionOptions {
         batchHints: true)
 }
 
-/// Why a session could not be started.
 public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
     case browserUnavailable(path: String)
     case launchFailed(String)
@@ -74,11 +70,8 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
 /// chat-shaped members of `ExecutorSession` (message groups, agents, persistence) have no
 /// meaning outside a chat host and are inert here.
 @MainActor public final class BrowserToolSession: ChatModeSession, ExecutorSession {
-    /// The CDP connection every tab in this session speaks over.
     public let client: CDPClient
-    /// The identity tabs this session opens are attributed to.
     public let sessionId: String
-    /// The web-extraction flags every tool reads off the context.
     public let webExtractionOptions: AgentWebExtractionOptions
 
     /// The launched browser, or `nil` when this session attached to one it does not own.
@@ -118,8 +111,6 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
             try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: networkDir)
         }
     }
-
-    // MARK: - Start
 
     /// Launch a browser this session owns and connect to it.
     ///
@@ -254,13 +245,8 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
             webExtractionOptions: webExtractionOptions)
     }
 
-    // MARK: - Run
-
-    /// The advertised tool names, in advertising order.
     public var toolNames: [String] { nativeAgentToolNames }
-    /// The advertised tool schemas, in the same order.
     public var toolSchemas: [NativeToolSchema] { getNativeAgentToolSchemas() }
-    /// One tool's schema, or `nil` when the name is not one of the eight.
     public func toolSchema(_ name: String) -> NativeToolSchema? { getNativeAgentToolSchema(name) }
 
     /// Execute one tool call. Never throws: a thrown tool error comes back as an error
@@ -307,8 +293,8 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         await run(toolName, BrowserToolSession.workflowValue(arguments))
     }
 
-    /// Converts a `JSONSerialization` object graph to a ``WorkflowValue``. Anything it
-    /// cannot represent becomes `.null` rather than failing the call.
+    /// Anything a ``WorkflowValue`` cannot represent becomes `.null` rather than failing
+    /// the call.
     public static func workflowValue(_ jsonObject: Any) -> WorkflowValue {
         switch jsonObject {
         case let value as String: return .string(value)
@@ -348,8 +334,6 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
     public func cancel(_ reason: String = "cancelled") {
         currentCall?.abort(reason)
     }
-
-    // MARK: - Lifecycle
 
     /// Whether the browser this session launched is still running. Always `true` for an
     /// attached session — this process cannot vouch for a browser it does not own.
@@ -509,8 +493,6 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
     public func save() {}
 }
 
-// MARK: - Network logging opt-in
-
 /// Where a session writes `<tabId>.jsonl` network logs when no directory was passed
 /// explicitly — `nil`, i.e. OFF, unless `ALOHAJET_NETWORK_LOG` says otherwise.
 ///
@@ -535,10 +517,7 @@ public func environmentNetworkLogDirectory(sessionId: String) -> String? {
     }
 }
 
-// MARK: - Free port
-
-/// A kernel-assigned free loopback port: bind `:0`, read the assignment back, release it.
-/// Racy by construction (the port is free when we ask, not when Chrome binds it), which is
+/// A kernel-assigned free loopback port. Racy by construction (the port is free when we ask, not when Chrome binds it), which is
 /// why it is only the DEFAULT — a caller that needs a fixed port passes one.
 func freeLocalPort() throws -> Int {
     #if canImport(Darwin)

@@ -1,11 +1,6 @@
 import Foundation
 import ToolABI
 
-// MARK: - Native tool advertising schema
-
-/// The advertising metadata for a browser tool: its name, an optional
-/// human/LLM-facing description, and an optional JSON-Schema `inputSchema`.
-///
 /// The `inputSchema` uses the same `JSValue` shape as an OpenAI function tool's
 /// `parameters` and an Anthropic tool's `input_schema`, and the same shape MCP's
 /// `tools/list` expects — so the eight entries below advertise to any of the
@@ -22,12 +17,6 @@ public struct NativeToolSchema: Sendable, Equatable {
     }
 }
 
-// MARK: - JSON-Schema field builders
-
-/// Builds one JSON-Schema property object, dropping any member left `nil` (so an
-/// absent `enum`/`description`/`default`/`items` does not appear in the
-/// serialized schema).
-///
 /// `minimum`/`maximum`/`minItems`/`maxItems` exist because every limit these
 /// tools enforce used to be prose the schema could not state: the 20-element
 /// batch caps, the 30-second wait clamp, the zero-based option index. A
@@ -72,9 +61,6 @@ private func schemaField(
     return .object(members)
 }
 
-/// Wraps a set of named properties and a required-key list into a JSON-Schema
-/// `object`.
-///
 /// `anyOf` takes alternative required-key sets — the one JSON-Schema keyword that
 /// expresses "either these, or that". Two of these tools accept exactly one of
 /// two shapes and stated it only in prose, so `{}` validated and then failed at
@@ -96,8 +82,6 @@ private func objectSchema(
     }
     return .object(members)
 }
-
-// MARK: - manage_tabs
 
 private let manageTabsDescription = """
 Work with browser tabs. Six actions.
@@ -142,8 +126,6 @@ private let manageTabsSchema = objectSchema([
     ))
 ], required: ["action"])
 
-// MARK: - page_click
-
 private let pageClickDescription =
     "Click an element on the active tab by its aloha-id. click_type selects single/double/triple/right-click."
 
@@ -156,8 +138,6 @@ private let pageClickSchema = objectSchema([
         defaultValue: .string("single")
     ))
 ], required: ["aloha_id"])
-
-// MARK: - page_type
 
 // A CAPABILITY THE MODEL IS NOT TOLD ABOUT IS NOT A CAPABILITY. A form filled one field per round
 // costs a round per field, and the standing prompt is re-sent on every round. The description leads
@@ -204,8 +184,6 @@ private let pageTypeSchema = objectSchema([
     ))
 ], required: [], anyOf: [["aloha_id", "text"], ["fields"]])
 
-// MARK: - page_select
-
 private let pageSelectDescription =
     "Select an option in a <select> dropdown on the active tab by its aloha-id, matching by visible text or index."
 
@@ -218,8 +196,6 @@ private let pageSelectSchema = objectSchema([
         minimum: 0
     ))
 ], required: ["aloha_id"], anyOf: [["text"], ["index"]])
-
-// MARK: - get_text
 
 // A CAPABILITY THE MODEL IS NOT TOLD ABOUT IS NOT A CAPABILITY. The executor reads several elements in
 // one call; unadvertised, that lever never fires. So the description says so, in the words the caller
@@ -243,8 +219,6 @@ private let getTextSchema = objectSchema([
     ))
 ], required: ["aloha_id"])
 
-// MARK: - page_navigate
-
 private let pageNavigateDescription =
     "Navigate the active tab's current page in place: go to a URL, or go back in history. "
     + "Unlike manage_tabs' \"open\" action, this never creates a new tab."
@@ -260,16 +234,12 @@ private let pageNavigateSchema = objectSchema([
         description: "The URL to navigate to. Required when action is \"goto\"; ignored for \"back\". http and https only."))
 ], required: ["action"])
 
-// MARK: - page_press_keys
-
 private let pagePressKeysDescription =
     "Send a keyboard key or chord to whatever currently has focus on the active tab."
 
 private let pagePressKeysSchema = objectSchema([
     ("keys", schemaField(type: "string", description: "The key or chord to send, e.g. \"Enter\", \"Escape\", \"Control+a\"."))
 ], required: ["keys"])
-
-// MARK: - page_wait_for
 
 private let pageWaitForDescription =
     "Poll the active tab until an element matching a CSS selector appears, or a timeout elapses."
@@ -285,10 +255,6 @@ private let pageWaitForSchema = objectSchema([
     ))
 ], required: ["selector"])
 
-// MARK: - The schema registry
-
-/// The advertising schema for each browser tool, keyed by name; see
-/// ``getNativeAgentToolSchemas()`` for the assembled, ordered list.
 private let nativeToolSchemaTable: [String: NativeToolSchema] = [
     "manage_tabs": NativeToolSchema(name: "manage_tabs", description: manageTabsDescription, inputSchema: manageTabsSchema),
     "page_click": NativeToolSchema(name: "page_click", description: pageClickDescription, inputSchema: pageClickSchema),
@@ -308,13 +274,9 @@ public func getNativeAgentToolSchemas() -> [NativeToolSchema] {
     }
 }
 
-/// Returns the advertising schema for a single browser tool by name, or `nil`
-/// when the name is not one of the eight.
 public func getNativeAgentToolSchema(_ name: String) -> NativeToolSchema? {
     nativeToolSchemaTable[name]
 }
-
-// MARK: - Read-only annotation
 
 /// Whether a tool only observes the page, for an MCP host's `readOnlyHint`.
 ///

@@ -1,9 +1,7 @@
 import Foundation
 import ToolABI
 
-/// Decodes a resolved in-page element object into a typed snapshot covering the
-/// field set produced by the in-page runtime. Returns `nil` when the value is
-/// not an object or lacks a bounding box.
+/// `nil` when the value is not an object or lacks a bounding box.
 public func decodeElementSnapshot(_ value: JSValue?) -> ElementSnapshot? {
     guard let value, case .object = value else { return nil }
     guard let bboxValue = value["bbox"], case .object = bboxValue else { return nil }

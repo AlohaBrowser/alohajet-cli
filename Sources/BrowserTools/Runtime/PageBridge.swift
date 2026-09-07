@@ -13,7 +13,6 @@ let fileInputClickRefusalMessage =
 
 // MARK: - Key chord parsing
 
-/// A single key press with its active modifiers.
 public struct ParsedKeyChord: Equatable, Sendable {
     public var key: String
     public var modifiers: [String]
@@ -171,8 +170,6 @@ public func formatConsoleOutput(_ entries: [ConsoleCapture]) -> String {
 
 // MARK: - Screenshot extension support
 
-/// Whether `extensionWithDot` (e.g. `.png`) is a screenshot format the bridge
-/// can write.
 public func isSupportedScreenshotExtension(_ extensionWithDot: String) -> Bool {
     return extensionWithDot == ".png" || extensionWithDot == ".jpg" || extensionWithDot == ".jpeg"
 }
@@ -186,13 +183,11 @@ public func stripDataUrlPrefix(_ value: String) -> String {
 
 // MARK: - Action collector
 
-/// An action emitted by the bridge while executing agent operations.
 public struct BridgeAction: Sendable {
     public var payload: JSValue
     public init(payload: JSValue) { self.payload = payload }
 }
 
-/// Collects the actions emitted during a bridge run for later inspection.
 public final class ActionCollector {
     private var actions: [BridgeAction] = []
 
@@ -213,8 +208,6 @@ public final class ActionCollector {
 
 // MARK: - Agent browser bridge
 
-/// Result of an agent browser action: human-readable output plus error/result
-/// payloads.
 public struct AgentActionResult: Sendable {
     public var output: String
     public var isError: Bool
@@ -240,7 +233,6 @@ public struct AgentActionResult: Sendable {
     }
 }
 
-/// A viewport / image dimension pair.
 public nonisolated struct ViewportSize: Equatable, Sendable {
     public var width: Int
     public var height: Int
@@ -250,7 +242,6 @@ public nonisolated struct ViewportSize: Equatable, Sendable {
     }
 }
 
-/// A captured download surfaced after an agent action.
 public nonisolated struct CapturedDownload: Sendable {
     public var filename: String
     public var sandboxPath: String
@@ -262,7 +253,6 @@ public nonisolated struct CapturedDownload: Sendable {
     }
 }
 
-/// The result of fulfilling one pending bridge request.
 public struct PendingResult: Sendable {
     public var type: String
     public var success: Bool
@@ -284,7 +274,6 @@ public nonisolated struct AgentAbortError: Error, Equatable, Sendable {
     public init() {}
 }
 
-/// Outcome of executing agent code inside the page.
 public struct AgentCodeRunResult: Sendable {
     public var result: JSValue?
     public var error: AgentCodeError?
@@ -296,7 +285,6 @@ public struct AgentCodeRunResult: Sendable {
     }
 }
 
-/// An error thrown by agent code, with its message, stack and name.
 public struct AgentCodeError: Sendable {
     public var message: String
     public var stack: String?
@@ -350,8 +338,6 @@ public func decodeAgentCodeRunResult(_ value: JSValue?) -> AgentCodeRunResult {
     return AgentCodeRunResult(result: result, error: error, pending: pending)
 }
 
-/// Tuning for a navigation-readiness wait: network-idle threshold/window,
-/// DOM-stability window, the minimum wait, and the overall timeout.
 public nonisolated struct NavigationReadinessOptions: Sendable, Equatable {
     public var networkIdleThreshold: Int
     public var networkIdleTimeMs: Int
@@ -378,20 +364,14 @@ public nonisolated struct NavigationReadinessOptions: Sendable, Equatable {
 /// to the platform browser engine via the CDP abstraction; this module keeps
 /// only the abstraction so it stays cross-platform.
 public protocol AgentBridgeBackend: Sendable {
-    /// Pulls any agent downloads that completed since the last call.
     func consumeAgentDownloads() -> [CapturedDownload]
-    /// Whether the active execution has been aborted.
     var isAborted: Bool { get }
     /// Parks this tab on a CAPTCHA the automatic solver could not clear and waits for
     /// a person to answer it, returning whether they did.
     func handOffCaptchaToHuman() async -> Bool
-    /// Evaluates an expression in the page and returns the resulting value.
     func evaluateViaCdp(_ expression: String) async throws -> JSValue?
-    /// Sends a raw CDP command.
     @discardableResult
     func sendCdpCommand(domain: String, command: String, params: [String: JSValue]) async throws -> JSValue
-    /// Sends a raw CDP command addressed to a particular CDP session.
-    ///
     /// Widens the seam above rather than adding a second one, because reaching into
     /// a sealed region needs commands run inside an out-of-process frame's own
     /// renderer session: hit-testing from the parent session returns the `IFRAME`
@@ -399,7 +379,6 @@ public protocol AgentBridgeBackend: Sendable {
     /// gate built on the parent session is no gate. See ``CDPSessionTarget``.
     @discardableResult
     func sendCdpCommand(domain: String, command: String, params: [String: JSValue], on target: CDPSessionTarget) async throws -> JSValue
-    /// Captures a viewport screenshot returning base64 plus image dimensions.
     func captureViewport() async throws -> (base64: String, imageWidth: Int, imageHeight: Int)?
     /// The current viewport dimensions, if the layer is alive.
     func viewportDimensions() -> ViewportSize?
@@ -431,13 +410,9 @@ public protocol AgentBridgeBackend: Sendable {
     /// for the duration of an agent-code execution, accumulating up to 50
     /// entries.
     func beginConsoleCapture() async
-    /// Stops console capture and returns the entries accumulated since the
-    /// matching ``beginConsoleCapture()``.
     func endConsoleCapture() async -> [ConsoleCapture]
 }
 
-/// Which CDP session a raw command is addressed to.
-///
 /// CDP multiplexes every session over one connection, tagging each message with a
 /// flat `sessionId` obtained from `Target.attachToTarget{flatten: true}`. Naming the
 /// session explicitly is what lets the cross-origin reach path run its verification
@@ -449,7 +424,6 @@ public nonisolated enum CDPSessionTarget: Sendable, Equatable {
     case attached(String)
 }
 
-/// Raised when a backend that cannot address a non-page CDP session is asked to.
 public nonisolated struct CDPSessionTargetUnsupportedError: Error, Equatable, Sendable {
     public let sessionId: String
     public init(sessionId: String) { self.sessionId = sessionId }
@@ -491,7 +465,6 @@ public extension AgentBridgeBackend {
     func terminateExecution() async {}
 }
 
-/// Raised when a backend without a navigation seam is asked to navigate.
 public nonisolated struct AgentNavigationUnsupportedError: Error, Equatable, Sendable {
     public init() {}
 }
@@ -543,7 +516,6 @@ public final class AgentBrowserBridge {
         return []
     }
 
-    /// Fulfils a list of pending requests, collecting one result per request.
     /// Aborts propagate; per-request failures are captured as failed results.
     public func fulfillPendingRequests(_ pending: [PendingRequest]) async throws -> [PendingResult] {
         var results: [PendingResult] = []
@@ -589,8 +561,6 @@ public final class AgentBrowserBridge {
             return AgentActionResult(output: "Execution stopped", isError: true)
         }
 
-        // Capture the page's console output for the duration of the run
-        // (accumulating up to 50 entries).
         await backend.beginConsoleCapture()
 
         let runValue: JSValue?
@@ -605,13 +575,9 @@ public final class AgentBrowserBridge {
             }
             // A navigation (or same-target document swap) that destroyed the JS
             // execution context while the awaited evaluate was still in flight is
-            // NOT a failure: the agent's own code triggered a navigation. Real
-            // Chromium returns the identical `-32000 "Inspected target navigated or
-            // closed"` here; Playwright rewrites it to "Execution context was
-            // destroyed, most likely because of a navigation" and treats it as a
-            // benign, retriable nav race, and browser-use likewise classifies it
-            // benign (only genuine transport loss is fatal). So settle the new
-            // document and report SUCCESS with its URL — otherwise the agent reads
+            // NOT a failure: the agent's own code triggered the navigation. Chromium
+            // reports it as `-32000 "Inspected target navigated or closed"`. Settle the
+            // new document and report SUCCESS with its URL — otherwise the agent reads
             // a phantom failure and retries a step that already landed.
             if isBenignNavigationRace(error) {
                 let settledURL = await settleAfterNavigationRace()
@@ -667,13 +633,12 @@ public final class AgentBrowserBridge {
 
     /// Classifies a thrown evaluate error as a benign navigation race: the page
     /// navigated (or the inspected document was swapped) while an awaited
-    /// `Runtime.evaluate` was in flight, destroying its JS execution context. This
-    /// is exactly what real Chromium reports (`-32000 "Inspected target navigated
-    /// or closed"`), what Playwright rewrites to "Execution context was destroyed,
-    /// most likely because of a navigation", and what browser-use treats as benign.
+    /// `Runtime.evaluate` was in flight, destroying its JS execution context.
+    /// Chromium reports it as `-32000 "Inspected target navigated or closed"`;
+    /// other stacks word the same condition "Execution context was destroyed, most
+    /// likely because of a navigation", which is why both spellings are matched.
     /// A genuine transport/target loss (socket closed, browser gone, crash) is NOT
-    /// benign and stays a hard error — mirroring browser-use's connection-error
-    /// allowlist and Playwright's `closed`/`crashed` protocol-error types.
+    /// benign and stays a hard error.
     func isBenignNavigationRace(_ error: Error) -> Bool {
         let message = errorMessage(error).lowercased()
         let fatal = [
@@ -687,11 +652,6 @@ public final class AgentBrowserBridge {
             || message.contains("context was destroyed")
     }
 
-    /// After a benign navigation race, waits for the new document to reach a usable
-    /// lifecycle state, then returns its URL (nil when none is available). Polls
-    /// `document.readyState` on the freshly-committed context — which may itself
-    /// briefly fail while the navigation is mid-commit (tolerated and retried) —
-    /// bounded by a timeout, mirroring browser-use's post-navigation lifecycle poll.
     /// The page's current URL, straight from the backend's navigation seam (no JS evaluate).
     ///
     /// EXISTS FOR THE ACTION RECEIPTS. `Clicked element "2s" (single).` carries no page state, so a
@@ -731,7 +691,7 @@ public final class AgentBrowserBridge {
     ///
     /// Two consequences, from the one bad read. The grader is misinformed: the harness takes the URL of
     /// the last tool call as the attempt's `final_url` and a fresh browser is pointed at it, so three
-    /// tasks whose live page matched the gold were scored against the page before the click. And the
+    /// tasks whose live page matched the gold were scored against the page before the click.
     /// And the caller is misinformed in a way that compounds: an agent that fingerprints the last
     /// tool result sees two clicks which both falsely report "still at X" as byte-identical, reads
     /// that as no progress, and starts firing its loop-breaking heuristics on a lie.
@@ -782,10 +742,6 @@ public final class AgentBrowserBridge {
         return await liveURL()
     }
 
-    /// Captures a post-execution snapshot of the tab and records it on the action
-    /// collector: a screenshot is captured for the action (when a screenshots
-    /// directory is wired), then a `snapshot` action with `reason: "post-exec"`
-    /// is emitted. Failures are non-fatal — they are logged and swallowed.
     private func emitPostExecSnapshot(startedAt: Double) async {
         guard let collector = actionCollector else { return }
         let completedAt = Date().timeIntervalSince1970 * 1000
@@ -801,9 +757,6 @@ public final class AgentBrowserBridge {
         agentLog(.info, "[PageBridge] post-exec snapshot emitted tab=\(tabId ?? "?") hasScreenshot=\(screenshotPath != nil)")
     }
 
-    /// Captures a screenshot for an emitted action, returning the host path it was
-    /// written to, or nil when no screenshots directory is wired or the capture
-    /// fails.
     private func captureScreenshotForAction(_ actionId: String) async -> String? {
         guard let directory = screenshotsDir else { return nil }
         guard let captured = try? await backend.captureViewport(), !captured.base64.isEmpty else { return nil }
@@ -877,10 +830,6 @@ public final class AgentBrowserBridge {
         }
     }
 
-    /// Settles a queued `screenshot` op: a non-empty `saveTo` writes the capture to
-    /// a sandboxed path and returns `{ path, viewport, imageSize }`; otherwise the
-    /// in-memory capture returns `{ base64, viewport, imageSize }` (or the bare
-    /// base64 when the viewport is unknown).
     private func handleScreenshotPendingRequest(_ request: PendingRequest) async -> PendingResult {
         let requestedViewport = decodeViewportSize(request.params["viewport"])
         if let saveTo = request.params["saveTo"]?.stringValue, !saveTo.isEmpty {
@@ -914,14 +863,11 @@ public final class AgentBrowserBridge {
             data: data)
     }
 
-    /// The outcome of a path-targeted screenshot capture.
     private enum ScreenshotToPathOutcome {
         case success(viewport: ViewportSize?, imageSize: ViewportSize?)
         case failure(String)
     }
 
-    /// Captures the viewport and writes it to a sandboxed `saveTo`, re-encoding for
-    /// the target extension.
     private func screenshotToPath(_ path: String) async -> ScreenshotToPathOutcome {
         let target = resolveScreenshotSaveTarget(path)
         guard target.ok, let resolvedPath = target.resolvedPath, let ext = target.extension else {
@@ -1033,8 +979,6 @@ public final class AgentBrowserBridge {
         }
     }
 
-    /// The readiness tuning navigation actions wait on (a 500ms minimum wait and
-    /// a 12s budget).
     private static let navigationReadiness = NavigationReadinessOptions(
         networkIdleThreshold: 2,
         networkIdleTimeMs: 500,
@@ -1047,7 +991,6 @@ public final class AgentBrowserBridge {
     public var profileId: String? { _profileId }
     private var _profileId: String?
 
-    /// Binds the profile id used to pace navigations; returns self for chaining.
     @discardableResult
     public func boundToProfile(_ profileId: String?) -> AgentBrowserBridge {
         _profileId = profileId
@@ -1135,12 +1078,8 @@ public final class AgentBrowserBridge {
         }
     }
 
-    /// Rounds a coordinate to the nearest integer before it rides a CDP mouse
-    /// event.
     private func roundCoord(_ value: Double) -> Int { Int(value.rounded()) }
 
-    /// Dispatches one `Input.dispatchMouseEvent`, including `button`/`clickCount`
-    /// only when supplied.
     @discardableResult
     private func sendMouseEvent(
         type: String, x: Int, y: Int, button: String? = nil, clickCount: Int? = nil
@@ -1158,8 +1097,6 @@ public final class AgentBrowserBridge {
         return result
     }
 
-    /// Distinguishes the click verbs that share the same press/release dispatch
-    /// but differ in button and click-count.
     private enum MouseClickKind {
         case double
         case triple
@@ -1168,17 +1105,14 @@ public final class AgentBrowserBridge {
 
     /// Settles a queued `click`: the in-page runtime resolved the element to
     /// viewport `x`/`y` (or the agent passed raw coords), so the host animates
-    /// the cursor and dispatches the press/release pair at those coordinates
-    /// (move → press → release, left button, single click).
+    /// the cursor and dispatches the press/release pair at those coordinates.
     private func handleClickPendingRequest(_ request: PendingRequest) async -> PendingResult {
         let x = request.params["x"]?.doubleValue ?? 0
         let y = request.params["y"]?.doubleValue ?? 0
-        // Teaching error: a plain click on a file <input> pops a
-        // native OS file-picker dialog the agent cannot see or drive, so the turn
-        // stalls (the "File not uploaded" loop). Refuse the click and hand the model
-        // a reason it can act on, instead of blindly dispatching. Classify via the
-        // same id-based snapshot the credential
-        // guard uses (`inputType == "file"`); fail open when the target is unresolved.
+        // A plain click on a file <input> pops a native OS file-picker the agent
+        // cannot see or drive (see `fileInputClickRefusalMessage`). Classify via the
+        // same id-based snapshot the credential guard uses; fail open when the target
+        // is unresolved.
         if let alohaId = request.params["alohaId"]?.stringValue, !alohaId.isEmpty {
             let escaped = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
             if let snapshot = try? await resolveElementSnapshot(escaped), snapshot.inputType == "file" {
@@ -1200,8 +1134,7 @@ public final class AgentBrowserBridge {
     }
 
     /// Settles a queued `doubleClick` / `tripleClick` / `rightClick` at the
-    /// page-resolved coordinates: double and triple raise the left-button
-    /// click-count to 2 and 3, right uses the right button with a single click.
+    /// coordinates the in-page runtime already resolved.
     private func handleMouseClickPendingRequest(_ request: PendingRequest, kind: MouseClickKind) async -> PendingResult {
         let x = request.params["x"]?.doubleValue ?? 0
         let y = request.params["y"]?.doubleValue ?? 0
@@ -1245,10 +1178,6 @@ public final class AgentBrowserBridge {
         }
     }
 
-    /// Animates the agent cursor toward `(x, y)`, then dispatches the
-    /// `mouseMoved` → `mousePressed` → `mouseReleased` sequence with the given
-    /// button and click count, pacing each step 50ms apart. Shared by every
-    /// click verb.
     private func dispatchClick(x: Double, y: Double, button: String, clickCount: Int) async throws {
         try throwIfAborted()
         await backend.animateCursorTo(x: x, y: y)
@@ -1312,11 +1241,9 @@ public final class AgentBrowserBridge {
         return decodeElementSnapshot(value)
     }
 
-    /// Types `text` into the element identified by `alohaId`. The element is
-    /// resolved and focused in the page (scrolled into view first), then the
-    /// text rides CDP key events into the focused element. The element is
-    /// re-focused defensively before typing. When `replace` is set the existing
-    /// value is cleared first.
+    /// Types `text` into the element identified by `alohaId`: the element is
+    /// scrolled into view and focused in the page first, then the text rides CDP
+    /// key events into it. `replace` clears the existing value first.
     public func type(_ alohaId: String, _ text: String, replace: Bool) async -> AgentActionResult {
         do {
             try throwIfAborted()
@@ -1392,8 +1319,6 @@ public final class AgentBrowserBridge {
         }
     }
 
-    /// Sleeps `milliseconds`, surfacing an abort as an ``AgentAbortError`` when
-    /// the signal fires.
     private func abortableDelay(_ milliseconds: Double) async throws {
         try throwIfAborted()
         try await Task.sleep(nanoseconds: UInt64(max(0, milliseconds) * 1_000_000))
@@ -1425,10 +1350,9 @@ public final class AgentBrowserBridge {
             } else {
                 try await typeCharacterViaCdp(String(ch))
             }
-            // Pace keystrokes so re-rendering / tokenizing inputs keep up (see
-            // `interKeyDelayMs`). NOTE: deliberately NO auto-Enter to "commit" — a
-            // blanket Enter-after-type would prematurely submit ordinary forms and
-            // navigate away mid-task; submission stays an explicit agent `press`.
+            // NOTE: deliberately NO auto-Enter to "commit" — a blanket
+            // Enter-after-type would prematurely submit ordinary forms and navigate
+            // away mid-task; submission stays an explicit agent `press`.
             try await abortableDelay(Self.interKeyDelayMs)
         }
     }
@@ -1472,7 +1396,6 @@ public final class AgentBrowserBridge {
         ])
     }
 
-    /// Whether `char` is a single printable ASCII character (codepoints 32–126).
     private func isPrintableAsciiChar(_ char: String) -> Bool {
         guard char.count == 1, let scalar = char.unicodeScalars.first else { return false }
         return scalar.value >= 32 && scalar.value <= 126
@@ -1500,7 +1423,6 @@ public final class AgentBrowserBridge {
         }
     }
 
-    /// Presses Enter through a raw key down/up pair (virtual key 13).
     private func pressEnterViaCdp() async throws {
         try throwIfAborted()
         try await backend.sendCdpCommand(domain: "Input", command: "dispatchKeyEvent", params: [
@@ -1560,8 +1482,6 @@ public final class AgentBrowserBridge {
         return "\(error)"
     }
 
-    /// A key's CDP identity: DOM `key`, physical `code`, Windows virtual key
-    /// code, and (for printable keys) the inserted text.
     private struct KeyChordDescriptor {
         let key: String
         let code: String
@@ -1614,13 +1534,9 @@ public final class AgentBrowserBridge {
         }
     }
 
-    /// Replays one parsed key chord as genuine CDP `Input.dispatchKeyEvent`s:
-    /// modifier keys are held down (rawKeyDown) ahead of the main key, the main
-    /// key dispatches the rawKeyDown/keyDown + char + keyUp shape its category
-    /// calls for, then the modifiers are released in reverse. Driving the chord
-    /// over real CDP key events (rather than a page-JS helper) ensures
-    /// `pressKeys` (e.g. submitting a search with Enter) actually reaches the
-    /// page.
+    /// Replays one parsed key chord as genuine CDP `Input.dispatchKeyEvent`s rather
+    /// than a page-JS helper, so `pressKeys` (e.g. submitting a search with Enter)
+    /// actually reaches the page.
     private func emulateKeyChordViaCdp(_ chord: ParsedKeyChord) async throws {
         try throwIfAborted()
         let combinedModifiers = chord.modifiers.reduce(0) { $0 | modifierBit($1) }

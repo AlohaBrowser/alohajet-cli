@@ -3,35 +3,23 @@ import Foundation
 
 // MARK: - Tabs service seam
 
-/// The window a tabs action operates against: it exposes the tabs model the
-/// per-action handlers read and mutate (list / read / open / close / focus /
-/// unfocus). The model surface is intentionally kept minimal for now and is
-/// extended as the individual tab actions are filled in.
+/// The window a tabs action operates against. The model surface is intentionally
+/// kept minimal for now and is extended as the individual tab actions are filled in.
 public protocol TabsWindow: AnyObject {
     /// The window identity (read when fetching the legacy tab context).
     var id: String { get }
-    /// The tabs model carried by this window.
     var tabs: TabsModel { get }
 }
 
-/// The tabs model: the active-tab pointer plus the per-id tab collection the
-/// tab actions enumerate, look up, create, and close.
 public protocol TabsModel: AnyObject {
-    /// The id of the currently active tab, or `nil` when none is active.
     var activeTabId: String? { get }
-    /// Sets (or clears) the active tab pointer.
     func setActiveTabId(_ id: String?)
-    /// The open tabs keyed by their id.
     var tabsById: [String: TabHandle] { get }
     /// The insertion-ordered tab handles (used by list + same-URL reuse).
     var orderedTabs: [TabHandle] { get }
-    /// Resolves (and optionally restores) a tab by id.
     func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle?
-    /// Plain by-id tab lookup (used by close).
     func tab(_ id: String) -> TabHandle?
-    /// Creates a new tab from the given spec.
     func createTab(_ spec: TabCreateSpec) -> TabHandle
-    /// Closes a tab by id.
     func closeTab(_ id: String, skipConfirm: Bool) async
     /// Reads the legacy/non-interactive tab context.
     func getTabContext(windowId: String, tab: TabHandle, signal: AbortSignal?) async throws -> TabReadContext?
@@ -40,8 +28,7 @@ public protocol TabsModel: AnyObject {
 // MARK: - Click-spawned tab adoption seam
 
 /// A tab adopted into the model after a click spawned a new top-level page
-/// target (e.g. a `target=_blank` link). Carries the addressable id the agent
-/// can read/focus, plus the url and title.
+/// target (e.g. a `target=_blank` link).
 public struct AdoptedTab: Sendable {
     public let id: String
     public let url: String
@@ -85,8 +72,6 @@ public protocol LivePageTargetAdopting: AnyObject {
     func adoptLiveTarget(_ id: String) async -> TabHandle?
 }
 
-/// A single tab handle exposing the identity, title, url, and provenance the tab
-/// actions render and validate.
 public protocol TabHandle: AgentControllableTab {
     var id: String { get }
     var title: String? { get }
@@ -125,7 +110,6 @@ public nonisolated struct TabViewportBounds: Sendable {
     }
 }
 
-/// The options used to create a tab.
 public nonisolated struct TabCreateSpec: Sendable {
     public var tabType: String
     public var url: String
@@ -161,26 +145,20 @@ public nonisolated struct TabReadContext: Sendable {
 /// concrete window is provided by the app shell; tools read
 /// `services.tabsService?.window`.
 public protocol TabsService: AnyObject {
-    /// The active tabs window, or `nil` when no window is available.
     var window: TabsWindow? { get }
 }
 
 // MARK: - Browser tool services
 
-/// The bundle of services a browser tool reads from its execution context: the
-/// tabs service it operates against, the session it addresses tabs through, and
-/// the web-extraction options the read path honours. Both handles are optional so
-/// a context can be built with nothing wired.
+/// The bundle of services a browser tool reads from its execution context. Both
+/// service handles are optional, so a context can be built with nothing wired.
 ///
 /// Holds reference-typed service handles and is main-actor isolated, like the
 /// execution context it is threaded through.
 public final class NativeToolServices {
-    /// The tabs service the browser tools operate against.
     public let tabsService: TabsService?
-    /// The session the tab tools resolve the addressed tab through.
     public let session: ChatModeSession?
     /// The toggleable web-extraction options read by the `manage_tabs` read path.
-    /// The default is `.baseline` (every improvement OFF).
     public let webExtractionOptions: AgentWebExtractionOptions
 
     public init(

@@ -1,21 +1,16 @@
 import Foundation
 import ToolABI
 
-// MARK: - page_navigate executor tool
-
-/// The executable `page_navigate` tool: navigates the active tab's current page
-/// IN PLACE — go to a URL, or go back in history. This is distinct from
-/// `manage_tabs`' "open" action, which always allocates a brand-new tab; this
-/// tool never creates a tab, it only moves the existing active one.
+/// The executable `page_navigate` tool: navigates the active tab's current page IN PLACE.
+/// Distinct from `manage_tabs`' "open" action, which always allocates a brand-new tab;
+/// this tool never creates a tab, it only moves the existing active one.
 ///
-/// Wraps `PageBridge.swift`'s `goto` and `back` cases directly: both are thin
-/// `handlePendingRequest` wrappers around the PUBLIC `AgentBrowserBridge.goto`
-/// / `.back` methods, which drive navigation over the backend's own seam (pacing,
-/// load + readiness waits) with no in-page `enqueueCdp` round trip needed — so
-/// this tool calls them straight, without `executeAgentCode`.
+/// `AgentBrowserBridge.goto` / `.back` drive navigation over the backend's own seam
+/// (pacing, load + readiness waits), so this tool calls them straight, without
+/// `executeAgentCode`.
 ///
-/// Every URL it navigates to passes ``validateOpenUrl(_:)`` first — see the note
-/// on the `goto` branch.
+/// Every URL it navigates to passes ``validateOpenUrl(_:)`` first — see the note on the
+/// `goto` branch.
 @MainActor public final class PageNavigateExecutorTool: ExecutorTool {
     public let name = "page_navigate"
 
@@ -49,9 +44,8 @@ import ToolABI
             // revive a sleeping renderer. Click/type/read and "back" still wake.
             return await Self.dispatch(name, context, requireReady: false) { bridge in await bridge.goto(normalized) }
         case "back":
-            // "back" never navigates anywhere but history — a passed url is
-            // ignored (not an error), matching the underlying `back` case, which
-            // takes no url argument at all.
+            // A passed url is ignored, not an error: the underlying `back` case takes no
+            // url argument at all.
             return await Self.dispatch(name, context) { bridge in await bridge.back() }
         default:
             return RawToolResult(

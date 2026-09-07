@@ -15,6 +15,5 @@ import Foundation
 /// on it and no second verb: a verb without a reachable endpoint is a stub, and
 /// stubs are what this seam exists to avoid.
 public protocol AlohaJetDriver: Sendable {
-    /// Run ONE task to a terminal `CLIRunResult`.
     func runTask(prompt: String) async throws -> CLIRunResult
 }

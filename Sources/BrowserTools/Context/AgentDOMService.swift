@@ -25,8 +25,7 @@ public nonisolated struct ElementBounds: Equatable, Sendable {
         self.left = left
     }
 
-    /// Parses a bounds object from a dynamic JSON value, requiring the eight
-    /// numeric fields.
+    /// `nil` unless all eight numeric fields are present.
     public init?(json: JSValue) {
         guard let x = json.number("x"), let y = json.number("y"),
               let width = json.number("width"), let height = json.number("height"),
@@ -41,7 +40,6 @@ public nonisolated struct ElementBounds: Equatable, Sendable {
 /// A CDP-style debugger the service drives to dispatch synthetic input and DOM
 /// commands. Implemented by the native shell.
 public protocol TabDebugger: Sendable {
-    /// Dispatches a synthetic mouse click of `count` presses at `(x, y)`.
     nonisolated func simulateMouseClick(_ x: Int, _ y: Int, _ button: String, _ count: Int, _ signal: AbortSignal?) async throws
     /// Sends a raw CDP command in `domain.method` form with JSON `params`.
     @discardableResult
@@ -50,9 +48,7 @@ public protocol TabDebugger: Sendable {
 
 /// The renderable layer backing a tab. Implemented by the native shell.
 public protocol TabLayer: Sendable {
-    /// Evaluates `script` in the page and returns its result.
     nonisolated func executeJavaScript(_ script: String) async throws -> JSValue
-    /// Whether the layer has been torn down.
     nonisolated func isDestroyed() -> Bool
 }
 
@@ -66,7 +62,6 @@ public nonisolated struct AgentMousePosition: Equatable, Sendable {
     }
 }
 
-/// A viewport screenshot with its pixel dimensions.
 public nonisolated struct ViewportCaptureMetadata: Sendable {
     public var base64: String
     public var imageWidth: Int
@@ -108,7 +103,6 @@ public protocol DomTreeScriptProvider: Sendable {
 
 // MARK: - Options & result types
 
-/// Options for a single click action.
 public nonisolated struct ClickElementOptions: Sendable {
     public var doubleClick: Bool?
     public var rightClick: Bool?
@@ -125,7 +119,6 @@ public nonisolated struct ClickElementOptions: Sendable {
     }
 }
 
-/// The result of a click action.
 public nonisolated struct ClickResult: Sendable {
     public var isOnTop: Bool
     public var message: String
@@ -147,7 +140,6 @@ public nonisolated struct ClickAtResult: Equatable, Sendable {
     }
 }
 
-/// A computed clickable point for an element.
 public nonisolated struct ClickablePoint: Sendable {
     public var isClickable: Bool
     public var x: Double?
@@ -163,7 +155,6 @@ public nonisolated struct ClickablePoint: Sendable {
     }
 }
 
-/// The result of focusing an element.
 public nonisolated struct FocusResult: Equatable, Sendable {
     public var success: Bool
     public var message: String
@@ -173,7 +164,6 @@ public nonisolated struct FocusResult: Equatable, Sendable {
     }
 }
 
-/// Options for scrolling an element into view.
 public nonisolated struct ScrollToElementOptions: Sendable {
     public var returnBounds: Bool
     public var force: Bool
@@ -185,7 +175,6 @@ public nonisolated struct ScrollToElementOptions: Sendable {
     }
 }
 
-/// The result of scrolling to an element.
 public nonisolated struct ScrollToElementResult: Sendable {
     public var message: String
     public var scrollDistance: Double
@@ -197,13 +186,11 @@ public nonisolated struct ScrollToElementResult: Sendable {
     }
 }
 
-/// A clickability self-check decision.
 public nonisolated struct ClickableXYDecision: Sendable {
     public var shouldFallback: Bool
     public init(shouldFallback: Bool) { self.shouldFallback = shouldFallback }
 }
 
-/// A single key emulation request.
 public nonisolated struct KeyStroke: Sendable {
     public var key: String
     public var modifiers: [String]
@@ -213,7 +200,6 @@ public nonisolated struct KeyStroke: Sendable {
     }
 }
 
-/// Diagnostics produced while building interactive markdown.
 public nonisolated struct InteractMarkdownDiagnostics: Sendable {
     public var domElementCount: Int
     public var markdownLength: Int
@@ -227,7 +213,6 @@ public nonisolated struct InteractMarkdownDiagnostics: Sendable {
     public var screenshotError: String?
 }
 
-/// The output of ``AgentDOMService/getInteractMarkdown``.
 public nonisolated struct InteractMarkdownResult: Sendable {
     public var markdown: String
     public var screenshot: String?
@@ -253,7 +238,6 @@ public final class AgentDOMService {
     private let cursorAnimator: AgentCursorAnimator
     private let domScriptProvider: DomTreeScriptProvider
 
-    /// The most recently extracted DOM tree.
     public private(set) var dom: [DomNode] = []
     /// The raw JSON form of the most recent DOM, used for bounds fallbacks.
     private var domRaw: [JSValue] = []
@@ -265,8 +249,7 @@ public final class AgentDOMService {
     // shadow root reads back null, both silently. Whole subtrees therefore vanish from
     // the element list, indistinguishable from empty space. Only the browser protocol
     // can see past either boundary, and only the agent runtime speaks it — hence this
-    // one injected folding seam rather than more code in here. It is `nil` by default,
-    // so an unconfigured service behaves exactly as before.
+    // one injected folding seam rather than more code in here.
 
     /// Given the nodes the walker produced, returns the list with regions the walker
     /// was forbidden to read folded in — marked in place where the walker at least saw
@@ -291,12 +274,10 @@ public final class AgentDOMService {
 
     // MARK: Abort helpers
 
-    /// Throws an abort error if `signal` is already aborted.
     public func throwIfAborted(_ signal: AbortSignal?) throws {
         if signal?.aborted == true { throw AbortSignalError("Operation aborted") }
     }
 
-    /// Whether `error` represents a cancellation.
     public func isAbortError(_ error: Error) -> Bool {
         if error is AbortSignalError { return true }
         if let named = error as? NamedError, named.name == "AbortError" { return true }
@@ -344,8 +325,6 @@ public final class AgentDOMService {
 
     // MARK: Script builders
 
-    /// Builds the global element-finder script with `selector` bound to the
-    /// given selector expression.
     public func buildFindElementGlobalScript(_ selectorExpression: String) -> String {
         return """
 
@@ -385,10 +364,8 @@ public final class AgentDOMService {
 
     // MARK: DOM extraction
 
-    /// Extracts the DOM tree (highlighting interactive nodes by default),
-    /// caching both the typed and raw forms. Nothing is written to disk: an
-    /// earlier build dumped the raw DOM to `dom.json`, which put page content
-    /// somewhere nobody asked for it.
+    /// Caches both the typed and raw forms. Nothing is written to disk: an earlier build
+    /// dumped the raw DOM to `dom.json`, which put page content somewhere nobody asked for it.
     @discardableResult
     public func getDOM(highlight: Bool = true, focusInteractive: Bool = false, signal: AbortSignal? = nil) async throws -> [DomNode] {
         try throwIfAborted(signal)
@@ -459,8 +436,6 @@ public final class AgentDOMService {
         return nil
     }
 
-    /// Resolves an element by id then scrolls it into view, returning its
-    /// bounds.
     public func scrollIntoViewAndGetBounds(_ id: String, _ signal: AbortSignal?) async throws -> ElementBounds? {
         guard let node = try await findElementById(id, signal) else { return nil }
         let alohaId = node.element.attributes["aloha-id"]
@@ -877,7 +852,6 @@ public final class AgentDOMService {
         }
     }
 
-    /// A two-pixel box centered on a point.
     public func boundsAroundPoint(_ x: Double, _ y: Double) -> ElementBounds {
         let left = Double(max(0, Int((x - 1).rounded())))
         let top = Double(max(0, Int((y - 1).rounded())))
@@ -893,7 +867,6 @@ public final class AgentDOMService {
         )
     }
 
-    /// Reads the cached raw DOM bounds for an element id, when present.
     private func positioningBounds(for id: String) -> ElementBounds? {
         for raw in domRaw where raw.string("id") == id {
             if let positioning = raw["positioning"], let boundsValue = positioning["bounds"] {
@@ -1034,7 +1007,6 @@ public final class AgentDOMService {
         await cursorAnimator.animateAgentCursorClick(tab, bounds, label, scaleOnClick: false, cursorLabelKind: nil)
     }
 
-    /// Removes the highlight overlay container, ignoring failures.
     public func removeHighlights() async {
         do {
             _ = try await tab.getLayer().executeJavaScript("""
@@ -1068,12 +1040,10 @@ public final class AgentDOMService {
 
     // MARK: Site JSON
 
-    /// Collect the page's own embedded structured data and, if any of it describes products,
-    /// return the compact summary block to prepend to the observation. Runs an in-page snippet
-    /// that gathers the text of every `<script type="application/ld+json">`, the `__NEXT_DATA__`
-    /// hydration payload, and (best-effort) the Shopify `/products.json` feed, then parses them
-    /// off the page thread via `siteJsonStructuredBlock`. Returns `nil` (so the caller prepends
-    /// nothing) when the page exposes no usable product data or the snippet fails.
+    /// Gathers the page's own embedded structured data — JSON-LD, the `__NEXT_DATA__` hydration
+    /// payload, and (best-effort) the Shopify `/products.json` feed — and parses it off the page
+    /// thread. `nil` when the page exposes no usable product data or the snippet fails, so the
+    /// caller prepends nothing.
     private func collectSiteJsonBlock(_ signal: AbortSignal?) async -> String? {
         let script = """
         (async () => {
@@ -1123,7 +1093,6 @@ public final class AgentDOMService {
 
     // MARK: Markdown
 
-    /// Extracts the full DOM and serializes it to markdown.
     public func getFullMarkdown() async throws -> String {
         let nodes = try await getDOM(highlight: false)
         return serializeFullMarkdown(nodes)
@@ -1144,7 +1113,6 @@ public final class AgentDOMService {
         // system prompt; the `<active_tab>` page snapshot is then the last big per-turn cost
         // (measured ~5k tok/turn vs a lean agent's ~200). The head-biased markdown is needed
         // mainly for interaction targets (aloha-ids) — which a smaller snapshot still carries.
-        // Matches how a lean competitor stays cheap: small observations, not elision of old ones.
         if let raw = getenv("ALOHAJET_COMPACT_TOOLS") {
             let v = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if ["1", "true", "yes", "on"].contains(v) { return 2500 }
@@ -1662,7 +1630,6 @@ public final class AgentDOMService {
 
 // MARK: - DOM node parsing
 
-/// Parses a single DOM node from its dynamic JSON representation.
 func parseDomNode(_ value: JSValue) -> DomNode? {
     guard let id = value.string("id") else { return nil }
     let elementValue = value["element"]
@@ -1760,7 +1727,6 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
 
 // MARK: - Shared small types
 
-/// A simple error carrying a message.
 nonisolated struct SimpleError: Error, CustomStringConvertible {
     let message: String
     init(_ message: String) { self.message = message }

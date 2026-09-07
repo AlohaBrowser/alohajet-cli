@@ -1,22 +1,52 @@
 # Releasing
 
-What a stranger types:
+## Current state, before anything below is believed
+
+`v0.1.0` is tagged. **There is no release attached to it**: the `release` workflow ran
+on that tag and both build jobs failed, so no tarball and no `SHA256SUMS` exist. Every
+`releases/latest/download/...` URL on this page 404s today, and so does the install
+script, which fetches from exactly those URLs.
+
+The two failures, from the run's own log:
+
+- **macOS** — `error: 'alohajet': package 'alohajet' is using Swift tools version 6.2.0
+  but the installed version is 6.1.0`. `release.yml` builds with whatever toolchain the
+  runner image defaults to; `ci.yml` has a "Select a toolchain that can build this
+  package" step and `release.yml` does not.
+- **Linux** — `Sources/BrowserTools/Session.swift:460:24: error: reference to var
+  'stdout' is not concurrency-safe because it involves shared mutable state`. Glibc
+  declares `stdout` as a mutable global where Darwin declares a `let`, so `fflush(stdout)`
+  compiles on macOS and is rejected on Linux under Swift 6. The same error fails the
+  `linux` job of every CI run to date.
+
+Until both are fixed and a tag builds green, the source build is the only install path
+that works. It is first below for that reason.
+
+## Building it yourself
+
+Verified from a fresh clone: 19 seconds, no dependencies to resolve.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/AlohaBrowser/alohajet/main/scripts/install.sh | sh
-alohajet --help
-```
-
-Or, with a toolchain already installed and no trust in install scripts:
-
-```sh
-git clone https://github.com/AlohaBrowser/alohajet && cd alohajet
+git clone https://github.com/AlohaBrowser/alohajet-cli.git
+cd alohajet-cli
 swift build -c release --product alohajet
 .build/release/alohajet --help
 ```
 
-Both are one command. There is no third option and no package manager to add — see
-"Why no Homebrew formula" below.
+The repository is **private**, so this needs an account with access and git credentials
+that carry it.
+
+## The install script, once there is something to install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/AlohaBrowser/alohajet-cli/main/scripts/install.sh | sh
+alohajet --help
+```
+
+Two things have to be true before that line works, and neither is true now: the
+repository has to be public (`raw.githubusercontent.com` serves no private content, so
+the command 404s before it reaches the script), and a tag has to have produced a release
+with the assets below.
 
 ## What a release is
 
@@ -85,7 +115,7 @@ then it is a second release channel to keep in sync for no new capability.
 ## Verifying a download by hand
 
 ```sh
-curl -fsSLO https://github.com/AlohaBrowser/alohajet/releases/latest/download/alohajet-macos-arm64.tar.gz
-curl -fsSLO https://github.com/AlohaBrowser/alohajet/releases/latest/download/SHA256SUMS
+curl -fsSLO https://github.com/AlohaBrowser/alohajet-cli/releases/latest/download/alohajet-macos-universal.tar.gz
+curl -fsSLO https://github.com/AlohaBrowser/alohajet-cli/releases/latest/download/SHA256SUMS
 shasum -a 256 -c SHA256SUMS --ignore-missing
 ```

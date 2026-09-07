@@ -8,16 +8,12 @@ import ToolABI
 /// calls, not the full ``TabHandle`` protocol — so the capture path stays cheap
 /// to satisfy and to fake.
 public protocol StepTraceTab: Sendable {
-    /// The tab's external id, recorded on each step.
     var traceTabId: String { get }
-    /// The tab's current URL, recorded on each step.
     var traceTabURL: String { get }
-    /// The tab's current title, recorded on each step (when known).
     var traceTabTitle: String? { get }
 
-    /// Captures the page's interactive DOM markdown plus an optional base64 PNG
-    /// screenshot. Best-effort: it may throw, which the tracer records as an error
-    /// note rather than aborting the step.
+    /// Best-effort: it may throw, which the tracer records as an error note
+    /// rather than aborting the step.
     func captureInteractMarkdown() async throws -> StepTraceMarkdown
 
     /// Captures the page's full accessibility tree as a ``JSValue`` (the raw
@@ -42,7 +38,6 @@ public extension StepTraceTab {
     func traceDomNode(forAlohaId alohaId: String) -> DomNode? { nil }
 }
 
-/// The DOM-markdown + screenshot pair the tracer writes for a step.
 public nonisolated struct StepTraceMarkdown: Sendable {
     public var markdown: String
     public var screenshotBase64: String?

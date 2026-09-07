@@ -1,18 +1,13 @@
 import Foundation
 import ToolABI
 
-// MARK: - page_press_keys executor tool
-
-/// The executable `page_press_keys` tool: sends a keyboard key or chord (e.g.
-/// `"Enter"`, `"Escape"`, `"Control+a"`) to whatever currently has focus on the
-/// active tab. Global and focus-relative — no `aloha_id`, matching the
-/// underlying `pressKeys` signature exactly.
+/// The executable `page_press_keys` tool: sends a key or chord (e.g. `"Enter"`,
+/// `"Control+a"`) to whatever currently has focus on the active tab. Focus-relative and
+/// global — no `aloha_id`.
 ///
-/// Wraps `PageBridge.swift`'s `pressKeys` case directly: it is a thin
-/// `handlePendingRequest` wrapper around the PUBLIC `AgentBrowserBridge.pressKeys`
-/// method, which parses the chord and dispatches real CDP `Input.dispatchKeyEvent`
-/// sequences itself — no in-page `enqueueCdp` round trip needed, so this tool
-/// calls it straight, without `executeAgentCode`.
+/// `AgentBrowserBridge.pressKeys` parses the chord and dispatches the CDP
+/// `Input.dispatchKeyEvent` sequence itself, so this tool calls it straight, with no
+/// in-page round trip through `executeAgentCode`.
 @MainActor public final class PagePressKeysExecutorTool: ExecutorTool {
     public let name = "page_press_keys"
 

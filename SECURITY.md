@@ -4,7 +4,13 @@
 
 Report privately through GitHub's private vulnerability reporting:
 
-    https://github.com/AlohaBrowser/alohajet/security/advisories/new
+    https://github.com/AlohaBrowser/alohajet-cli/security/advisories/new
+
+That form is **not live yet**: private vulnerability reporting is off on this
+repository (the API answers 404 for it), and while the repository is private
+there is no one outside the maintainers who can reach it anyway. Turn it on in
+Settings → Advanced Security → Private vulnerability reporting. Until then,
+reach a maintainer directly and do not use a public channel.
 
 Please do not open a public issue, pull request, or discussion for a
 vulnerability. The advisory thread is private to you and the maintainers until
@@ -16,8 +22,9 @@ exact tool calls or CLI commands in order, and what you observed versus what
 you expected. A transcript is worth more than a description. If you have a
 working reproduction page, attach it rather than describing it.
 
-There are no tagged releases yet. Everything below describes `main`, and a fix
-lands there.
+`v0.1.0` is tagged but its release build failed, so there is no released
+binary to be vulnerable. Everything below describes `main`, and a fix lands
+there.
 
 ## Threat model — read this before you point it at anything
 

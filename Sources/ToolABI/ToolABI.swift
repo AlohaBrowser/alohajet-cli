@@ -78,7 +78,6 @@ public struct RawToolResult: Sendable {
     }
 }
 
-/// Identifies a tool result envelope for formatting.
 public struct ToolResultFormatContext: Sendable {
     public var sessionId: String
     public var toolCallId: String
@@ -138,8 +137,7 @@ public struct AgentRecord: Sendable {
     }
 }
 
-/// The chat-session surface the executor mutates: tool result lookup/update,
-/// message-group creation, and agent detachment.
+/// The chat-session surface the executor mutates.
 public protocol ExecutorSession: AnyObject, Sendable {
     func findToolResult(_ toolCallId: String) -> ToolResultBlockView?
     func updateToolCallResult(_ toolCallId: String, _ update: ToolResultUpdate)
@@ -159,8 +157,7 @@ public protocol ToolSandbox: AnyObject, Sendable {
     func writeFile(_ path: String, _ contents: String) async throws
 }
 
-/// The context handed to a tool's `execute`, exposing session identity, the
-/// per-tool abort signal, the run mode, sandbox accessor, and result updaters.
+/// The context handed to a tool's `execute`.
 public final class ToolExecutionContext {
     public let sessionId: String
     public let toolCallId: String
@@ -279,8 +276,6 @@ public struct ToolContextParams {
     }
 }
 
-/// Builds a tool execution context. `isBackground` defaults to comparing the
-/// run mode against `.background`.
 public func createToolContext(_ params: ToolContextParams) -> ToolExecutionContext {
     let mode = params.mode
     let isBackground: @MainActor @Sendable () -> Bool = params.isBackground ?? { mode == .background }
