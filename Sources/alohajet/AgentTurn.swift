@@ -91,15 +91,22 @@ enum AgentTurn {
     /// the app was last on, so two unrelated turns from two terminals landed in one
     /// transcript and neither could be addressed afterwards.
     private static func resolveSession(_ args: Args) -> Result<AgentSession, CLIError> {
-        let resume = args.value("--resume")
+        // PRESENCE, not value: `args.value` reads an empty value as absent, so
+        // `--resume "$CHAT_ID"` with an unset variable would fall through to `.fresh` —
+        // a brand-new conversation reported as success, the exact bug --resume exists to end.
+        let hasResume = args.has("--resume")
+        // Trimmed ONCE, here, and the trimmed value is what goes on the wire: the server
+        // trims what it receives and echoes that back, so sending the padded id makes the
+        // resume guard refuse an id the host resumed correctly.
+        let resume = args.value("--resume")?.trimmingCharacters(in: .whitespacesAndNewlines)
         let continueLast = args.has("--continue")
-        if resume != nil, continueLast {
+        if hasResume, continueLast {
             return .failure(CLIError(
                 message: "--resume <id> and --continue both name a conversation; pass one",
                 code: exitUsage))
         }
-        if let resume {
-            guard !resume.trimmingCharacters(in: .whitespaces).isEmpty else {
+        if hasResume {
+            guard let resume, !resume.isEmpty else {
                 return .failure(CLIError(message: "--resume expects a chat id", code: exitUsage))
             }
             return .success(.resume(resume))

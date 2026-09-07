@@ -128,13 +128,27 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
                     return (Self.failed("automation server refused /agent/new" + Self.detail(newResponse)), nil)
                 }
                 reportedSession = Self.stringValue(newResponse.body, key: "sessionId")
-                if case let .resume(id) = session, let got = reportedSession, got != id {
+                if case let .resume(id) = session {
                     // A host that ignores the requested id silently would append the turn
                     // to the wrong conversation — the exact failure `--resume` exists to
                     // prevent — so refuse rather than run somewhere the caller did not ask for.
-                    return (Self.failed(
-                        "automation server did not resume \(id): it answered with \(got). "
-                        + "That host predates per-id resume; rerun without --resume."), got)
+                    //
+                    // A MISSING id is refused too, not waved through: `let got = reported`
+                    // in the condition made a host that answers 200 without the key skip the
+                    // whole check, which is the one response shape the guard cannot see past.
+                    guard let got = reportedSession else {
+                        return (Self.failed(
+                            "automation server did not name the conversation it moved to, so "
+                            + "it cannot be confirmed the turn would run in \(id). "
+                            + "That host predates per-id resume; --continue is the only flag "
+                            + "it can continue a conversation with."), nil)
+                    }
+                    guard got == id else {
+                        return (Self.failed(
+                            "automation server did not resume \(id): it answered with \(got). "
+                            + "That host predates per-id resume; --continue is the only flag "
+                            + "it can continue a conversation with."), got)
+                    }
                 }
             }
 
