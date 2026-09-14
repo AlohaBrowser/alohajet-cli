@@ -59,11 +59,11 @@ enum AgentTurn {
         // The headless eval surface: the whole result as ONE JSON object on stdout
         // (success and failure alike), with the exit code preserved.
         if json {
-            print(result.encodedJSON(sessionId: sessionId))
+            writeToStandardOutput(result.encodedJSON(sessionId: sessionId) + "\n")
             return result.isSuccess ? exitOK : exitToolError
         }
         if result.isSuccess, let finalText = result.finalText {
-            print(finalText)
+            writeToStandardOutput(finalText + "\n")
             // The id goes to stderr, not stdout: piping the answer somewhere must not
             // pick this up. It is only useful when there IS something to resume.
             // Printed whenever the host named one — including under `--continue`, which

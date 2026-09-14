@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#endif
 import Dispatch
 import Testing
 
@@ -38,6 +41,14 @@ struct MCPSignalTeardownTests {
     }
 
     private func teardown(ending: Ending, expectedStatus: Int32) throws {
+        // This test writes to a child it has just signalled, so the write can land on a
+        // pipe whose reader is already gone. On Linux the default SIGPIPE disposition
+        // then kills the TEST process — reported as "Exited with unexpected signal code
+        // 13", taking the whole CLITests target with it — and `try?` cannot catch a
+        // signal. Darwin never showed it, and neither did CI, because the package did
+        // not compile on Linux until now and so these tests had never once run there.
+        signal(SIGPIPE, SIG_IGN)
+
         let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("alohajet-mcp-signal-\(UUID().uuidString)")

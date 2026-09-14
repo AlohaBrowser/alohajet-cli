@@ -441,7 +441,6 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
                 // `installSignalReaper` -> `_fwalk` -> `flockfile` -> `__psynch_mutexwait`.
                 // Only stdout is buffered here (the CLI's `print`); everything else in this
                 // package writes with `write(2)` and stderr is unbuffered.
-                fflush(stdout)
                 _exit(128 + number)
             }
             signal(number, SIG_IGN)
