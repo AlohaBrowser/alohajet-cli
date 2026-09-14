@@ -48,6 +48,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Select a toolchain that can build this package
+        # macOS only: the Linux leg runs in swift:6.2.3-noble, which is already right.
+        # Without this the v0.1.0 release run died here with
+        # "package is using Swift tools version 6.2.0 but the installed version is
+        # 6.1.0" — an older toolchain does not warn, it fails to parse the manifest.
+        # Same step, same assertion as ci.yml; the two must not drift.
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1)"
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          xcodebuild -version
+          swift --version
+          version="$(swift -version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n 1)"
+          case "$version" in
+            6.2|6.[3-9]|6.[1-9][0-9]|[7-9].*) echo "toolchain $version is new enough" ;;
+            *) echo "This package needs Swift 6.2 or newer; the runner has $version." >&2; exit 1 ;;
+          esac
+
       - name: Build the release binary
         run: swift build -c release --product alohajet ${{ matrix.build_flags }}
 
