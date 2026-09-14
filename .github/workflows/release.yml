@@ -57,8 +57,28 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
-          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1)"
-          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          # Newest-first, skipping toolchains known to miscompile this package. Swift
+          # 6.2.4 (Xcode 26.3) CRASHES the frontend on `swift build -c release
+          # --arch arm64 --arch x86_64` over the BrowserTools module — "Please submit a
+          # bug report", stack dump, no diagnostic. The same command on 6.2.3 builds
+          # clean, so this is the compiler, not the code, and there is nothing to fix
+          # on our side but the choice of compiler.
+          # Drop an entry from BAD when its fix ships; keep the list, because "take the
+          # newest" is otherwise one image bump away from an unexplained red release.
+          BAD="6.2.4"
+          picked=""
+          for app in $(ls -d /Applications/Xcode*.app 2>/dev/null | sort -Vr); do
+            v="$("$app/Contents/Developer/usr/bin/swift" -version 2>/dev/null \
+                 | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -n 1)"
+            [ -n "$v" ] || continue
+            case " $BAD " in *" $v "*) echo "skipping $app (Swift $v is known bad)"; continue ;; esac
+            picked="$app"; break
+          done
+          if [ -z "$picked" ]; then
+            echo "No installed Xcode has a usable Swift; saw: $(ls -d /Applications/Xcode*.app 2>/dev/null | tr '\n' ' ')" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$picked"
           xcodebuild -version
           swift --version
           version="$(swift -version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n 1)"
