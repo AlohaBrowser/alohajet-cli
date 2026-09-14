@@ -30,6 +30,13 @@ import Darwin
 // So: `write(2)` on the fd, with the EINTR retry loop the C call has always required.
 // Unbuffered, which is what the MCP framing needs anyway — a response sitting in a
 // buffer that never flushes is a hung host.
+//
+// `stdout` is the fourth trap, and the reason this package has no flush helper: reading
+// it at all is a Swift 6 "shared mutable state" error on Glibc, even once, even to bind
+// it to a `nonisolated(unsafe) let`. Which is fine, because nothing here needs flushing:
+// the CLI writes through these functions rather than `print`, so there is no buffer to
+// lose when the signal reaper calls `_exit` — and `_exit` runs no atexit handler, so a
+// buffered `print` on the way out would have been lost on Darwin too.
 
 /// Writes `text` to stdout, retrying on `EINTR` and short writes.
 public nonisolated func writeToStandardOutput(_ text: String) {

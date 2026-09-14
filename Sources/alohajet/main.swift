@@ -229,11 +229,11 @@ func resultJSON(_ result: RawToolResult) -> String {
 
 func emit(_ result: RawToolResult, json: Bool) {
     if json {
-        print(resultJSON(result))
+        writeToStandardOutput(resultJSON(result) + "\n")
     } else if result.isError == true {
         writeToStandardError(result.output + "\n")
     } else {
-        print(result.output)
+        writeToStandardOutput(result.output + "\n")
     }
 }
 
@@ -415,7 +415,7 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
 /// the browser it launched. A CDP connection to the recorded port IS that proof.
 func quitSharedBrowser() async -> Int32 {
     guard let state = readSharedState() else {
-        print("No shared browser is running.")
+        writeToStandardOutput("No shared browser is running." + "\n")
         return exitOK
     }
     var closed = false
@@ -430,9 +430,9 @@ func quitSharedBrowser() async -> Int32 {
     if let profile = state.profile { try? FileManager.default.removeItem(atPath: profile) }
     if let stderrLog = state.stderrLog { try? FileManager.default.removeItem(atPath: stderrLog) }
     clearSharedState()
-    print(closed
+    writeToStandardOutput((closed
         ? "Closed the shared browser on port \(state.port)."
-        : "No browser was listening on port \(state.port); cleared the stale record.")
+        : "No browser was listening on port \(state.port); cleared the stale record.") + "\n")
     return exitOK
 }
 
@@ -597,7 +597,7 @@ func rememberTab(_ command: String, _ args: Args, _ result: RawToolResult, ok: B
 
 func report(_ error: CLIError, json: Bool) {
     if json {
-        print(resultJSON(RawToolResult(output: error.message, isError: true, status: .error)))
+        writeToStandardOutput(resultJSON(RawToolResult(output: error.message, isError: true, status: .error)) + "\n")
     } else {
         writeToStandardError("alohajet: \(error.message)\n")
     }
@@ -630,7 +630,7 @@ func main() async -> Int32 {
     }
 
     guard let command = args.positional.first else {
-        print(usage)
+        writeToStandardOutput(usage + "\n")
         return wantsHelp ? exitOK : exitUsage
     }
     if wantsHelp {
@@ -638,7 +638,7 @@ func main() async -> Int32 {
             writeToStandardError("alohajet: unknown command \"\(command)\"\n")
             return exitUsage
         }
-        print(help)
+        writeToStandardOutput(help + "\n")
         return exitOK
     }
     let json = args.has("--json")
