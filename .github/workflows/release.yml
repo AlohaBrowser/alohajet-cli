@@ -68,10 +68,13 @@ jobs:
           BAD="6.2.4"
           picked=""
           for app in $(ls -d /Applications/Xcode*.app 2>/dev/null | sort -Vr); do
-            swiftbin="$app/Contents/Developer/usr/bin/swift"
+            # Toolchains/XcodeDefault.xctoolchain, NOT Developer/usr/bin — the latter
+            # carries xcodebuild and xcrun, never swift. Getting this wrong skipped every
+            # Xcode on the runner and reported "no usable Swift" about a machine with five.
+            swiftbin="$app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
             # Guarded, and the failure tolerated: under `set -e` a missing binary here
             # aborts the whole step with 127 and no explanation of which app lacked it.
-            [ -x "$swiftbin" ] || { echo "skipping $app (no swift at the expected path)"; continue; }
+            [ -x "$swiftbin" ] || { echo "skipping $app (no swift at $swiftbin)"; continue; }
             v="$("$swiftbin" -version 2>/dev/null | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -n 1 || true)"
             [ -n "$v" ] || { echo "skipping $app (could not read its Swift version)"; continue; }
             echo "candidate $app -> Swift $v"
