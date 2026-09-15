@@ -177,6 +177,7 @@ OUTPUT
                             `open` and `tabs` print — one namespace, no translation
   --json                    print the RawToolResult as JSON instead of prose
   -h, --help                this text; `alohajet <command> --help` for one command
+  --version                 print the version and exit
 
 ENVIRONMENT
   ALOHAJET_NETWORK_LOG      OFF by default. Set to a directory to record every
@@ -618,6 +619,11 @@ func main() async -> Int32 {
     } catch {
         writeToStandardError("alohajet: \(error)\n")
         return exitUsage
+    }
+
+    if args.has("--version") {
+        writeToStandardOutput("alohajet \(alohajetVersion)\n")
+        return exitOK
     }
 
     let wantsHelp = args.has("--help") || args.has("-h")
