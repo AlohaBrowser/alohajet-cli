@@ -102,6 +102,14 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME:-${{ inputs.version }}}"
+          # The tag names the tarball; Sources/alohajet/Version.swift is what the binary
+          # reports through --version and MCP serverInfo. They are two statements of one
+          # fact, so a mismatch ships a binary that lies about which release it is.
+          declared="$(sed -n 's/^public let alohajetVersion = "\(.*\)"$/\1/p' Sources/alohajet/Version.swift)"
+          if [ "${version#v}" != "$declared" ]; then
+            echo "tag ${version} and Version.swift ${declared} disagree — bump the constant in the commit you tag" >&2
+            exit 1
+          fi
           # `--show-bin-path` because a universal build does NOT land in
           # `.build/release`; it lands in `.build/apple/Products/Release`.
           binary="$(swift build -c release --product alohajet ${{ matrix.build_flags }} --show-bin-path)/alohajet"

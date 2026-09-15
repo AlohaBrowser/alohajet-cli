@@ -15,7 +15,7 @@ import ToolABI
 
 enum MCPServer {
     static let serverName = "alohajet"
-    static let serverVersion = "0.1.0"
+    static let serverVersion = alohajetVersion
 
     /// The protocol revisions this server speaks. An `initialize` naming one of them is
     /// answered in kind; anything else is answered with the newest we know, which is what
