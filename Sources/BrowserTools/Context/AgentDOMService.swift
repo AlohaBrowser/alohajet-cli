@@ -200,6 +200,16 @@ public nonisolated struct KeyStroke: Sendable {
     }
 }
 
+/// The result of a file-upload action.
+public nonisolated struct UploadResult: Equatable, Sendable {
+    public var success: Bool
+    public var error: String?
+    public init(success: Bool, error: String? = nil) {
+        self.success = success
+        self.error = error
+    }
+}
+
 public nonisolated struct InteractMarkdownDiagnostics: Sendable {
     public var domElementCount: Int
     public var markdownLength: Int
@@ -237,6 +247,10 @@ public final class AgentDOMService {
     private let debuggerInstance: TabDebugger
     private let cursorAnimator: AgentCursorAnimator
     private let domScriptProvider: DomTreeScriptProvider
+    /// Where ``uploadFilesById`` reads bytes from when the caller passes none of its own.
+    /// A host that composes this service against its own filesystem wires it once here
+    /// instead of threading it through every call site.
+    private let uploadContext: UploadStaging?
 
     public private(set) var dom: [DomNode] = []
     /// The raw JSON form of the most recent DOM, used for bounds fallbacks.
@@ -263,12 +277,14 @@ public final class AgentDOMService {
         debuggerFactory: TabDebuggerFactory,
         cursorAnimator: AgentCursorAnimator,
         domScriptProvider: DomTreeScriptProvider,
+        uploadContext: UploadStaging? = nil,
         isDevEnvironment: Bool = false
     ) {
         self.tab = tab
         self.debuggerInstance = debuggerFactory.makeDebugger(tab)
         self.cursorAnimator = cursorAnimator
         self.domScriptProvider = domScriptProvider
+        self.uploadContext = uploadContext
         self.isDevEnvironment = isDevEnvironment
     }
 
@@ -1038,6 +1054,298 @@ public final class AgentDOMService {
         return nil
     }
 
+    // MARK: Upload by id
+
+    /// Uploads staged files into the file input associated with `id`, attaching
+    /// them through CDP when reachable and falling back to a JS DataTransfer /
+    /// drag-drop dispatch.
+    public func uploadFilesById(_ id: String, _ filePaths: [String], _ signal: AbortSignal?, _ staging: UploadStaging?) async throws -> UploadResult {
+        do {
+            try throwIfAborted(signal)
+            // An explicit argument wins; otherwise the context this service was composed
+            // with. A host that wired one at construction does not re-derive it per call.
+            guard let staging = staging ?? uploadContext else {
+                rootLogger.warn("[AgentDOMService] uploadFilesById refused: no upload staging available")
+                return UploadResult(
+                    success: false,
+                    error: "File upload failed at the staging stage: no upload staging is available.")
+            }
+            let staged = try await staging.stage(filePaths, maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: signal)
+            if !filePaths.isEmpty && staged.cdpPaths.isEmpty && staged.files.isEmpty {
+                return UploadResult(
+                    success: false,
+                    error: "File upload failed at the staging stage: no files could be read.")
+            }
+            let layer = tab.getLayer()
+            let pageDebugger = debuggerInstance
+            // Resolve the target by aloha-id when it is in the current DOM cache. When the
+            // caller's aloha-id is stale or guessed — not in the cache, because the model
+            // reused an id from an earlier snapshot, or never snapshotted this page — do NOT
+            // bail: the intent is unambiguous, so fall back to resolving the page's file
+            // <input> directly (the selectors below already cover that).
+            let node = try await findElementById(id, signal)
+            try throwIfAborted(signal)
+            let alohaId = node?.element.attributes["aloha-id"] ?? ""
+            let tagName = (node?.element.tagName ?? "").lowercased()
+            let inputType = (node?.element.attributes["type"] ?? "").lowercased()
+            let escapedAlohaId = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
+
+            var matchedSelector: String?
+            var cdpDispatched = false
+            var cdpAttachCount: Int?
+            do {
+                let markerSelector = try await raceAbort(signal) {
+                    try await layer.executeJavaScript("""
+
+                            (() => {
+                              const target = document.querySelector('[aloha-id="\(escapedAlohaId)"]');
+
+                              const findFileInput = () => {
+                                if (target) {
+                                  if (target.matches && target.matches('input[type="file"]')) return target;
+                                  const within = target.querySelector && target.querySelector('input[type="file"]');
+                                  if (within) return within;
+                                  let cursor = target.parentElement;
+                                  while (cursor && cursor !== document.body) {
+                                    const candidate = cursor.querySelector('input[type="file"]');
+                                    if (candidate) return candidate;
+                                    cursor = cursor.parentElement;
+                                  }
+                                }
+                                // No aloha-id target (stale/guessed id) — resolve the page's
+                                // file input directly; the upload's intent is unambiguous.
+                                const all = document.querySelectorAll('input[type="file"]');
+                                return all.length > 0 ? all[all.length - 1] : null;
+                              };
+
+                              const input = findFileInput();
+                              if (!input) return null;
+
+                              const stale = document.querySelectorAll('[data-aloha-upload-target]');
+                              for (const el of stale) el.removeAttribute('data-aloha-upload-target');
+
+                              input.setAttribute('data-aloha-upload-target', '1');
+                              return '[data-aloha-upload-target="1"]';
+                            })()
+
+                    """)
+                }
+                var candidateSelectors: [String] = []
+                if case let .string(markerValue) = markerSelector, !markerValue.isEmpty {
+                    candidateSelectors.append(markerValue)
+                }
+                if tagName == "input" && inputType == "file" {
+                    candidateSelectors.append("[aloha-id=\"\(escapedAlohaId)\"]")
+                }
+                candidateSelectors.append("[aloha-id=\"\(escapedAlohaId)\"] input[type=\"file\"]")
+                candidateSelectors.append("input[type=\"file\"]")
+
+                let root = try await raceAbort(signal) {
+                    try await pageDebugger.sendCommand("DOM", "getDocument", .object([
+                        ("depth", .number(Double(-1))),
+                        ("pierce", .bool(true))
+                    ]))
+                }
+                let rootNodeId = root["root"]?.number("nodeId") ?? root.number("nodeId")
+
+                var resolvedNodeId: Double?
+                if let rootNodeId {
+                    for selector in candidateSelectors {
+                        do {
+                            try throwIfAborted(signal)
+                            let queryResult = try await raceAbort(signal) {
+                                try await pageDebugger.sendCommand("DOM", "querySelector", .object([
+                                    ("nodeId", .number(rootNodeId)),
+                                    ("selector", .string(selector))
+                                ]))
+                            }
+                            if let nodeId = queryResult.number("nodeId"), nodeId != 0 {
+                                resolvedNodeId = nodeId
+                                matchedSelector = selector
+                                break
+                            }
+                        } catch {}
+                    }
+                }
+                if let resolvedNodeId {
+                    let attachResult = try await raceAbort(signal) {
+                        try await pageDebugger.sendCommand("DOM", "setFileInputFiles", .object([
+                            ("nodeId", .number(resolvedNodeId)),
+                            ("files", .array(staged.cdpPaths.map { JSValue.string($0) }))
+                        ]))
+                    }
+                    cdpDispatched = true
+                    // Propagate the {ok,count} envelope a host's CDP may answer with instead
+                    // of discarding it — it is one of the two honest attach signals.
+                    if attachResult.bool("ok") == true, let count = attachResult.number("count") {
+                        cdpAttachCount = Int(count)
+                    }
+                }
+            } catch {}
+
+            if let matchedSelector {
+                let escaped = matchedSelector.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+                _ = try await raceAbort(signal) {
+                    try await layer.executeJavaScript("""
+
+                          (() => {
+                            const input = document.querySelector('\(escaped)');
+                            if (input) {
+                              input.dispatchEvent(new Event('input', { bubbles: true }));
+                              input.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                          })()
+
+                    """)
+                }
+            }
+
+            let files = staged.files
+            if !files.isEmpty {
+                let fileDataJson = JSValue.array(files.map { file -> JSValue in
+                    .object([("name", .string(file.name)), ("mime", .string(file.mime)), ("b64", .string(file.base64))])
+                }).stringify()
+                if let matchedSelector {
+                    let escaped = matchedSelector.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+                    _ = try await raceAbort(signal) {
+                        try await layer.executeJavaScript("""
+
+                              (() => {
+                                const input = document.querySelector('\(escaped)');
+                                if (!input) return;
+                                const filesData = \(fileDataJson);
+                                const dt = new DataTransfer();
+                                for (const f of filesData) {
+                                  const bytes = Uint8Array.from(atob(f.b64), c => c.charCodeAt(0));
+                                  dt.items.add(new File([bytes], f.name, { type: f.mime }));
+                                }
+                                input.files = dt.files;
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                              })()
+
+                        """)
+                    }
+                } else {
+                    // No <input> anywhere on the page: the target is a dropzone, so the only
+                    // way in is the drag sequence a real drop produces. dragenter/dragover
+                    // must be preventDefault-ed for the drop to be accepted at all.
+                    _ = try await raceAbort(signal) {
+                        try await layer.executeJavaScript("""
+
+                              (async () => {
+                                const target = document.querySelector('[aloha-id="\(escapedAlohaId)"]') || document.body;
+                                const filesData = \(fileDataJson);
+
+                                const buildDataTransfer = () => {
+                                  const dt = new DataTransfer();
+                                  for (const f of filesData) {
+                                    const bytes = Uint8Array.from(atob(f.b64), c => c.charCodeAt(0));
+                                    dt.items.add(new File([bytes], f.name, { type: f.mime }));
+                                  }
+                                  try { dt.dropEffect = 'copy'; } catch {}
+                                  try { dt.effectAllowed = 'copyMove'; } catch {}
+                                  return dt;
+                                };
+
+                                const dispatchAt = (el, type, dt) => {
+                                  if (!el) return false;
+                                  const event = new DragEvent(type, {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    composed: true,
+                                    dataTransfer: dt
+                                  });
+                                  if (type === 'dragover' || type === 'dragenter') {
+                                    setTimeout(() => { try { event.preventDefault(); } catch {} }, 0);
+                                  }
+                                  return el.dispatchEvent(event);
+                                };
+
+                                const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+                                const targets = [target, document.documentElement, document.body].filter(Boolean);
+                                for (const t of targets) dispatchAt(t, 'dragenter', buildDataTransfer());
+                                await sleep(20);
+                                for (const t of targets) dispatchAt(t, 'dragover', buildDataTransfer());
+                                await sleep(20);
+                                for (const t of targets) dispatchAt(t, 'drop', buildDataTransfer());
+                              })()
+
+                        """)
+                    }
+                }
+            }
+
+            try throwIfAborted(signal)
+
+            // HONEST SUCCESS VIA POST-DISPATCH READ-BACK. Rather than trust the bare
+            // dispatch, read the input's ACTUAL FileList back out of the page (length +
+            // names). The SAME read-back covers BOTH the CDP attach and the JS
+            // DataTransfer / drag-drop fallback — locate the input by its aloha-id marker
+            // and report how many files really landed on it.
+            let readBack = try? await raceAbort(signal) {
+                try await layer.executeJavaScript("""
+
+                      (() => {
+                        const target = document.querySelector('[aloha-id="\(escapedAlohaId)"]');
+                        const findFileInput = () => {
+                          if (target && target.matches && target.matches('input[type="file"]')) return target;
+                          const within = target && target.querySelector && target.querySelector('input[type="file"]');
+                          if (within) return within;
+                          let cursor = target && target.parentElement;
+                          while (cursor && cursor !== document.body) {
+                            const candidate = cursor.querySelector('input[type="file"]');
+                            if (candidate) return candidate;
+                            cursor = cursor.parentElement;
+                          }
+                          const all = document.querySelectorAll('input[type="file"]');
+                          return all.length > 0 ? all[all.length - 1] : null;
+                        };
+                        const input = findFileInput();
+                        if (!input || !input.files) return { ok: false, count: 0, names: [] };
+                        const names = Array.from(input.files).map(f => f.name);
+                        return { ok: input.files.length > 0, count: input.files.length, names };
+                      })()
+
+                """)
+            }
+
+            let attachedCount = uploadedFileCount(readBack) ?? cdpAttachCount ?? 0
+            if attachedCount > 0 {
+                return UploadResult(success: true)
+            }
+
+            // The dispatch did not actually populate the input — name the stage that failed
+            // rather than reporting a false success banner.
+            let stage: String
+            if cdpDispatched {
+                stage = "FileList assignment (the browser rejected the attached files)"
+            } else if matchedSelector != nil {
+                stage = "FileList assignment (the input's files list was not populated)"
+            } else if !files.isEmpty {
+                stage = "drop not accepted (the page's dropzone did not accept the files)"
+            } else {
+                stage = "element resolution (no file input was located for \"\(id)\")"
+            }
+            return UploadResult(success: false, error: "File upload failed at the \(stage) stage.")
+        } catch {
+            if isAbortError(error) { throw error }
+            return UploadResult(success: false, error: describeError(error))
+        }
+    }
+
+    /// Reads the file count out of a post-dispatch read-back result. Accepts either the
+    /// `{ ok, count, names }` envelope the read-back script emits (and that a host's CDP
+    /// `setFileInputFiles` may reply with) or a bare number, so the same honesty check
+    /// works across the CDP and JS-fallback paths.
+    private func uploadedFileCount(_ value: JSValue?) -> Int? {
+        guard let value else { return nil }
+        if let n = value.intValue { return n }
+        if let c = value.number("count") { return Int(c) }
+        return nil
+    }
+
     // MARK: Site JSON
 
     /// Gathers the page's own embedded structured data — JSON-LD, the `__NEXT_DATA__` hydration
@@ -1731,6 +2039,16 @@ nonisolated struct SimpleError: Error, CustomStringConvertible {
     let message: String
     init(_ message: String) { self.message = message }
     var description: String { message }
+}
+
+/// A one-shot guard ensuring a continuation is resumed exactly once.
+final class ResolvedFlag {
+    private var resolved = false
+    func markResolved() -> Bool {
+        if resolved { return false }
+        resolved = true
+        return true
+    }
 }
 
 /// Suspends until its signal aborts (throwing) or it is cancelled. Resuming

@@ -104,7 +104,8 @@ let commandHelp: [String: String] = [
     "back": "alohajet [--tab <id>] back\n  Step back in the tab in use's history.",
     "keys": "alohajet [--tab <id>] keys <chord>\n  Send a key or chord to whatever has focus, e.g. \"Enter\", \"Control+a\".",
     "wait": "alohajet [--tab <id>] wait <css-selector> [--timeout-ms <n>]\n  Poll until an element matches, or the timeout (default 10000, capped at 30000).",
-    "mcp": "alohajet mcp\n  Serve the eight tools as an MCP server over stdio."
+    "upload": "alohajet [--tab <id>] upload <ref> <path> [<path>...]\n  Attach files to a file input by ref. Paths are read from THIS machine and must\n  be absolute. Clicking the input instead opens a native dialog nothing here can\n  drive, so click refuses it — this is the way in.",
+    "mcp": "alohajet mcp\n  Serve the nine tools as an MCP server over stdio."
 ]
 
 let usage = """
@@ -126,6 +127,7 @@ COMMANDS
   goto <url> | back                 navigate the tab in use
   keys <chord>                      send a key or chord
   wait <css> [--timeout-ms <n>]     wait for an element
+  upload <ref> <path>...            attach files to a file input by ref
   mcp                               run as an MCP server on stdio
 
 AGENT (the ONE thing here that is not a tool call)
@@ -575,6 +577,16 @@ func toolCall(
         var arguments: [String: Any] = ["selector": try args.required(1, "css-selector")]
         if let timeout = try args.int("--timeout-ms") { arguments["timeout_ms"] = timeout }
         return ("page_wait_for", arguments)
+
+    case "upload":
+        // Every positional after the ref is a path, so `upload <ref> a.png b.png` is one
+        // call. A path that starts with `-` is still a flag to the parser above — pass it
+        // after `--`, the same escape `type` documents.
+        let ref = try args.required(1, "ref")
+        let paths = Array(args.positional.dropFirst(2))
+        guard !paths.isEmpty else { throw CLIError(message: "missing <path>", code: exitUsage) }
+        try await useTab(session, args.value("--tab"))
+        return ("page_upload", ["aloha_id": ref, "paths": paths])
 
     default:
         throw CLIError(message: "unknown command \"\(command)\". Try --help.", code: exitUsage)

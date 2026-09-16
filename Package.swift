@@ -14,6 +14,16 @@ let package = Package(
     products: [
         .library(name: "BrowserTools", targets: ["BrowserTools"]),
         .library(name: "AgentDriver", targets: ["AgentDriver"]),
+        // The two lower layers are products because consumers name their types
+        // directly, not merely through `BrowserTools`: `BrowserToolSession.client`
+        // is public and typed `CDPClient`, and a host implements the ToolABI
+        // protocols (`TabsService`, `ExecutorSession`, `ExecutorTool`) itself.
+        // Depending on `BrowserTools` alone does put both modules on the search
+        // path, so `import CDP` compiles today — but that is SwiftPM leaking a
+        // transitive target, not a promise, and it breaks the moment SwiftPM
+        // tightens it.
+        .library(name: "ToolABI", targets: ["ToolABI"]),
+        .library(name: "CDP", targets: ["CDP"]),
         .executable(name: "alohajet", targets: ["alohajet"]),
     ],
     targets: [

@@ -55,7 +55,7 @@ public final class AbortSignal {
     public var aborted: Bool { return _aborted }
     public var reason: String? { return _reason }
 
-    func abort(_ reason: String?) {
+    public func abort(_ reason: String?) {
         let handlers: [() -> Void]? = {
             if _aborted { return nil }
             _aborted = true
@@ -90,7 +90,7 @@ public final class AbortSignal {
     /// aborted). The suspension also resolves when the awaiting task is
     /// cancelled, so a structured race that loses to another branch can unwind
     /// instead of leaking a permanently suspended child task.
-    func waitUntilAborted() async {
+    public func waitUntilAborted() async {
         let state = AbortWaitState()
         await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in

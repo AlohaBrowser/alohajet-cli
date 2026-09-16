@@ -4,7 +4,7 @@ import ToolABI
 /// The order is the advertising order — ``getNativeAgentToolSchemas()`` maps over
 /// this list, so it is also the order a `tools/list` response comes back in.
 /// `manage_tabs` leads because it is the only one that can produce the aloha-ids
-/// the other seven address.
+/// the other eight address.
 public let nativeAgentToolNames: [String] = [
     "manage_tabs",
     "page_click",
@@ -13,10 +13,11 @@ public let nativeAgentToolNames: [String] = [
     "get_text",
     "page_navigate",
     "page_press_keys",
-    "page_wait_for"
+    "page_wait_for",
+    "page_upload"
 ]
 
-/// In ``nativeAgentToolNames`` order. Deliberately eight and not more: the verbs the
+/// In ``nativeAgentToolNames`` order. Deliberately nine and not more: the verbs the
 /// underlying bridge exposes are a superset, and each one added is a permanent public
 /// surface.
 public func getNativeAgentTools() -> [ExecutorTool] {
@@ -28,6 +29,7 @@ public func getNativeAgentTools() -> [ExecutorTool] {
         GetTextExecutorTool(),
         PageNavigateExecutorTool(),
         PagePressKeysExecutorTool(),
-        PageWaitForExecutorTool()
+        PageWaitForExecutorTool(),
+        PageUploadExecutorTool()
     ]
 }

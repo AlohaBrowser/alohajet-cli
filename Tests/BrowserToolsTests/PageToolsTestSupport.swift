@@ -95,7 +95,9 @@ final class PageToolsStubTabsModel: TabsModel, LivePageTargetAdopting {
     func tab(_ id: String) -> TabHandle? { handles[id] }
 
     func createTab(_ spec: TabCreateSpec) -> TabHandle {
-        let handle = PageToolsStubTabHandle(id: "stub-\(handles.count)", url: spec.url, tabType: spec.tabType)
+        let handle = PageToolsStubTabHandle(
+            id: "stub-\(handles.count)", url: spec.url, tabType: spec.tabType,
+            openedByHuman: spec.openedByHuman)
         handles[handle.id] = handle
         order.append(handle.id)
         return handle

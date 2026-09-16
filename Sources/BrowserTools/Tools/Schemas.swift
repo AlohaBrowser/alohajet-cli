@@ -3,7 +3,7 @@ import ToolABI
 
 /// The `inputSchema` uses the same `JSValue` shape as an OpenAI function tool's
 /// `parameters` and an Anthropic tool's `input_schema`, and the same shape MCP's
-/// `tools/list` expects — so the eight entries below advertise to any of the
+/// `tools/list` expects — so the nine entries below advertise to any of the
 /// three with no translation.
 public struct NativeToolSchema: Sendable, Equatable {
     public var name: String
@@ -90,7 +90,7 @@ Work with browser tabs. Six actions.
 
 **read** — returns one tab's page as interactive markdown: headings, lists, links, tables and paragraphs, with every actionable element (link, button, input, select) carrying a trailing {aloha-id="..."} marker. Those ids are what page_click, page_type, page_select and get_text address. A tab that cannot produce interactive markdown (a non-web tab, or one with no attached DOM) falls back to plain markdown with no ids.
 
-**open** — opens a new tab at url AND returns its page in the same result, so one call navigates and reads. Only http and https URLs are accepted.
+**open** — opens a new tab at url AND returns its page in the same result, so one call navigates and reads. Only http and https URLs are accepted. Pass controlled_by: "user" instead when you are handing the user a link to read rather than a page you will drive; that opens an ordinary background tab and returns only its id.
 
 **close** — closes a tab by id. Close the tabs you opened once you are done with them. Only those: a tab that was already open when this session started, or that the user opened, is refused — "list" marks them.
 
@@ -117,8 +117,14 @@ private let manageTabsSchema = objectSchema([
     )),
     ("use", schemaField(
         type: "boolean",
-        description: "Applies to \"open\". Default true: the new tab becomes the one the page tools address, sparing a separate \"use\" call. The page comes back in the result either way. Pass false for a batch of opens, or when you do not intend to interact with the page.",
+        description: "Applies to \"open\". Default true: the new tab becomes the one the page tools address, sparing a separate \"use\" call. The page comes back in the result either way. Pass false for a batch of opens, or when you do not intend to interact with the page. Ignored when controlled_by is \"user\".",
         defaultValue: .bool(true)
+    )),
+    ("controlled_by", schemaField(
+        type: "string",
+        description: "Applies to \"open\". \"agent\" (the default) opens a tab this session owns: it is marked agent-controlled, so the host shows its AI indicator and exempts it from background throttling, its network traffic is recorded when the session logs it, and it is taken into use with its page in the result. \"user\" opens an ordinary background tab instead, exactly as if the user had middle-clicked the link — no indicator, no recording, not taken into use, no page in the result, and close refuses it afterwards because it counts as the user's. Use it for links you are handing the user to read, not pages you intend to drive.",
+        enumValues: ["agent", "user"],
+        defaultValue: .string("agent")
     )),
     ("include_screenshot", schemaField(
         type: "boolean",
@@ -255,6 +261,23 @@ private let pageWaitForSchema = objectSchema([
     ))
 ], required: ["selector"])
 
+private let pageUploadDescription =
+    "Attach files to a file input on the active tab by its aloha-id. This is how you upload: a plain "
+    + "page_click on a [uploadable] element is refused, because it opens a native OS file dialog that is "
+    + "invisible to you and cannot be driven. Paths are read from the machine running this tool, so they "
+    + "must be absolute. If the element has no file <input>, the files are dropped on it instead, which is "
+    + "what a dropzone expects."
+
+private let pageUploadSchema = objectSchema([
+    ("aloha_id", schemaField(type: "string", description: "The aloha-id of the [uploadable] file input, or of the dropzone holding it.")),
+    ("paths", schemaField(
+        type: "array",
+        description: "Absolute paths of the files to attach, in order. They are read from this machine, not from the page.",
+        items: schemaField(type: "string"),
+        minItems: 1
+    ))
+], required: ["aloha_id", "paths"])
+
 private let nativeToolSchemaTable: [String: NativeToolSchema] = [
     "manage_tabs": NativeToolSchema(name: "manage_tabs", description: manageTabsDescription, inputSchema: manageTabsSchema),
     "page_click": NativeToolSchema(name: "page_click", description: pageClickDescription, inputSchema: pageClickSchema),
@@ -263,8 +286,45 @@ private let nativeToolSchemaTable: [String: NativeToolSchema] = [
     "get_text": NativeToolSchema(name: "get_text", description: getTextDescription, inputSchema: getTextSchema),
     "page_navigate": NativeToolSchema(name: "page_navigate", description: pageNavigateDescription, inputSchema: pageNavigateSchema),
     "page_press_keys": NativeToolSchema(name: "page_press_keys", description: pagePressKeysDescription, inputSchema: pagePressKeysSchema),
-    "page_wait_for": NativeToolSchema(name: "page_wait_for", description: pageWaitForDescription, inputSchema: pageWaitForSchema)
+    "page_wait_for": NativeToolSchema(name: "page_wait_for", description: pageWaitForDescription, inputSchema: pageWaitForSchema),
+    "page_upload": NativeToolSchema(name: "page_upload", description: pageUploadDescription, inputSchema: pageUploadSchema)
 ]
+
+/// The wire surface a consumer can pin: tool name -> parameter name -> that parameter's enum
+/// values, empty when it has none. Derived from the schemas above, so it cannot drift from what
+/// is actually advertised.
+///
+/// NAMES AND ENUM VALUES ONLY, never the prose. `manage_tabs`'s description alone is over 4,000
+/// characters, and a snapshot that churns on every wording tweak is a test people switch off —
+/// which leaves the wire unpinned, which is worse than not pinning it. The names are what other
+/// code hardcodes: a consumer repeats a tool or parameter name as a bare string at every call
+/// site, and a host gates the surface with a by-name allow-list. Renaming one here is a silent
+/// break on both sides unless this pin fails first.
+///
+/// Top-level parameters only. A nested item property (`page_type`'s `fields[]`) reuses a name
+/// that is already a top-level parameter of the same tool, so a by-name allow-list sees it here.
+///
+/// The un-advertised legacy synonyms `manage_tabs` still accepts (`tabId`, `focus`, `unfocus` —
+/// see ``manageTabsLegacyWireHits``) are absent by construction: they are not in a schema.
+public let canonicalToolWireSurface: [String: [String: [String]]] =
+    nativeToolSchemaTable.mapValues { schemaWireSurface($0.inputSchema) }
+
+/// The parameter names and enum values of one `objectSchema`. `last(where:)` because `JSValue`
+/// object members are an ordered list that permits duplicate keys, with the last one winning.
+private func schemaWireSurface(_ schema: JSValue?) -> [String: [String]] {
+    guard case let .object(members)? = schema,
+          case let .object(properties)? = members.last(where: { $0.0 == "properties" })?.1
+    else { return [:] }
+    return Dictionary(uniqueKeysWithValues: properties.map { name, field in
+        guard case let .object(attributes) = field,
+              case let .array(values)? = attributes.last(where: { $0.0 == "enum" })?.1
+        else { return (name, []) }
+        return (name, values.compactMap { value in
+            guard case let .string(text) = value else { return nil }
+            return text
+        })
+    })
+}
 
 /// Returns the advertising schema for every browser tool, in the same order as
 /// ``nativeAgentToolNames``.
@@ -282,7 +342,7 @@ public func getNativeAgentToolSchema(_ name: String) -> NativeToolSchema? {
 ///
 /// WRITTEN OUT BY HAND, and it has to be. Nothing in this package derives it: a
 /// classifier that enumerated "every mutating tool" would list none of these
-/// eight and answer read-only for all of them, which is false for six.
+/// nine and answer read-only for all of them, which is false for seven.
 ///
 /// `manage_tabs` is annotated **false** even though its `list` and `read`
 /// actions are read-only — `readOnlyHint` is per tool, not per call, and the
@@ -295,5 +355,6 @@ public let nativeAgentToolReadOnlyHints: [String: Bool] = [
     "get_text": true,
     "page_navigate": false,
     "page_press_keys": false,
-    "page_wait_for": true
+    "page_wait_for": true,
+    "page_upload": false
 ]

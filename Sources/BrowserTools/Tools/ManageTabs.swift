@@ -16,7 +16,7 @@ import ToolABI
             return RawToolResult(output: "Browser session not available.", isError: true)
         }
 
-        let tabId = Self.string(input, "tab_id")
+        let tabId = Self.string(input, "tab_id") ?? Self.legacySpelled(input, "tabId")
         let url = Self.string(input, "url")
         // AN OMITTED `action` WITH A `url` HAS ONE MEANING, so do it instead of spending a round
         // to discover the schema. Measured across the last 40 run directories: 13 `Unknown action:` results
@@ -27,7 +27,7 @@ import ToolABI
         // `tab_id` is NOT inferred: read, close and use all take one, so choosing among them would be a
         // real guess and would silently do the wrong thing. Only the unambiguous case is filled in.
         let requested = Self.string(input, "action") ?? ""
-        let action = requested.isEmpty && url != nil ? "open" : requested
+        let action = canonicalManageTabsAction(requested.isEmpty && url != nil ? "open" : requested)
         let webExtractionOptions = context.services?.webExtractionOptions ?? .baseline
         let ctx = ManageTabsActionContext(
             sessionId: context.sessionId,
@@ -62,13 +62,18 @@ import ToolABI
             guard let url else {
                 return RawToolResult(output: "url is required for open action", isError: true)
             }
-            let use = Self.bool(input, "use") != false
+            // Anything that is not "user" is the agent, collapsed here rather than compared
+            // again downstream: an unrecognized value must not land half-way, opening an agent
+            // tab that is then not taken into use. A tab opened FOR the user never is — the
+            // page tools address the agent's own tabs.
+            let controlledBy = Self.string(input, "controlled_by") == "user" ? "user" : "agent"
+            let use = controlledBy == "agent" && Self.bool(input, "use") != false
             // `open` returns the page too: two actions that return the same thing must not
             // disagree about what "the page" includes.
             let openIncludeScreenshot = resolveIncludeScreenshot(
                 explicit: Self.bool(input, "include_screenshot"),
                 default: webExtractionOptions.defaultIncludeScreenshot)
-            result = await manageTabsOpen(url, tabsWindow, ctx, use, openIncludeScreenshot)
+            result = await manageTabsOpen(url, tabsWindow, ctx, use, controlledBy, openIncludeScreenshot)
         case "close":
             guard let tabId else {
                 return RawToolResult(output: "tab_id is required for the close action", isError: true)
@@ -108,6 +113,47 @@ import ToolABI
     static func bool(_ input: WorkflowValue?, _ key: String) -> Bool? {
         guard case let .object(fields)? = input, case let .bool(value)? = fields[key] else { return nil }
         return value
+    }
+
+    /// Reads a parameter under its un-advertised legacy name, counting the hit. Counted on
+    /// read and not on use: a `tabId` in a call whose action ignores it is still evidence the
+    /// old spelling is in circulation. See the shim note below ``manageTabsLegacyWireHits``.
+    static func legacySpelled(_ input: WorkflowValue?, _ key: String) -> String? {
+        guard let value = string(input, key) else { return nil }
+        manageTabsLegacyWireHits[key, default: 0] += 1
+        return value
+    }
+}
+
+// MARK: - Legacy wire compatibility — TEMPORARY, one release
+
+// This tool used to spell its tab parameter `tabId` and its selection actions `focus` /
+// `unfocus`; the spelling here (`tab_id`, `use` / `unuse`) is the one that survives. But a
+// compacted transcript and a resumed session both replay whatever spelling they were RECORDED
+// with, so refusing the old one makes the model spend retries on a call that worked when it
+// made it. The synonyms are therefore accepted and deliberately NOT advertised: the schema
+// names the canonical spelling only, so nothing new ever learns them.
+//
+// RETIRED ON EVIDENCE, NOT ON A GUESS: when ``manageTabsLegacyWireHits`` stays empty across a
+// release, every transcript still in circulation has been re-recorded in the current spelling,
+// and the two call sites (`legacySpelled` above, `canonicalManageTabsAction` below) go with it.
+
+/// How often each un-advertised legacy spelling — `"tabId"`, `"focus"`, `"unfocus"` — has been
+/// accepted in this process. Never reset, so a host can read it at shutdown.
+///
+/// `@MainActor` is written out because the module's default isolation did not reach this global:
+/// without the attribute every reference from another module is rejected as unisolated shared
+/// mutable state.
+@MainActor public private(set) var manageTabsLegacyWireHits: [String: Int] = [:]
+
+/// Translates a legacy action synonym to the canonical one, counting it on the way through.
+private func canonicalManageTabsAction(_ requested: String) -> String {
+    switch requested {
+    case "focus", "unfocus":
+        manageTabsLegacyWireHits[requested, default: 0] += 1
+        return requested == "focus" ? "use" : "unuse"
+    default:
+        return requested
     }
 }
 
@@ -226,8 +272,19 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
                     signal: ctx.abortSignal)
             }
 
-            let interactResult = try await readPage()
+            var interactResult = try await readPage()
             if let abortedAfterDom = abortedResultOrNull(ctx.abortSignal?.aborted == true) { return abortedAfterDom }
+
+            // A CAPTCHA the host cleared after the read leaves this result describing a
+            // page that is no longer there, so the remediated page is read AGAIN — once,
+            // and only when the host says the page actually changed. Probed rather than
+            // required, like the other tab seams: nothing in this package conforms, so
+            // with no host behind it this is one read, as it was.
+            if let remediating = tab as? PageReadRemediating,
+               await remediating.remediateAfterRead(ctx.abortSignal) {
+                if let abortedAfterRemediation = abortedResultOrNull(ctx.abortSignal?.aborted == true) { return abortedAfterRemediation }
+                interactResult = try await readPage()
+            }
 
             var sections: [String] = []
             sections.append("Tab: \"\(title)\" (ID: \"\(tabId)\")\nURL: \(url)\(viewportLineFor(tab))")
@@ -292,13 +349,17 @@ private func viewportLineFor(_ tab: TabHandle) -> String {
     return "\nViewport: \(bounds.width)x\(bounds.height)"
 }
 
-func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ use: Bool, _ includeScreenshot: Bool) async -> TabToolResult {
+func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ use: Bool, _ controlledBy: String, _ includeScreenshot: Bool) async -> TabToolResult {
     let normalized: String
     switch validateOpenUrl(url) {
     case let .ok(value):
         normalized = value
     case let .rejected(reason):
         return TabToolResult(output: reason, isError: true)
+    }
+
+    if controlledBy == "user" {
+        return manageTabsOpenUserControlled(normalized, tabsWindow)
     }
 
     let existingTab = tabsWindow.tabs.orderedTabs.first { tab in
@@ -368,6 +429,33 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
         url: normalized,
         faviconUrl: newTab.faviconUrl?.isEmpty == false ? newTab.faviconUrl : nil,
         images: opened.images
+    )
+}
+
+/// `controlled_by: "user"`: a tab opened FOR the user, not one the agent drives. It is created
+/// `openedByHuman`, the same flag a tab that was already open carries — so it gets no agent
+/// controller, no network recording, is never taken into use, and `close` refuses it. That last
+/// one is a real difference from an agent tab and the receipt says so.
+func manageTabsOpenUserControlled(_ url: String, _ tabsWindow: TabsWindow) -> TabToolResult {
+    let tab = tabsWindow.tabs.createTab(TabCreateSpec(tabType: "website", url: url, openedByHuman: true))
+    // The handle is allocation-only — the real browser target is created on first attach, and
+    // nothing else ever attaches a user tab, so without this it stays a phantom the user never
+    // sees. Not awaited: a background tab is throttled, so waiting out its load would stall the
+    // open for the whole wake budget for a page the agent is not going to read.
+    Task { _ = try? await tab.wake(nil) }
+    let lines = [
+        "Opened: \(url)",
+        "Tab ID: \(tab.id)",
+        "This tab is the user's: opened in the background like a middle-clicked link, with no AI "
+            + "indicator and no network recording, and it is NOT the tab the page tools address. "
+            + "You can read it; you cannot close it."
+    ]
+    return TabToolResult(
+        output: lines.joined(separator: "\n"),
+        tabId: tab.id,
+        title: tab.title?.isEmpty == false ? tab.title : nil,
+        url: url,
+        faviconUrl: tab.faviconUrl?.isEmpty == false ? tab.faviconUrl : nil
     )
 }
 

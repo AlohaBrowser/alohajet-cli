@@ -33,13 +33,25 @@ struct CLIArgumentTests {
     /// undiscoverable.
     @Test("every command has its own help page", arguments: [
         "open", "read", "tabs", "close", "quit", "click", "type",
-        "select", "text", "goto", "back", "keys", "wait", "mcp",
+        "select", "text", "goto", "back", "keys", "wait", "upload", "mcp",
     ])
     func perCommandHelp(_ command: String) throws {
         let run = try runCLI([command, "--help"])
         #expect(run.status == 0, "\(command) --help exited \(run.status)")
         #expect(run.stdout.contains("alohajet \(command)") || run.stdout.contains(command),
                 "\(command) --help printed nothing about itself")
+    }
+
+    /// `upload` is the one verb whose arguments are VARIADIC — a ref then any number of
+    /// paths — so the summary line has to say so or the shape is undiscoverable, which is
+    /// how `click --double` went unused.
+    @Test func uploadAdvertisesItsVariadicShape() throws {
+        let usage = try runCLI(["--help"])
+        #expect(usage.stdout.contains("upload <ref> <path>"))
+
+        let help = try runCLI(["upload", "--help"])
+        #expect(help.status == 0)
+        #expect(help.stdout.contains("alohajet [--tab <id>] upload <ref> <path> [<path>...]"))
     }
 
     @Test func helpForAnUnknownCommandIsAUsageError() throws {
