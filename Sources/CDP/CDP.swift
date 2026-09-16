@@ -425,7 +425,12 @@ public actor CDPClient: CDPTransport {
     /// subscription exists — letting a subscriber that must not miss early events
     /// (e.g. console capture during code execution) subscribe race-free.
     public func subscribeEvents() -> AsyncStream<CDPEvent> {
-        let id = UUID()
+        subscribeEvents(id: UUID())
+    }
+
+    /// ``subscribeEvents()`` under a caller-chosen id, so the subscriber can end it
+    /// with ``endEventSubscription(_:)``.
+    public func subscribeEvents(id: UUID) -> AsyncStream<CDPEvent> {
         let stream = AsyncStream<CDPEvent> { continuation in
             registerEventStream(id: id, continuation: continuation)
             continuation.onTermination = { _ in
@@ -433,6 +438,14 @@ public actor CDPClient: CDPTransport {
             }
         }
         return stream
+    }
+
+    /// Ends the subscription registered under `id`. Finishing the stream from this
+    /// side delivers every event already dispatched into it before the stream
+    /// completes, so a consumer that drains to completion is guaranteed to have seen
+    /// them — which waiting a fixed settle delay cannot guarantee on a loaded machine.
+    public func endEventSubscription(_ id: UUID) {
+        eventContinuations.removeValue(forKey: id)?.finish()
     }
 
     /// Close the channel and fail any in-flight requests.
