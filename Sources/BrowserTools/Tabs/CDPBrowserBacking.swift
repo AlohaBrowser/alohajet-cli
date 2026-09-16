@@ -188,27 +188,28 @@ final class SessionScopedCDPTransport: CDPTransport {
 /// accumulates up to 50 ``ConsoleCapture`` entries while active. Only the three
 /// levels `log` / `warn` / `error` are recorded.
 final class ConsoleCaptureSession {
-    private let session: CDPTabSession
     private var entries: [ConsoleCapture] = []
     private var forwarder: Task<Void, Never>?
     private var consumer: Task<Void, Never>?
     private var continuation: AsyncStream<JSValue>.Continuation?
+    private var endSubscription: (@Sendable () async -> Void)?
 
     static let maxEntries = 50
 
-    nonisolated init(session: CDPTabSession) {
-        self.session = session
-    }
-
     /// Begins consuming events from a pre-registered CDP event stream. A
     /// forwarder task copies matching `Runtime.consoleAPICalled` payloads
-    /// (filtered to this session's id) into an owned stream; a consumer task
-    /// drains that stream and records each entry. Splitting the two lets
-    /// ``stop()`` finish the owned stream and await the consumer, draining every
-    /// buffered payload deterministically. The caller passes a stream obtained
-    /// via `CDPClient.subscribeEvents()` so no early event is missed.
-    func start(events: AsyncStream<CDPEvent>) {
-        let session = self.session
+    /// (filtered to `sessionId`, fixed for the capture and so read once here
+    /// rather than per event) into an owned stream; a consumer task drains that
+    /// stream and records each entry. Splitting the two lets ``stop()`` finish the
+    /// owned stream and await the consumer, draining every buffered payload
+    /// deterministically. The caller passes a stream obtained via
+    /// `CDPClient.subscribeEvents(id:)` so no early event is missed, and
+    /// `endSubscription` ends that same subscription — the only way to drain it to
+    /// completion instead of hoping a settle delay was long enough.
+    func start(events: AsyncStream<CDPEvent>,
+               sessionId: String?,
+               endSubscription: @escaping @Sendable () async -> Void) {
+        self.endSubscription = endSubscription
         let (stream, continuation) = AsyncStream<JSValue>.makeStream()
         self.continuation = continuation
         consumer = Task { [weak self] in
@@ -220,8 +221,7 @@ final class ConsoleCaptureSession {
         forwarder = Task { [weak self] in
             for await event in events {
                 if Task.isCancelled { break }
-                let sid = await session.sessionId
-                guard event.sessionId == nil || event.sessionId == sid else { continue }
+                guard event.sessionId == nil || event.sessionId == sessionId else { continue }
                 guard event.method == "Runtime.consoleAPICalled" else { continue }
                 guard self != nil else { break }
                 continuation.yield(event.params)
@@ -231,14 +231,16 @@ final class ConsoleCaptureSession {
 
     /// Drains and ends the capture, returning the accumulated entries.
     ///
-    /// A short settle lets the forwarder pull every event already delivered to
-    /// the client's event stream (the caller issues a CDP barrier round-trip
-    /// first, so those deliveries have happened) into the owned stream; the owned
-    /// stream is then finished and the consumer awaited, which delivers all
-    /// buffered payloads before completing — so the recorded set is exact.
+    /// Ending the client subscription finishes the event stream after everything
+    /// already dispatched into it (the caller issues a CDP barrier round-trip first,
+    /// so those deliveries have happened), so awaiting the forwarder drains every one
+    /// of them into the owned stream; that stream is then finished and the consumer
+    /// awaited, which delivers all buffered payloads before completing — so the
+    /// recorded set is exact, with nothing riding on how fast the machine is.
     func stop() async -> [ConsoleCapture] {
-        try? await Task.sleep(nanoseconds: 20_000_000) // 20ms forwarder settle
-        forwarder?.cancel()
+        await endSubscription?()
+        endSubscription = nil
+        await forwarder?.value
         forwarder = nil
         continuation?.finish()
         continuation = nil
@@ -701,11 +703,15 @@ public final class CDPAgentBridgeBackend: AgentBridgeBackend {
         }
         // Register the event subscription before enabling the domain so no
         // `Runtime.consoleAPICalled` emitted after enable can race ahead of it.
-        let events = await session.client.subscribeEvents()
+        let subscription = UUID()
+        let events = await session.client.subscribeEvents(id: subscription)
         _ = try? await session.client.send(method: "Runtime.enable", params: [:], sessionId: sessionId)
-        let capture = ConsoleCaptureSession(session: session)
+        let capture = ConsoleCaptureSession()
         consoleCapture = capture
-        capture.start(events: events)
+        let client = session.client
+        capture.start(events: events, sessionId: sessionId) {
+            await client.endEventSubscription(subscription)
+        }
     }
 
     /// Stops the active console capture and returns the accumulated entries.
