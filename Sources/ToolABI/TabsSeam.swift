@@ -72,6 +72,22 @@ public protocol LivePageTargetAdopting: AnyObject {
     func adoptLiveTarget(_ id: String) async -> TabHandle?
 }
 
+/// Clearing whatever blocked a page read — a CAPTCHA a host can solve — once the read
+/// has already happened. Kept off ``TabHandle`` and probed with `as?`, like the seams
+/// above: a handle with no remediation behind it conforms to nothing and the read path
+/// stays exactly one read.
+///
+/// It cannot live INSIDE the read: a successful remediation must be followed by a fresh
+/// read, and a read that starts a read recurses. So the read path calls it between its
+/// two reads, and `signal` is the calling tool's own cancellation token — remediation
+/// spends real time and a user pressing Stop has to unwind it.
+public protocol PageReadRemediating: AnyObject {
+    /// Runs at most one remediation attempt against the page just read. `true` when the
+    /// caller should read again (the page changed); `false` when nothing on the page
+    /// qualified, or this document already had its one attempt.
+    func remediateAfterRead(_ signal: AbortSignal?) async -> Bool
+}
+
 public protocol TabHandle: AgentControllableTab {
     var id: String { get }
     var title: String? { get }
@@ -155,7 +171,11 @@ public protocol TabsService: AnyObject {
 ///
 /// Holds reference-typed service handles and is main-actor isolated, like the
 /// execution context it is threaded through.
-public final class NativeToolServices {
+///
+/// `open` rather than `final`: a host with a wider service bundle (the private
+/// agent carries 27 stored handles) subclasses this instead of either side
+/// widening — these three are the only ones the tools in this package read.
+open class NativeToolServices {
     public let tabsService: TabsService?
     public let session: ChatModeSession?
     /// The toggleable web-extraction options read by the `manage_tabs` read path.

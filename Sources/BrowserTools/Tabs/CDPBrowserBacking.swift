@@ -2,18 +2,20 @@ import Foundation
 import CDP
 import ToolABI
 
-/// The gate a navigation asks for its turn at before `Page.navigate` is sent, so
-/// a host that wants to pace how fast the agent walks a site can impose one. The
-/// default is ``NoPacing``: every turn is granted immediately.
-public protocol PacingGate: Sendable {
-    /// Waits until this navigation may proceed. Throwing cancels the navigation.
-    func waitForTurn(_ url: String) async throws
-}
-
-public struct NoPacing: PacingGate {
-    public init() {}
-    public func waitForTurn(_ url: String) async throws {}
-}
+/// The gate a navigation asks for its turn at before the page is fetched, so a host
+/// that paces how fast the agent walks a site can impose one: `(url, profileId,
+/// signal)`, throwing to cancel the navigation. Absent (`nil`) every turn is granted
+/// immediately.
+///
+/// Wired once on ``CDPTabsModel`` and carried by every handle it builds, because a
+/// session's navigations leave through two different doors — `Page.navigate` for a
+/// goto, `Target.createTarget` for an open — and a pacer hooked to one lets the other
+/// past unmetered.
+///
+/// `profileId` is the budget the host charges this navigation against (a per-domain
+/// daily quota is the case this exists for); it is `nil` wherever the caller has none,
+/// which the open path always does.
+public typealias NavigationPacer = @MainActor @Sendable (String, String?, AbortSignal?) async throws -> Void
 
 /// Converts an ordered `JSValue` object into the unordered `[String: JSValue]`
 /// dictionary the CDP transport's `send` expects. Non-object values yield an
@@ -581,17 +583,14 @@ nonisolated struct CDPDomTreeScriptProvider: DomTreeScriptProvider {
 public final class CDPAgentBridgeBackend: AgentBridgeBackend {
     private let handle: CDPTabHandle
     private let signal: AbortSignal?
-    private let pacing: PacingGate
     private let cursorAnimator: AgentCursorAnimator
 
     public init(
         tab: CDPTabHandle,
-        signal: AbortSignal? = nil,
-        pacing: PacingGate = NoPacing()
+        signal: AbortSignal? = nil
     ) {
         self.handle = tab
         self.signal = signal
-        self.pacing = pacing
         self.cursorAnimator = CDPAgentCursorAnimator()
     }
 
@@ -756,9 +755,9 @@ public final class CDPAgentBridgeBackend: AgentBridgeBackend {
 
     public func navigate(url: String, profileId: String?, options: NavigationReadinessOptions) async throws {
         if isAborted { throw AgentAbortError() }
-        try await pacing.waitForTurn(url)
-        if isAborted { throw AgentAbortError() }
-        try await handle.navigateToURL(url, signal: signal)
+        // The pacer lives on the handle, not here: the open path navigates without ever
+        // building a backing, so a gate held at this level would meter half the traffic.
+        try await handle.navigateToURL(url, profileId: profileId, signal: signal)
         try await awaitReady(options)
     }
 

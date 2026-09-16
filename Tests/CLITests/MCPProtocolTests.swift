@@ -101,13 +101,13 @@ struct MCPProtocolTests {
 
     // MARK: - tools/list
 
-    @Test func toolsListIsTheEightPageToolsWithSchemasAndAnnotations() throws {
+    @Test func toolsListIsTheNinePageToolsWithSchemasAndAnnotations() throws {
         let run = try mcp([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#])
         let tools = try #require(run.result(id: 2)?["tools"] as? [[String: Any]])
         let names = tools.compactMap { $0["name"] as? String }
         #expect(names.sorted() == [
             "get_text", "manage_tabs", "page_click", "page_navigate",
-            "page_press_keys", "page_select", "page_type", "page_wait_for",
+            "page_press_keys", "page_select", "page_type", "page_upload", "page_wait_for",
         ])
         for tool in tools {
             let name = tool["name"] as? String ?? "?"

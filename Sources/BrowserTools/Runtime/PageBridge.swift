@@ -9,7 +9,8 @@ import ToolABI
 /// what stops the loop.
 let fileInputClickRefusalMessage =
     "Do not click elements that open a file picker — the native dialog is invisible "
-    + "to this tool and cannot be driven, so the click can never complete"
+    + "to this tool and cannot be driven, so the click can never complete. Use "
+    + "page_upload with the same aloha_id and absolute file paths instead"
 
 // MARK: - Key chord parsing
 

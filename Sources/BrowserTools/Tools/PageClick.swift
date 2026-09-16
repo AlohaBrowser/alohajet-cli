@@ -10,9 +10,10 @@ import ToolABI
 /// do, and `enqueueCdp` is a no-op outside the `buildAgentCodeRunnerScript` wrapper
 /// `executeAgentCode` installs.
 ///
-/// A plain click on a `[uploadable]` file input is refused outright — this package has no
-/// file-upload verb. That guard lives in `handleClickPendingRequest`, so it applies
-/// unconditionally; this tool does not special-case or bypass it.
+/// A plain click on a `[uploadable]` file input is refused outright, and the refusal names
+/// `page_upload` — the verb that does work — so the model does not spend a retry rediscovering
+/// it. That guard lives in `handleClickPendingRequest`, so it applies unconditionally; this
+/// tool does not special-case or bypass it.
 @MainActor public final class PageClickExecutorTool: ExecutorTool {
     public let name = "page_click"
 

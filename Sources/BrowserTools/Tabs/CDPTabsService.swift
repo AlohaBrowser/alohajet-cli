@@ -49,8 +49,13 @@ final class CDPAgentDOMSnapshotting: AgentDOMSnapshotting {
 public final class CDPTabHandle: TabHandle, StepTraceTab {
     let session: CDPTabSession
     let browserTab: CDPBrowserTab
-    private let domService: AgentDOMService
+    /// The tab's DOM driver. Public because a host's `onTabCreated` hook wires its own
+    /// `sealedRegionProvider` onto it, and that hook runs before the tab has a page to
+    /// classify — which is why it is this and not ``interactiveDriver``, the same object
+    /// behind a `tabType` gate.
+    public let domService: AgentDOMService
     private let snapshotting: CDPAgentDOMSnapshotting
+    private let pacer: NavigationPacer?
 
     private var _title: String?
     private var _tabType: String
@@ -68,12 +73,19 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// adopted live; `false` for one this session opened or a click spawned.
     public let openedByHuman: Bool
 
+    /// Fired after every ``setAIControlledTab`` with the flags as they now stand. The
+    /// hook a host hangs a per-tab navigation guard off: the guard installs when the tab
+    /// enters agent control and uninstalls when it leaves, and only the transition says
+    /// which just happened. Nothing in this package sets it.
+    public var onControlStateChange: (@MainActor @Sendable (_ isAIControlled: Bool, _ isAgentControlled: Bool) -> Void)?
+
     init(
         session: CDPTabSession,
         tabType: String,
         title: String?,
         faviconUrl: String?,
-        openedByHuman: Bool
+        openedByHuman: Bool,
+        pacer: NavigationPacer? = nil
     ) {
         self.session = session
         self.browserTab = CDPBrowserTab(session: session)
@@ -88,6 +100,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         self._title = title
         self._faviconUrl = faviconUrl
         self.openedByHuman = openedByHuman
+        self.pacer = pacer
     }
 
     // MARK: TabHandle identity
@@ -195,6 +208,15 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
             return WakeResult(ok: false, message: "Tab \"\(id)\" is unavailable because it has no live WebContents.")
         }
         do {
+            // A tab this session opened navigates by being CREATED — `Target.createTarget`
+            // carries the url — so its one fetch never reaches `navigateToURL`, and a
+            // pacer hooked only there meters every goto while every `manage_tabs open`
+            // walks past. Asked outside the 18s deadline below, which bounds the wake, not
+            // the wait for a turn. A tab whose real target already exists is merely being
+            // woken, nothing is fetched, and it asks for no turn.
+            if session.effectiveTargetId == nil, !session.url.isEmpty {
+                try await pacer?(session.url, nil, signal)
+            }
             // 18s covers 15s load wait plus attach / Page.enable / bringToFront.
             return try await withCDPDeadline(milliseconds: 18_000) {
                 let sessionId = try await self.session.ensureAttached()
@@ -415,7 +437,14 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
 
     /// Navigates the attached page to `url` via `Page.navigate` over the tab's
     /// flat session, then awaits the load to stop before readers see the new url.
-    public func navigateToURL(_ url: String, signal: AbortSignal?) async throws {
+    ///
+    /// A wired ``NavigationPacer`` is asked for its turn first; `profileId` is the budget
+    /// the host charges the navigation against, `nil` when the caller holds none.
+    public func navigateToURL(_ url: String, profileId: String? = nil, signal: AbortSignal?) async throws {
+        try await pacer?(url, profileId, signal)
+        // A pacer can hold a navigation for minutes. An abort raised while it waited must
+        // not then be spent loading a page nobody is waiting for.
+        if signal?.aborted == true { throw SimpleBrowserError("Operation aborted") }
         let sessionId = try await session.ensureAttached()
         try await session.ensurePageEnabled()
         _ = try await session.client.send(
@@ -580,6 +609,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
             _isBrowserAgentControlled = true
             _browserAgentControlledAgentId = agentId
         }
+        onControlStateChange?(_isAIControlledTab, _isBrowserAgentControlled)
     }
 
 }
@@ -613,16 +643,29 @@ public final class CDPTabsModel: TabsModel {
     /// there is no user to protect and the seeded `about:blank` is our own.
     private let seededTabsAreHuman: Bool
 
+    /// Handed to every handle this model builds, so both doors a navigation leaves by are
+    /// metered by the same gate. See ``NavigationPacer``.
+    private let navigationPacer: NavigationPacer?
+
+    /// Announced once per ``CDPTabHandle``, from ``register`` — the single point every
+    /// creation path funnels through, so a tab cannot reach a host unannounced and end up
+    /// with neither the host's sealed-region handling nor its navigation guard.
+    private let onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)?
+
     public init(
         client: CDPClient,
         agentControllerId: String? = nil,
         sessionId: String? = nil,
-        seededTabsAreHuman: Bool = true
+        seededTabsAreHuman: Bool = true,
+        navigationPacer: NavigationPacer? = nil,
+        onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)? = nil
     ) {
         self.client = client
         self.agentControllerId = agentControllerId
         self.sessionId = sessionId
         self.seededTabsAreHuman = seededTabsAreHuman
+        self.navigationPacer = navigationPacer
+        self.onTabCreated = onTabCreated
     }
 
     public var activeTabId: String? {
@@ -655,9 +698,9 @@ public final class CDPTabsModel: TabsModel {
             tabType: "website",
             title: nil,
             faviconUrl: nil,
-            openedByHuman: true)
-        tabs[handle.id] = handle
-        if !order.contains(handle.id) { order.append(handle.id) }
+            openedByHuman: true,
+            pacer: navigationPacer)
+        register(handle)
         return handle
     }
 
@@ -685,18 +728,24 @@ public final class CDPTabsModel: TabsModel {
             tabType: spec.tabType,
             title: nil,
             faviconUrl: nil,
-            openedByHuman: spec.openedByHuman)
+            openedByHuman: spec.openedByHuman,
+            pacer: navigationPacer)
+        // Registered — and so announced — BEFORE the control flags are written: a host
+        // that hangs its navigation guard off `onControlStateChange` has to be listening
+        // for the transition that puts this tab under the agent, and that transition is
+        // the next line. Registration reads nothing the flags write.
+        register(handle)
         if let agentId = spec.agentControllerId, !spec.openedByHuman {
             handle.setAIControlledTab(false, agentId: agentId)
             handle.chatSessionId = spec.sessionId ?? agentId
         }
-        register(handle)
         return handle
     }
 
     private func register(_ handle: CDPTabHandle) {
         tabs[handle.id] = handle
         if !order.contains(handle.id) { order.append(handle.id) }
+        onTabCreated?(handle)
     }
 
     public func closeTab(_ id: String, skipConfirm: Bool) async {
@@ -770,7 +819,8 @@ public final class CDPTabsModel: TabsModel {
                 tabType: "website",
                 title: title,
                     faviconUrl: nil,
-                openedByHuman: seededTabsAreHuman)
+                openedByHuman: seededTabsAreHuman,
+                pacer: navigationPacer)
             register(handle)
         }
     }
@@ -835,11 +885,12 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
                 tabType: "website",
                 title: title,
                     faviconUrl: nil,
-                openedByHuman: false)
+                openedByHuman: false,
+                pacer: navigationPacer)
+            // Announced before the control flags, for the reason `createTab` gives.
+            register(handle)
             handle.setAIControlledTab(false, agentId: agentControllerId)
             handle.chatSessionId = sessionId ?? agentControllerId
-            tabs[handle.id] = handle
-            if !order.contains(handle.id) { order.append(handle.id) }
             adopted.append(AdoptedTab(id: handle.id, url: handle.url, title: handle.title))
         }
         return adopted
@@ -885,7 +936,8 @@ extension CDPTabsModel: LivePageTargetAdopting {
             tabType: "website",
             title: title,
             faviconUrl: nil,
-            openedByHuman: true)
+            openedByHuman: true,
+            pacer: navigationPacer)
         register(handle)
         return handle
     }
@@ -1140,19 +1192,42 @@ public final class CDPTabsService: TabsService {
 /// per-tab agent DOM, debugger, cursor animator, and document-walker provider.
 /// A consumer that supplies only a `CDPClient` gets a `manage_tabs` / `tab_read`
 /// / click path that works without any hand-written browser code.
+///
+/// `navigationPacer` and `onTabCreated` are the whole injection surface for a host that
+/// wants more than that: the pacer gates every navigation (see ``NavigationPacer``), and
+/// `onTabCreated` hands over each ``CDPTabHandle`` the moment it is registered, before
+/// anything has driven it — which is where a host installs its own
+/// `domService.sealedRegionProvider` and `onControlStateChange`.
+///
+/// Two consequences of "the moment it is registered", both of which bite a host that
+/// reads instead of installs:
+///
+/// - The control flags and `chatSessionId` are written on the line AFTER registration,
+///   deliberately, so a host listening on `onControlStateChange` sees the transition that
+///   puts the tab under the agent rather than missing it. A hook that READS
+///   `isAIControlledTab` or `chatSessionId` therefore always reads the pre-transition
+///   value. Listen; do not read.
+/// - For tabs seeded from the browser the hook fires during this call, before the
+///   `TabsService` exists. A closure that needs the service itself has nothing to capture
+///   for those tabs — hang what it needs off the handle, or wire the seeded tabs from the
+///   host after this returns.
 public func makeCDPBrowserTabsService(
     client: CDPClient,
     windowId: String = "cdp-window",
     seed: Bool = true,
     agentControllerId: String? = nil,
     sessionId: String? = nil,
-    seededTabsAreHuman: Bool = true
+    seededTabsAreHuman: Bool = true,
+    navigationPacer: NavigationPacer? = nil,
+    onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)? = nil
 ) async -> TabsService {
     let model = CDPTabsModel(
         client: client,
         agentControllerId: agentControllerId,
         sessionId: sessionId,
-        seededTabsAreHuman: seededTabsAreHuman)
+        seededTabsAreHuman: seededTabsAreHuman,
+        navigationPacer: navigationPacer,
+        onTabCreated: onTabCreated)
     if seed { await model.seedFromBrowser() }
     let window = CDPTabsWindow(id: windowId, model: model)
     return CDPTabsService(window: window)

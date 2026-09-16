@@ -1,6 +1,6 @@
 # alohajet
 
-**Drive a real browser from the command line and from MCP. Stable element refs, eight
+**Drive a real browser from the command line and from MCP. Stable element refs, nine
 tools, zero dependencies.**
 
 [Tool reference](docs/tools.md) · [A real session](docs/demo.md) · [Security](SECURITY.md)
@@ -8,7 +8,7 @@ tools, zero dependencies.**
 
 Playwright was built to script a browser you control. alohajet is built to hand a browser
 to a model: it attaches to a Chromium that already exists — one it launched, or one you
-were already using — and exposes eight verbs that can finish a task on a web page.
+were already using — and exposes nine verbs that can finish a task on a web page.
 
 The reason to pick it over the alternatives is that **element references are derived from
 the page, not minted per snapshot**. Competing tools hand out `[ref=e1]`, `[ref=e2]` over
@@ -32,11 +32,10 @@ page, three different browsers, same ref. You can reproduce the proof yourself i
 minute; it needs Python 3 and nothing else.
 
 **What it is not**, before you spend the minute: not a Playwright replacement — no
-assertions, no test runner, no trace viewer. Not a general CDP console — eight tools,
+assertions, no test runner, no trace viewer. Not a general CDP console — nine tools,
 deliberately, against chrome-devtools-mcp's ~57. No coordinate clicking, so a `<canvas>`
-game or a WebGL viewport is unreachable. No extraction verb, no readability pass. Linux
-does not compile today, and there is no published release. Every one of those is expanded,
-with the reproduction, under [Limitations](#limitations).
+game or a WebGL viewport is unreachable. No extraction verb, no readability pass. Every one
+of those is expanded, with the reproduction, under [Limitations](#limitations).
 
 ---
 
@@ -46,7 +45,7 @@ with the reproduction, under [Limitations](#limitations).
 |---|---|
 | Swift | 6.2 or newer |
 | OS | macOS 14+. Everything on this page was run on macOS 26.2 (arm64), Swift 6.2.3, Google Chrome 152.0.7977.77. |
-| Linux | **does not compile today.** See [Limitations](#limitations). |
+| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. |
 | Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 145 MB Chrome for Testing 126 is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
 | Python 3 | only to serve the fixture pages in [The proof](#the-proof) and [docs/demo.md](docs/demo.md). |
 | Dependencies | none. Foundation only, no SwiftPM dependencies, no vendored tree. |
@@ -161,8 +160,9 @@ so it does not depend on anyone's website staying the same — is in
 | `goto <url>` / `back` | `page_navigate` |
 | `keys <chord>` | `page_press_keys` |
 | `wait <css> [--timeout-ms <n>]` | `page_wait_for` |
+| `upload <ref> <path>...` | `page_upload` |
 | `quit` | — closes the shared browser |
-| `mcp` | — serves all eight over stdio |
+| `mcp` | — serves all nine over stdio |
 
 `--tab <id>` is global, not a flag on `read`: it goes before the verb on any command that
 touches a page — `alohajet --tab <id> click <ref>`. The table names it only where you are
@@ -232,7 +232,7 @@ agent every tab and every logged-in session in that browser:
 ```
 
 A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.1.0"}`, and
-`tools/list` returns the eight tools below with `readOnlyHint=true` on exactly two,
+`tools/list` returns the nine tools below with `readOnlyHint=true` on exactly two,
 `get_text` and `page_wait_for`. The hint is per tool, not per call, so `manage_tabs` is
 false even though its `list` and `read` actions only observe. `manage_tabs` with
 `include_screenshot: true` returns a second content block of type `image` next to the text;
@@ -434,7 +434,7 @@ a hex hash is longer than `e7`. That figure comes from the private history this 
 cut out of and **is not reproducible from this repository** — every other number on this
 page is. Treat it as an order of magnitude, not a measurement.
 
-## The eight tools
+## The nine tools
 
 Full descriptions, defaults and constraints: **[docs/tools.md](docs/tools.md)** — generated
 from `Sources/BrowserTools/Tools/Schemas.swift`, with a test
@@ -443,7 +443,7 @@ below were read back off a live `tools/list`, so they are the schema, not a para
 
 | tool | arguments | required |
 |---|---|---|
-| `manage_tabs` | `action` (`list`/`read`/`open`/`close`/`use`/`unuse`), `tab_id`, `url`, `use` (default `true`), `include_screenshot` | `action` |
+| `manage_tabs` | `action` (`list`/`read`/`open`/`close`/`use`/`unuse`), `tab_id`, `url`, `use` (default `true`), `controlled_by` (`agent`/`user`, default `agent`), `include_screenshot` | `action` |
 | `page_click` | `aloha_id`, `click_type` (`single`/`double`/`triple`/`right`, default `single`) | `aloha_id` |
 | `page_type` | `aloha_id`, `text`, `fields` (array of `{aloha_id, text, replace}`, 1–20), `replace` (default `true`), `submit` (default `false`) | either `aloha_id`+`text`, or `fields` |
 | `page_select` | `aloha_id`, `text`, `index` (integer ≥ 0) | `aloha_id`, plus either `text` or `index` |
@@ -451,6 +451,7 @@ below were read back off a live `tools/list`, so they are the schema, not a para
 | `page_navigate` | `action` (`goto`/`back`), `url` | `action` |
 | `page_press_keys` | `keys` — e.g. `Enter`, `Escape`, `Control+a` | `keys` |
 | `page_wait_for` | `selector`, `timeout_ms` (default `10000`, clamped to `30000`) | `selector` |
+| `page_upload` | `aloha_id`, `paths` (array of absolute paths, 1+) | `aloha_id`, `paths` |
 
 `page_type` and `get_text` are the two batch tools, and the batching is the point: filling
 a five-field form is one call, not five rounds. Both caps are 20 and both are declared in
@@ -491,14 +492,9 @@ Every variable the sources actually read, checked with
 Not a disclaimer. These are the things that will cost you a round trip, and each one was
 reproduced on this machine before it was written down.
 
-**Linux does not build.** `Sources/BrowserTools/Session.swift:460` calls `fflush(stdout)`;
-Glibc declares `stdout` as a mutable global where Darwin declares a `let`, so Swift 6
-rejects it as non-concurrency-safe shared mutable state. The Linux CI job has failed on
-this in every run to date. macOS CI is green. There is no CI badge on this page because a
-green-on-half badge would be a lie.
-
-**No release exists.** `v0.1.0` is tagged; the release workflow ran on it and both jobs
-failed. Build from source. [RELEASING.md](RELEASING.md) has both failure messages.
+**Linux is built and tested, but nothing on this page was measured there.** Every number,
+every transcript and the ref-stability proof were produced on macOS. The Linux job builds
+and runs the suite; it does not re-run the proof.
 
 **`close` refuses tabs alohajet itself opened, under `--cdp` and `--browser aloha`.** Each
 CLI command is a new process, and the "we opened this" bookkeeping does not survive it:
@@ -529,14 +525,14 @@ win.
 
 **No extraction verb.** There is no `web_extract`, no readability pass, no site-JSON
 extractor, no "give me the article". `nativeAgentToolNames` in
-`Sources/BrowserTools/Tools/Tools.swift` is exactly the eight tools above and none of them
+`Sources/BrowserTools/Tools/Tools.swift` is exactly the nine tools above and none of them
 is an extractor. What you get is the rendered DOM serialized to markdown.
 
 **Whole capability areas are simply absent.** No performance traces or Lighthouse audits.
 No console messages. No network-request inspection a model can query. No heap snapshots. No
 device emulation, throttling, or viewport resize. No extension or PWA tools. No
-`evaluate_script`. No `hover`, `drag`, `upload_file`, or dialog handling. No screencast.
-chrome-devtools-mcp has all of those across ~57 tools; this has eight, deliberately.
+`evaluate_script`. No `hover`, `drag`, or dialog handling. No screencast.
+chrome-devtools-mcp has all of those across ~57 tools; this has nine, deliberately.
 
 **`ALOHAJET_NETWORK_LOG` is a debugging aid, and a rough one.** The file is named from an
 internal id you cannot correlate to anything the CLI prints — a tab printed as

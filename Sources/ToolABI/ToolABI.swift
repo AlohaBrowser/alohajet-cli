@@ -80,9 +80,20 @@ public struct RawToolResult: Sendable {
 
 public struct ToolResultFormatContext: Sendable {
     public var sessionId: String
+    /// The session's storage key — the path the session persists under, and the key a
+    /// host's feedback bus routes a suspended tool's answer back through. It equals
+    /// `sessionId` for a top-level session; a sub-agent's is `<parent key>/agents/<id>`,
+    /// and stripping that suffix is what finds the owning chat loop. Empty by default:
+    /// nothing in this package routes feedback, so the field is carried, not read.
+    public var sessionKey: String
+    /// The chat session this call belongs to, when there is one — the same id a tab is
+    /// stamped with (``AgentControllableTab/chatSessionId``). `nil` off a chat.
+    public var chatSessionId: String?
     public var toolCallId: String
-    public init(sessionId: String, toolCallId: String) {
+    public init(sessionId: String, sessionKey: String = "", chatSessionId: String? = nil, toolCallId: String) {
         self.sessionId = sessionId
+        self.sessionKey = sessionKey
+        self.chatSessionId = chatSessionId
         self.toolCallId = toolCallId
     }
 }
@@ -160,6 +171,10 @@ public protocol ToolSandbox: AnyObject, Sendable {
 /// The context handed to a tool's `execute`.
 public final class ToolExecutionContext {
     public let sessionId: String
+    /// See ``ToolResultFormatContext/sessionKey``.
+    public let sessionKey: String
+    /// See ``ToolResultFormatContext/chatSessionId``.
+    public let chatSessionId: String?
     public let toolCallId: String
     public let signal: AbortSignal
     public let mode: ToolMode
@@ -181,6 +196,8 @@ public final class ToolExecutionContext {
 
     public init(
         sessionId: String,
+        sessionKey: String = "",
+        chatSessionId: String? = nil,
         toolCallId: String,
         signal: AbortSignal,
         mode: ToolMode,
@@ -194,6 +211,8 @@ public final class ToolExecutionContext {
         onStatusUpdate: (@MainActor @Sendable (String, ToolResultUpdate) -> Void)? = nil
     ) {
         self.sessionId = sessionId
+        self.sessionKey = sessionKey
+        self.chatSessionId = chatSessionId
         self.toolCallId = toolCallId
         self.signal = signal
         self.mode = mode
