@@ -61,26 +61,18 @@ private func schemaField(
     return .object(members)
 }
 
-/// `anyOf` takes alternative required-key sets — the one JSON-Schema keyword that
-/// expresses "either these, or that". Two of these tools accept exactly one of
-/// two shapes and stated it only in prose, so `{}` validated and then failed at
-/// the runtime's own guard: a round spent to learn what the schema knew.
-private func objectSchema(
-    _ properties: [(String, JSValue)],
-    required: [String],
-    anyOf: [[String]]? = nil
-) -> JSValue {
-    var members: [(String, JSValue)] = [
+/// NO TOP-LEVEL COMBINATOR, BY CONSTRUCTION. OpenAI rejects a chat request whose function
+/// `parameters` carry `anyOf`/`oneOf`/`allOf`/`enum`/`const`/`not` at the top level — and it
+/// rejects the WHOLE request, every tool in it, so one such schema costs the agent every turn.
+/// An `anyOf` listing alternative required-key sets shipped here and did exactly that in
+/// production. The two tools that take either of two shapes say so in their description
+/// instead, and their executors refuse a call that names neither.
+private func objectSchema(_ properties: [(String, JSValue)], required: [String]) -> JSValue {
+    .object([
         ("type", .string("object")),
         ("properties", .object(properties)),
         ("required", .array(required.map { .string($0) }))
-    ]
-    if let anyOf {
-        members.append(("anyOf", .array(anyOf.map { keys in
-            .object([("required", .array(keys.map { .string($0) }))])
-        })))
-    }
-    return .object(members)
+    ])
 }
 
 private let manageTabsDescription = """
@@ -153,7 +145,8 @@ private let pageTypeDescription =
     + "To fill a FORM, pass all of its fields in one call as \"fields\": "
     + "[{\"aloha_id\":\"1f3a9c2b\",\"text\":\"...\"},{\"aloha_id\":\"7b21e40d\",\"text\":\"...\"}] (up to 20, filled in order) "
     + "with submit:true to press Enter once at the end — one call instead of one per field. "
-    + "For a single field, pass aloha_id and text directly."
+    + "For a single field, pass aloha_id and text directly. One of the two shapes is required: "
+    + "either aloha_id with text, or fields."
 
 private let pageTypeSchema = objectSchema([
     ("aloha_id", schemaField(type: "string", description: "The aloha-id of the element to type into. Omit when using \"fields\".")),
@@ -188,10 +181,11 @@ private let pageTypeSchema = objectSchema([
         description: "Press Enter after typing to submit. With \"fields\", pressed once after the last field.",
         defaultValue: .bool(false)
     ))
-], required: [], anyOf: [["aloha_id", "text"], ["fields"]])
+], required: [])
 
 private let pageSelectDescription =
-    "Select an option in a <select> dropdown on the active tab by its aloha-id, matching by visible text or index."
+    "Select an option in a <select> dropdown on the active tab by its aloha-id, matching by visible text or index. "
+    + "At least one of text or index is required."
 
 private let pageSelectSchema = objectSchema([
     ("aloha_id", schemaField(type: "string", description: "The aloha-id of the <select> element.")),
@@ -201,7 +195,7 @@ private let pageSelectSchema = objectSchema([
         description: "The zero-based option index to match. At least one of text/index is required.",
         minimum: 0
     ))
-], required: ["aloha_id"], anyOf: [["text"], ["index"]])
+], required: ["aloha_id"])
 
 // A CAPABILITY THE MODEL IS NOT TOLD ABOUT IS NOT A CAPABILITY. The executor reads several elements in
 // one call; unadvertised, that lever never fires. So the description says so, in the words the caller
