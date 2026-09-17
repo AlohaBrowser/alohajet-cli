@@ -163,16 +163,28 @@ struct CLIArgumentTests {
 
     // MARK: - `-p`, the agent entry
 
-    /// The whole point of the `-p` wiring: no agent endpoint means there is nothing to
-    /// run the turn, and this package will NOT quietly stand up a second agent loop to
-    /// cover for that. It must say what is missing and exit 2 — and it must NOT launch
-    /// a browser on the way, which is what would happen if `-p` fell through to the
-    /// command path.
-    @Test func promptWithoutAnEndpointNamesWhatIsMissing() throws {
-        let run = try runCLI(["-p", "book me a table"])
+    /// No `--endpoint` is no longer a usage error: the binary ships inside the app whose
+    /// agent it drives, so the loopback automation server beside it is the default and
+    /// the flag is the exception. Proven without launching anything by pointing
+    /// `ALOHA_BROWSER_APP` at a bundle that does not exist — `open -a` then fails
+    /// outright rather than falling back to whatever claims the scheme — which also
+    /// pins the OTHER half: the default lane goes through the app launcher, so its
+    /// failure is exit 3 (browser unreachable), not 2.
+    @Test func promptWithoutAnEndpointDrivesTheAppOnThisMachine() throws {
+        let run = try runCLI(
+            ["-p", "book me a table"],
+            environment: ["ALOHA_BROWSER_APP": "/nonexistent/NoSuch.app"])
+        #expect(run.status == 3, "exited \(run.status): \(run.combined)")
+        #expect(run.stderr.contains("could not launch the Aloha browser"))
+        #expect(run.stderr.contains("/nonexistent/NoSuch.app"))
+    }
+
+    /// `--endpoint "$VAR"` with the variable unset has still NAMED a host; answering it
+    /// with the local default would run the prompt against a browser nobody asked for.
+    @Test func anEmptyEndpointIsAUsageError() throws {
+        let run = try runCLI(["-p", "hi", "--endpoint="])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
-        #expect(run.stderr.contains("--endpoint"))
-        #expect(run.stderr.contains("does not run an agent loop"))
+        #expect(run.stderr.contains("--endpoint expects an http(s) URL"))
     }
 
     /// `-p ""` is a typo, not a turn.

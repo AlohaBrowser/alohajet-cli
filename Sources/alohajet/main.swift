@@ -105,7 +105,18 @@ let commandHelp: [String: String] = [
     "keys": "alohajet [--tab <id>] keys <chord>\n  Send a key or chord to whatever has focus, e.g. \"Enter\", \"Control+a\".",
     "wait": "alohajet [--tab <id>] wait <css-selector> [--timeout-ms <n>]\n  Poll until an element matches, or the timeout (default 10000, capped at 30000).",
     "upload": "alohajet [--tab <id>] upload <ref> <path> [<path>...]\n  Attach files to a file input by ref. Paths are read from THIS machine and must\n  be absolute. Clicking the input instead opens a native dialog nothing here can\n  drive, so click refuses it — this is the way in.",
-    "mcp": "alohajet mcp\n  Serve the nine tools as an MCP server over stdio."
+    "mcp": """
+alohajet mcp [--endpoint <url>]
+  Two products, one verb — the flag picks which.
+  Without --endpoint: serve the nine tools as an MCP server over stdio, driving the
+  browser the connection flags name (the tools are this process's, the Chromium is
+  built on the first tools/call).
+  With --endpoint: serve NOTHING. Relay stdio to the MCP server a running Aloha
+  browser already mounts at <url>/mcp, for a client that accepts no HTTP transport —
+  Claude Desktop's config takes {command, args, env} and drops any entry carrying
+  type/url/headers. No browser is launched on this lane and no tool runs in this
+  process. <url> must be loopback http or https; see ALOHAJET_AGENT_TOKEN.
+"""
 ]
 
 let usage = """
@@ -129,21 +140,37 @@ COMMANDS
   wait <css> [--timeout-ms <n>]     wait for an element
   upload <ref> <path>...            attach files to a file input by ref
   mcp                               run as an MCP server on stdio
+  mcp --endpoint <url>              relay stdio to a running Aloha browser's own
+                                    MCP server instead of serving these tools
 
 AGENT (the ONE thing here that is not a tool call)
-  -p <prompt> --endpoint <url>      run one agent turn: hand <prompt> to the agent
-                                    loop already running behind <url> (POST
+  -p <prompt>                       run one agent turn: hand <prompt> to the agent
+                                    loop already running behind the endpoint (POST
                                     /agent/task) and print its final answer.
-                                    NO loop runs in this process — without
-                                    --endpoint there is nothing to run the turn and
-                                    `-p` says so and exits 2. Every command above
-                                    needs a browser and no agent; `-p` needs an
-                                    agent and no browser flags.
-                                    <url> must be loopback http (127.0.0.1, ::1,
-                                    localhost) or https: see ALOHAJET_AGENT_TOKEN.
+                                    NO loop runs in this process. Every command
+                                    above needs a browser and no agent; `-p` needs
+                                    an agent and none of the browser flags below.
                                     Each `-p` runs in a FRESH conversation and
                                     prints its id on stderr, so a piped answer is
                                     still just the answer.
+  --endpoint <url>                  the agent to drive. [default: http://127.0.0.1:8765]
+                                    That default is the Aloha browser on THIS
+                                    machine: it is launched or activated for you,
+                                    and a launch that cannot work is refused by name
+                                    (exit 3) rather than by a 30s timeout. Any other
+                                    <url> launches nothing. It must be loopback http
+                                    (127.0.0.1, ::1, localhost) or https: see
+                                    ALOHAJET_AGENT_TOKEN. Present but EMPTY is a
+                                    usage error, not the default — `--endpoint
+                                    "$VAR"` with VAR unset has still named a host.
+  --headless                        on the default endpoint only: bring the app up
+                                    with no window. Refused if an instance is
+                                    already running the other way — `open --args`
+                                    reaches a cold launch and nothing else, so the
+                                    alternative is driving a visible browser while
+                                    claiming not to. Unrelated to the --headless
+                                    under CONNECTION, which is the Chromium lane's;
+                                    the two never appear in one invocation.
   --resume <chat-id>                continue that conversation instead. A host that
                                     answers with a different id is refused, not
                                     silently written to.
@@ -197,8 +224,9 @@ ENVIRONMENT
                             CDP listener on (default 9222)
   ALOHA_BROWSER_APP         path to the Aloha .app --browser aloha launches, when it
                             is not a registered install
-  ALOHAJET_AGENT_TOKEN      the bearer token `-p` sends to --endpoint. Unset: read
-                            from ~/Library/Application Support/Aloha/automation-token,
+  ALOHAJET_AGENT_TOKEN      the bearer token `-p` and `mcp --endpoint` send to that
+                            endpoint. Unset: read from
+                            ~/Library/Application Support/Aloha/automation-token,
                             where the Aloha browser provisions it — but that AMBIENT
                             token is sent to a LOOPBACK --endpoint only, since it
                             grants full control of the browser and rewrites the
@@ -665,6 +693,14 @@ func main() async -> Int32 {
     // `connect`: it builds its browser on the first `tools/call`, so a host that only
     // lists tools never pays for one. It reads the same connection flags off argv.
     if command == "mcp" {
+        // `--endpoint` selects the OTHER product behind this verb: a pipe onto a running
+        // browser's own MCP server, serving none of the tools below. `has`, not `value`:
+        // an empty `--endpoint=` has still asked for that lane, and answering it with a
+        // silent fall-through to a launched Chromium is how a host ends up driving a
+        // browser nobody is looking at.
+        if args.has("--endpoint") {
+            return await MCPRelay.main(args)
+        }
         return await MCPServer.main(Array(args.positional.dropFirst()))
     }
 

@@ -26,6 +26,19 @@ let package = Package(
         .library(name: "CDP", targets: ["CDP"]),
         .executable(name: "alohajet", targets: ["alohajet"]),
     ],
+    dependencies: [
+        // The OFFICIAL Model Context Protocol Swift SDK, linked by the EXECUTABLE
+        // TARGET ONLY — `alohajet mcp --endpoint <url>` relays a stdio MCP client onto
+        // a running Aloha browser's own `POST /mcp`. The four libraries above stay
+        // dependency-free, which is what a consumer links; only the CLI pays for this.
+        //
+        // A RANGE, not `exact:`. An app that links this package and the SDK itself
+        // normally pins the SDK `exact:`, and two `exact` requirements on one package
+        // must name the same version forever — the second one to move breaks the
+        // resolve for everyone. `from:` is satisfied by such a pin and does not have
+        // to be edited in lockstep when it moves.
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk", from: "0.12.1"),
+    ],
     targets: [
         // The tool ABI plus the two value types every layer exchanges
         // (`JSValue` for CDP params/results and tool arguments, `WorkflowValue`
@@ -48,8 +61,15 @@ let package = Package(
         // at HTTP, not at a link edge.
         .target(name: "AgentDriver", dependencies: ["ToolABI"]),
 
-        // The CLI and the MCP stdio server.
-        .executableTarget(name: "alohajet", dependencies: ["BrowserTools", "AgentDriver"]),
+        // The CLI, the MCP stdio server, and the stdio⇄HTTP relay. `MCP` stops HERE:
+        // it is the one target in this package that links a dependency, and the four
+        // libraries above are built and shipped without it.
+        .executableTarget(
+            name: "alohajet",
+            dependencies: [
+                "BrowserTools", "AgentDriver",
+                .product(name: "MCP", package: "swift-sdk"),
+            ]),
 
         .testTarget(name: "CDPTests", dependencies: ["CDP"]),
         // Drives the built binary as a subprocess — see Tests/CLITests/BinaryUnderTest.swift.
