@@ -7,10 +7,11 @@ import ToolABI
 /// Clicking it opens a native OS file-picker dialog the agent cannot see or
 /// drive, so the turn loops on "File not uploaded". Refusing with a reason is
 /// what stops the loop.
-let fileInputClickRefusalMessage =
+var fileInputClickRefusalMessage: String {
     "Do not click elements that open a file picker — the native dialog is invisible "
     + "to this tool and cannot be driven, so the click can never complete. Use "
-    + "page_upload with the same aloha_id and absolute file paths instead"
+    + "\(HostToolNames.fileInputUpload) with the same aloha_id and absolute file paths instead"
+}
 
 // MARK: - Key chord parsing
 
@@ -1031,10 +1032,15 @@ public final class AgentBrowserBridge {
         let fromY = params["fromY"]?.doubleValue ?? 0
         let toX = params["toX"]?.doubleValue ?? 0
         let toY = params["toY"]?.doubleValue ?? 0
-        let steps = Int(params["steps"]?.doubleValue ?? 0)
-        let resolvedSteps = steps > 0 ? steps : 10
+        // Every one of these arrives from the MODEL as a plain JSON number, so every
+        // conversion here is a trap waiting for `1e300`, `inf` or `NaN`. Saturating alone
+        // is not enough for `steps`: `Int.max` iterations of a CDP round-trip is a hang
+        // rather than a crash. `stepDelayMs` floors at 5ms and the default drag is 300ms,
+        // so past ~200 steps more steps buy latency, not smoothness — that is the cap.
+        let steps = intSaturating(params["steps"]?.doubleValue ?? 0)
+        let resolvedSteps = min(steps > 0 ? steps : 10, 200)
         let duration = params["duration"]?.doubleValue ?? 0
-        let resolvedDuration = duration > 0 ? duration : 300
+        let resolvedDuration = min(duration > 0 && duration.isFinite ? duration : 300, 10_000)
         let stepDelayMs = max(resolvedDuration / Double(resolvedSteps), 5)
         do {
             _ = try await sendMouseEvent(type: "mouseMoved", x: roundCoord(fromX), y: roundCoord(fromY))
@@ -1079,7 +1085,11 @@ public final class AgentBrowserBridge {
         }
     }
 
-    private func roundCoord(_ value: Double) -> Int { Int(value.rounded()) }
+    // `intSaturating`, not `Int(_:)`: the coordinates arrive from the MODEL, through
+    // `execute_code` as plain JSON numbers, and `Int(1e300.rounded())` is a runtime trap —
+    // one `aloha.tab(id).moveMouse(1e300, 0)` takes the whole process down, tests and all.
+    // Saturating pins it to a coordinate CDP will merely ignore.
+    private func roundCoord(_ value: Double) -> Int { intSaturating(value.rounded()) }
 
     @discardableResult
     private func sendMouseEvent(
@@ -1322,7 +1332,11 @@ public final class AgentBrowserBridge {
 
     private func abortableDelay(_ milliseconds: Double) async throws {
         try throwIfAborted()
-        try await Task.sleep(nanoseconds: UInt64(max(0, milliseconds) * 1_000_000))
+        // `UInt64(_:)` traps on NaN and on anything past its range, and a caller's value
+        // can descend from a model-supplied number. Clamped to a minute: a delay longer
+        // than that is a hang, and the abort checks around it only run at the ends.
+        let bounded = milliseconds.isNaN ? 0 : min(max(0, milliseconds), 60_000)
+        try await Task.sleep(nanoseconds: UInt64(bounded * 1_000_000))
         try throwIfAborted()
     }
 

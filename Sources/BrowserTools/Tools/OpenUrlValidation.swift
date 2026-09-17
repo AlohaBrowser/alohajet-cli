@@ -10,7 +10,14 @@ public let MAX_URL_LENGTH = 8192
 
 public let CONTROL_CHAR_RE = "[\\x00-\\x1f\\x7f]"
 
-public let URL_FILE_PROTOCOL_REASON = "URL not allowed: file:// cannot be opened by browser tools. These tools drive a browser over CDP; they are not a local file reader."
+/// Names the host's local-file reader when it has one (``HostToolNames/localFileRead``), and
+/// says nothing about it when it does not. A model that is told only what it cannot do
+/// retries the same thing.
+public var URL_FILE_PROTOCOL_REASON: String {
+    let base = "URL not allowed: file:// cannot be opened by browser tools. These tools drive a browser over CDP; they are not a local file reader."
+    guard let reader = HostToolNames.localFileRead else { return base }
+    return base + " Use \(reader) with the absolute path instead."
+}
 
 public func urlBadProtocolReason(_ proto: String) -> String {
     "URL not allowed: only http and https URLs can be opened via browser tools (got \(proto))."
