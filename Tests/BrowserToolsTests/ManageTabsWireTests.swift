@@ -89,6 +89,22 @@ import ToolABI
         #expect(manageTabsLegacyWireHits == before)
     }
 
+    /// `open` used to spell its background flag `focus: false`. A replayed call carrying it
+    /// must still leave the tab in use alone, or the page tools silently change target.
+    @Test func openStillHonorsTheLegacyFocusFalse() async throws {
+        let (model, session, context) = wireFixture()
+        let before = manageTabsLegacyWireHits
+
+        _ = try await call([
+            "action": .string("open"), "url": .string("https://example.com/"), "focus": .bool(false)
+        ], context)
+
+        let opened = try #require(model.orderedTabs.last)
+        #expect(!opened.openedByHuman)
+        #expect(session.active == nil)
+        #expect(manageTabsLegacyWireHits["focus", default: 0] == before["focus", default: 0] + 1)
+    }
+
     // MARK: controlled_by
 
     @Test func openControlledByUserOpensATabTheAgentDoesNotOwn() async throws {

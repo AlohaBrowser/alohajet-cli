@@ -67,7 +67,8 @@ import ToolABI
             // tab that is then not taken into use. A tab opened FOR the user never is — the
             // page tools address the agent's own tabs.
             let controlledBy = Self.string(input, "controlled_by") == "user" ? "user" : "agent"
-            let use = controlledBy == "agent" && Self.bool(input, "use") != false
+            let use = controlledBy == "agent"
+                && (Self.bool(input, "use") ?? Self.legacyBool(input, "focus")) != false
             // `open` returns the page too: two actions that return the same thing must not
             // disagree about what "the page" includes.
             let openIncludeScreenshot = resolveIncludeScreenshot(
@@ -123,20 +124,31 @@ import ToolABI
         manageTabsLegacyWireHits[key, default: 0] += 1
         return value
     }
+
+    /// ``legacySpelled`` for a boolean: `open`'s background flag used to be `focus`, and a
+    /// replayed `focus: false` that goes unread opens a tab that takes over every later page
+    /// call — the opposite of what the caller asked for, with no error anywhere.
+    static func legacyBool(_ input: WorkflowValue?, _ key: String) -> Bool? {
+        guard let value = bool(input, key) else { return nil }
+        manageTabsLegacyWireHits[key, default: 0] += 1
+        return value
+    }
 }
 
 // MARK: - Legacy wire compatibility — TEMPORARY, one release
 
-// This tool used to spell its tab parameter `tabId` and its selection actions `focus` /
-// `unfocus`; the spelling here (`tab_id`, `use` / `unuse`) is the one that survives. But a
-// compacted transcript and a resumed session both replay whatever spelling they were RECORDED
-// with, so refusing the old one makes the model spend retries on a call that worked when it
-// made it. The synonyms are therefore accepted and deliberately NOT advertised: the schema
-// names the canonical spelling only, so nothing new ever learns them.
+// This tool used to spell its tab parameter `tabId`, its selection actions `focus` / `unfocus`,
+// and `open`'s background flag `focus: false`; the spelling here (`tab_id`, `use` / `unuse`,
+// `use: false`) is the one that survives. But a compacted transcript and a resumed session both
+// replay whatever spelling they were RECORDED with, so refusing the old one makes the model
+// spend retries on a call that worked when it made it. The synonyms are therefore accepted and
+// deliberately NOT advertised: the schema names the canonical spelling only, so nothing new ever
+// learns them.
 //
 // RETIRED ON EVIDENCE, NOT ON A GUESS: when ``manageTabsLegacyWireHits`` stays empty across a
 // release, every transcript still in circulation has been re-recorded in the current spelling,
-// and the two call sites (`legacySpelled` above, `canonicalManageTabsAction` below) go with it.
+// and the three call sites (`legacySpelled` and `legacyBool` above, `canonicalManageTabsAction`
+// below) go with it.
 
 /// How often each un-advertised legacy spelling — `"tabId"`, `"focus"`, `"unfocus"` — has been
 /// accepted in this process. Never reset, so a host can read it at shutdown.

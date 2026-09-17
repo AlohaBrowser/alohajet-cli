@@ -74,7 +74,7 @@ Click an element on the active tab by its aloha-id. click_type selects single/do
 
 `readOnlyHint: false` · `destructiveHint: true` · `openWorldHint: true`
 
-Type text into input/textarea/contenteditable elements by aloha-id. To fill a FORM, pass all of its fields in one call as "fields": [{"aloha_id":"1f3a9c2b","text":"..."},{"aloha_id":"7b21e40d","text":"..."}] (up to 20, filled in order) with submit:true to press Enter once at the end — one call instead of one per field. For a single field, pass aloha_id and text directly.
+Type text into input/textarea/contenteditable elements by aloha-id. To fill a FORM, pass all of its fields in one call as "fields": [{"aloha_id":"1f3a9c2b","text":"..."},{"aloha_id":"7b21e40d","text":"..."}] (up to 20, filled in order) with submit:true to press Enter once at the end — one call instead of one per field. For a single field, pass aloha_id and text directly. One of the two shapes is required: either aloha_id with text, or fields.
 
 | parameter | type | required | notes |
 | --- | --- | --- | --- |
@@ -87,23 +87,19 @@ Type text into input/textarea/contenteditable elements by aloha-id. To fill a FO
 | `replace` | `boolean` | no | Clear the field's existing value before typing. Defaults to true — pass false to append instead. default `true` |
 | `submit` | `boolean` | no | Press Enter after typing to submit. With "fields", pressed once after the last field. default `false` |
 
-Exactly one of these shapes is required: `aloha_id`, `text` — or — `fields`.
-
 ---
 
 ## page_select
 
 `readOnlyHint: false` · `destructiveHint: true` · `openWorldHint: true`
 
-Select an option in a &lt;select&gt; dropdown on the active tab by its aloha-id, matching by visible text or index.
+Select an option in a &lt;select&gt; dropdown on the active tab by its aloha-id, matching by visible text or index. At least one of text or index is required.
 
 | parameter | type | required | notes |
 | --- | --- | --- | --- |
 | `aloha_id` | `string` | yes | The aloha-id of the &lt;select&gt; element. |
 | `text` | `string` | no | The visible option text to match. At least one of text/index is required. |
 | `index` | `integer` | no | The zero-based option index to match. At least one of text/index is required. min 0 |
-
-Exactly one of these shapes is required: `text` — or — `index`.
 
 ---
 

@@ -156,13 +156,6 @@ func renderToolsDoc() -> String {
         let required = Set(input.array("required")?.compactMap(\.stringValue) ?? [])
         out += "| parameter | type | required | notes |\n| --- | --- | --- | --- |\n"
         out += propertyRows(properties, required: required).joined(separator: "\n") + "\n"
-        if let alternatives = input.array("anyOf") {
-            let shapes = alternatives.compactMap { alternative -> String? in
-                guard let keys = alternative.array("required") else { return nil }
-                return quotedList(keys)
-            }
-            out += "\nExactly one of these shapes is required: " + shapes.joined(separator: " — or — ") + ".\n"
-        }
     }
     return out
 }
