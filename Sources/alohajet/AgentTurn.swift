@@ -12,9 +12,10 @@ import ToolABI
 // comes back.
 //
 // That is the one real difference between `-p` and every other command: `alohajet
-// click …` needs a browser and nothing else, `alohajet -p …` needs an agent. With
-// no endpoint there is nothing to run the turn, and this says so and exits 2 —
-// rather than pretending, which is what a stub loop would be.
+// click …` needs a browser and nothing else, `alohajet -p …` needs an agent. The
+// agent it reaches for by default is the one in the Aloha browser on this machine
+// (`--endpoint` names another), and since this binary ships INSIDE that app, a turn
+// that finds it not running launches it and waits — see `AlohaAppLauncher`.
 
 enum AgentTurn {
 
@@ -43,6 +44,25 @@ enum AgentTurn {
         case let .failure(error):
             writeToStandardError("alohajet: \(error.message)\n")
             return error.code
+        }
+
+        // Nothing can answer until the app is up, and when the endpoint is the one on
+        // this machine, bringing it up is this process's job — the app is the agent.
+        // The launcher is also where `--headless` is ADJUDICATED: `open --args` reaches
+        // a cold launch only, so a `--headless` run against a live windowed instance
+        // would otherwise drive a visible browser while claiming not to. A failure here
+        // exits 3, the browser-unreachable code, because that is exactly what it is; an
+        // endpoint that is NOT this machine's app launches nothing and waits on nothing,
+        // so `-p` against one still never touches a browser.
+        do {
+            try await AlohaAppLauncher().ensureRunning(
+                endpoint: endpointURL, headless: args.has("--headless"),
+                // Notices go to stderr for the same reason the driver's do: a piped
+                // `--json` stdout must stay one parseable object.
+                log: { writeToStandardError("alohajet: note: \($0)\n") })
+        } catch {
+            writeToStandardError("alohajet: \((error as? AlohaAppLaunchError)?.description ?? "\(error)")\n")
+            return exitUnreachable
         }
 
         // Every failure the driver can meet — no socket, a 409 busy, a rejected task,
@@ -108,22 +128,30 @@ enum AgentTurn {
         ).mapError { CLIError(message: $0.message, code: exitUsage) }
     }
 
-    /// The agent endpoint, or the message that names exactly what is missing.
+    /// The agent endpoint: `--endpoint <url>` when it names one, else the automation
+    /// server of the Aloha browser on this machine.
+    ///
+    /// The default is not a convenience, it is the common case: the binary ships as
+    /// `<App>.app/Contents/Helpers/alohajet` and the agent it drives is the app it sits
+    /// inside. `--endpoint` is for the exception — a second instance, a port forward,
+    /// a host somewhere else.
+    ///
+    /// `has` before `value`, because they differ on ONE input and it is the dangerous
+    /// one: `--endpoint "$AGENT"` with `AGENT` unset has still NAMED a host, and
+    /// answering that with the local default would run the prompt against a browser
+    /// nobody asked for. Refused, exactly as `--resume ""` is.
     ///
     /// The scheme/host check is not ceremony: `URL(string: "localhost:8765")` succeeds
     /// with `localhost` as the SCHEME, and the request that follows fails somewhere far
     /// from the typo that caused it.
     private static func resolveEndpoint(_ args: Args) -> Result<URL, CLIError> {
-        guard let raw = args.value("--endpoint") else {
-            return .failure(CLIError(message: """
-                -p needs an agent endpoint: pass --endpoint <url>.
-                  `alohajet -p` does not run an agent loop — it hands the prompt to one already
-                  running behind that URL (POST /agent/task, e.g. the Aloha browser's automation
-                  server on http://127.0.0.1:8765). Its bearer token is read as described under
-                  ENVIRONMENT in `alohajet --help`.
-                  The tool commands (open, read, click, type, …) need no endpoint and no agent.
-                """, code: exitUsage))
+        if args.has("--endpoint"), args.value("--endpoint") == nil {
+            return .failure(CLIError(
+                message: "--endpoint expects an http(s) URL — got an empty one"
+                    + " (drop the flag to use \(AlohaAppLauncher.defaultEndpoint))",
+                code: exitUsage))
         }
+        let raw = args.value("--endpoint") ?? AlohaAppLauncher.defaultEndpoint
         guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https", url.host != nil else {
             return .failure(CLIError(message: "--endpoint expects an http(s) URL — got \"\(raw)\"", code: exitUsage))

@@ -1,7 +1,8 @@
 # alohajet
 
 **Drive a real browser from the command line and from MCP. Stable element refs, nine
-tools, zero dependencies.**
+tools, and four libraries with no SwiftPM dependencies — the CLI is the one target that
+links one, the official MCP SDK, and only for `alohajet mcp --endpoint`.**
 
 [Tool reference](docs/tools.md) · [A real session](docs/demo.md) · [Security](SECURITY.md)
 · [Releasing](RELEASING.md) · [Working on it](docs/development.md)
@@ -48,7 +49,7 @@ of those is expanded, with the reproduction, under [Limitations](#limitations).
 | Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. |
 | Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 145 MB Chrome for Testing 126 is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
 | Python 3 | only to serve the fixture pages in [The proof](#the-proof) and [docs/demo.md](docs/demo.md). |
-| Dependencies | none. Foundation only, no SwiftPM dependencies, no vendored tree. |
+| Dependencies | none in the four library products (`BrowserTools`, `AgentDriver`, `CDP`, `ToolABI`) — Foundation only, no vendored tree. One in the `alohajet` executable: the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) (`from: "0.12.1"`), which `mcp --endpoint` relays over and nothing else uses. A consumer linking the libraries resolves it and compiles none of it. |
 
 ## Install
 
@@ -178,18 +179,17 @@ $ alohajet frobnicate                          ; echo $?   # 2  usage
 $ alohajet --cdp 9999 read                     ; echo $?   # 3  browser unreachable
 ```
 
-One command is not a tool call. `alohajet -p "<prompt>" --endpoint <url>` hands one turn to
-an agent loop already running behind that URL (`POST /agent/task`). **No loop ships in this
-package**, so without `--endpoint` there is nothing to run it:
+One command is not a tool call. `alohajet -p "<prompt>"` hands one turn to an agent loop
+that is already running behind an HTTP endpoint (`POST /agent/task`). **No loop ships in
+this package**: the endpoint defaults to `http://127.0.0.1:8765`, the Aloha browser's own
+automation server on this machine, and `--endpoint <url>` names a different one.
+
+The local app is launched — or activated — for you, and the launches that cannot work are
+refused by name instead of by timeout:
 
 ```console
-$ alohajet -p "hi"
-alohajet: -p needs an agent endpoint: pass --endpoint <url>.
-  `alohajet -p` does not run an agent loop — it hands the prompt to one already
-  running behind that URL (POST /agent/task, e.g. the Aloha browser's automation
-  server on http://127.0.0.1:8765). Its bearer token is read as described under
-  ENVIRONMENT in `alohajet --help`.
-  The tool commands (open, read, click, type, …) need no endpoint and no agent.
+$ alohajet -p "book me a table" --headless
+alohajet: app already running with a visible window — quit it, or drop --headless
 ```
 
 ### MCP
@@ -237,6 +237,39 @@ A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.1.0"
 false even though its `list` and `read` actions only observe. `manage_tabs` with
 `include_screenshot: true` returns a second content block of type `image` next to the text;
 the CLI has no equivalent and drops the pixels.
+
+#### `mcp --endpoint <url>` — the other product behind the same verb
+
+With `--endpoint`, `alohajet mcp` serves nothing of its own and launches no browser. It is
+a pipe: stdin/stdout on one side, `POST <url>/mcp` on the other — the MCP server a running
+Aloha browser mounts on its automation port. The tools you get are the browser's, not the
+nine above.
+
+It exists for one client. Claude Desktop's config parser takes `{command, args, env}` and
+drops any entry carrying `type`/`url`/`headers` with a "not valid MCP server
+configurations" dialog, so a browser that already speaks MCP over HTTP is unreachable from
+it without a stdio front end. Hosts that speak HTTP (Claude Code:
+`claude mcp add --transport http …`) should talk to that endpoint directly instead — this
+lane adds a process and buys them nothing.
+
+```json
+{
+  "mcpServers": {
+    "aloha-browser": {
+      "command": "/Users/you/.local/bin/alohajet",
+      "args": ["mcp", "--endpoint", "http://127.0.0.1:8765"]
+    }
+  }
+}
+```
+
+The bearer token is read per run, not pasted: `ALOHAJET_AGENT_TOKEN`, else the browser's
+own `~/Library/Application Support/Aloha/automation-token` — and that ambient file is sent
+to a loopback endpoint only, which is the same rule `-p` follows. Plaintext `http` to
+anywhere but this machine is refused outright (exit 2), since every frame on this pipe
+drives the browser. Both halves use the official MCP SDK's own transports, because the
+server end validates `Accept: application/json, text/event-stream`, answers over SSE and
+issues a session id that has to be replayed as `Mcp-Session-Id`.
 
 ## The two browser lanes
 
@@ -610,6 +643,10 @@ because `-p` needs an endpoint this package does not provide.
 
 Apache 2.0 — see [LICENSE](LICENSE).
 
-This package carries no third-party source. It declares zero SwiftPM dependencies and
-vendors no tree: the CDP client, the WebSocket transport, the page-side runtime scripts,
-the DOM serializer and the tool layer were written for it.
+This package carries no third-party source and vendors no tree: the CDP client, the
+WebSocket transport, the page-side runtime scripts, the DOM serializer and the tool layer
+were written for it. It declares one SwiftPM dependency, the official
+[MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk), and it hangs on the
+`alohajet` executable target alone — `mcp --endpoint` relays onto a running browser's own
+MCP server over that SDK's transports rather than re-implementing Streamable HTTP. The
+four library products link nothing.

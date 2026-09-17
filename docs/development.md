@@ -10,8 +10,10 @@ $ swift build -c release --product alohajet
 Build of product 'alohajet' complete! (19.94s)
 ```
 
-From a fresh clone, with nothing to resolve: the package has no SwiftPM
-dependencies, so there is no `Package.resolved` and no network step.
+From a fresh clone there is one thing to resolve — the official MCP SDK, which
+only the `alohajet` executable links — so the first build fetches it and its four
+transitive packages. Building a library product (`swift build --product BrowserTools`)
+compiles none of them: the plan creates their build directories and leaves them empty.
 
 The build is not warning-free. Two are live, both harmless and both worth fixing:
 

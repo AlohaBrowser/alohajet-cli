@@ -11,11 +11,15 @@ import CDP
 //
 // Ported in shape from the shipping CLI's `AlohaAppLauncher` — the injected
 // probe/opener seams, the "wait on the real condition, never a fixed sleep" loop, and the
-// loud failure that names the endpoint and the setting to turn on. What did NOT travel is
+// loud failure that names the endpoint and the setting to turn on. What is NOT here is
 // everything that speaks to the app's loopback `AutomationServer`: the `GET /state`
 // readiness probe and its headless/visibleWindow booleans, the `alohajet://attach` deep
 // link, the one-shot headless launch token, the bearer credential. None of that exists on
-// the CDP wire, and this package has no AutomationServer client to give it.
+// the CDP wire this lane rides, and none of it is reachable from here: it lives in
+// `AgentDriver.AlohaAppLauncher`, beside the HTTP client and the token reader it is built
+// on, and `BrowserTools` does not link `AgentDriver`. `alohajet -p` goes through that one;
+// the tool commands come through this one, which needs to know only that a CDP listener
+// answers.
 //
 // The poll loop itself is NOT re-implemented here: `ChromeLauncher.discoverWebSocketURL`
 // already is one, tested, and is what the chromium lane uses.

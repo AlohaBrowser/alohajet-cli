@@ -1,6 +1,12 @@
 .build/
 .swiftpm/
-Package.resolved
+# Package.resolved is COMMITTED, not ignored, since the CLI took its first dependency.
+# `from: "0.12.1"` has to be a range — both consumers already pin swift-sdk `exact: "0.12.1"`
+# and two exact requirements on one package must agree forever — but a range with no lockfile
+# means this repo's own CI resolves the newest 0.x on every run, and pre-1.0 SemVer promises
+# nothing. A breaking 0.13.0 would land here unannounced while both consumers, pinned exactly,
+# saw nothing. Committing it pins OUR builds only: SwiftPM reads the ROOT package's lockfile
+# and ignores a dependency's, so no consumer is constrained by this file.
 *.xcodeproj
 *.xcworkspace
 DerivedData/
