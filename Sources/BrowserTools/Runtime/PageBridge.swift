@@ -1019,6 +1019,53 @@ public final class AgentBrowserBridge {
         }
     }
 
+    /// The `not found` message this bridge hands back, matched to WHY the lookup missed.
+    /// The bare string is indistinguishable from a typo, from an element that has not rendered
+    /// yet, and from an id minted for a page that is no longer loaded — and on WebArena run
+    /// 33843492855 the third was the common case: 672 failed lookups over 22 of 33 traces,
+    /// which averaged 167 steps against 57 for the rest, because the caller cannot tell
+    /// "retry" from "re-read". Same diagnosis as `staleIdDiagnosis` in the in-page runtime,
+    /// reached from Swift because these two call sites resolve their own elements. Falls back to
+    /// the bare message: a diagnostic that throws must not replace the error it describes.
+    private func alohaIdNotFoundMessage(_ alohaId: String) async -> String {
+        let bare = "Element with aloha-id \(alohaId) not found"
+        let escaped = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        (function() {
+          var alohaId = "\(escaped)";
+          var here = '';
+          try { here = String(window.location && window.location.href || ''); } catch (e) {}
+          var present = 0;
+          try { present = document.querySelectorAll('[aloha-id]').length; } catch (e) {}
+          var mine = '';
+          try { mine = String(window.__alohaDocGeneration || ''); } catch (e) {}
+          var dash = alohaId.indexOf('-');
+          var theirs = dash > 0 ? alohaId.substring(0, dash) : '';
+          var why;
+          if (present === 0) {
+            why = 'This page carries no aloha-id at all, so it has not been read since it last'
+                + ' changed. The ids you hold were minted for an earlier page.';
+          } else if (mine && theirs && theirs !== mine) {
+            why = 'That id was minted for a different page or render (it carries generation '
+                + theirs + '; this page is generation ' + mine + '), so no element here can ever'
+                + ' match it.';
+          } else {
+            why = 'This page does carry aloha-ids and none of them is that one, so the element is'
+                + ' gone or was never on this page.';
+          }
+          return 'Element with aloha-id ' + alohaId + ' not found. ' + why
+               + ' The page is now ' + (here || 'an unknown URL') + '.'
+               + ' Re-read the page and use an id from that new snapshot; retrying this id, or'
+               + ' re-navigating to the same URL, cannot make it resolve.';
+        })()
+        """
+        guard let value = try? await backend.evaluateViaCdp(script),
+              let text = value.stringValue, text.hasPrefix(bare) else {
+            return bare
+        }
+        return text
+    }
+
     public func scrollTo(_ alohaId: String) async -> AgentActionResult {
         do {
             let escaped = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
@@ -1037,7 +1084,7 @@ public final class AgentBrowserBridge {
             for _ in 0..<maxAttempts {
                 let value = try await backend.evaluateViaCdp(script)
                 guard let value = value, value.objectMember("found")?.boolValue == true else {
-                    return AgentActionResult(output: "Element with aloha-id \(alohaId) not found", isError: true)
+                    return AgentActionResult(output: await alohaIdNotFoundMessage(alohaId), isError: true)
                 }
                 if value.objectMember("inViewport")?.boolValue == true {
                     return AgentActionResult(output: "Scrolled to element \(alohaId)")
@@ -1469,7 +1516,7 @@ public final class AgentBrowserBridge {
             })()
             """)
             guard probe?.objectMember("found")?.boolValue == true else {
-                return AgentActionResult(output: "Element with aloha-id \(alohaId) not found", isError: true)
+                return AgentActionResult(output: await alohaIdNotFoundMessage(alohaId), isError: true)
             }
             let tag = (probe?.objectMember("tag")?.stringValue ?? "unknown").lowercased()
             let inputType = probe?.objectMember("inputType")?.stringValue ?? ""

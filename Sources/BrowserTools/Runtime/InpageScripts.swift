@@ -101,6 +101,46 @@ public func buildInpageAlohaRuntime() -> String {
         return findInIframes(document, selector, []);
       }
 
+      // WHY THIS MESSAGE IS LONG. `Element with aloha-id X not found` is indistinguishable from
+      // a typo, from an element that has not rendered yet, and from an id minted for a page that
+      // is no longer loaded — and the third is the common case, because ids live in the caller's
+      // message history while the page moves on without them. On WebArena run 33843492855 that
+      // ambiguity cost 672 failed lookups across 22 of 33 traces, and those traces averaged 167
+      // steps against 57 for the rest: the caller cannot tell "retry" from "re-read", so it
+      // retries. Everything below is readable in-page for free, and it names which of the three
+      // actually happened.
+      // `present` is read as a yes/no and never printed. A caller that hashes a tool result
+      // verbatim to decide whether two rounds are the same action (the agent's stuck-loop guard
+      // does) would see a count that moved between two identical failed clicks as two different
+      // actions and lose the streak it bails on. Two failures in one state must be the same bytes.
+      function staleIdDiagnosis(alohaId) {
+        var here = '';
+        try { here = String(window.location && window.location.href || ''); } catch (e) {}
+        var present = 0;
+        try { present = document.querySelectorAll('[aloha-id]').length; } catch (e) {}
+        var mine = '';
+        try { mine = String(window.__alohaDocGeneration || ''); } catch (e) {}
+        var dash = String(alohaId).indexOf('-');
+        var theirs = dash > 0 ? String(alohaId).substring(0, dash) : '';
+
+        var why;
+        if (present === 0) {
+          why = 'This page carries no aloha-id at all, so it has not been read since it last'
+              + ' changed. The ids you hold were minted for an earlier page.';
+        } else if (mine && theirs && theirs !== mine) {
+          why = 'That id was minted for a different page or render (it carries generation '
+              + theirs + '; this page is generation ' + mine + '), so no element here can ever'
+              + ' match it.';
+        } else {
+          why = 'This page does carry aloha-ids and none of them is that one, so the element is'
+              + ' gone or was never on this page.';
+        }
+        return 'Element with aloha-id ' + alohaId + ' not found. ' + why
+             + ' The page is now ' + (here || 'an unknown URL') + '.'
+             + ' Re-read the page and use an id from that new snapshot; retrying this id, or'
+             + ' re-navigating to the same URL, cannot make it resolve.';
+      }
+
       function requireElement(alohaId) {
         var result = resolveElement(alohaId);
         if (!result) {
@@ -112,7 +152,7 @@ public func buildInpageAlohaRuntime() -> String {
               throw new Error('aloha-id "' + alohaId + '" is a select option index. Use aloha.select("' + basePart + '", ' + alohaId.substring(dotIdx + 1) + ') instead.');
             }
           }
-          throw new Error('Element with aloha-id ' + alohaId + ' not found');
+          throw new Error(staleIdDiagnosis(alohaId));
         }
         return result;
       }

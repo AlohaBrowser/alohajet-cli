@@ -143,7 +143,7 @@ private let pageClickSchema = objectSchema([
 private let pageTypeDescription =
     "Type text into input/textarea/contenteditable elements by aloha-id. "
     + "To fill a FORM, pass all of its fields in one call as \"fields\": "
-    + "[{\"aloha_id\":\"1f3a9c2b\",\"text\":\"...\"},{\"aloha_id\":\"7b21e40d\",\"text\":\"...\"}] (up to 20, filled in order) "
+    + "[{\"aloha_id\":\"7959-1f3a9c2b\",\"text\":\"...\"},{\"aloha_id\":\"7959-7b21e40d\",\"text\":\"...\"}] (up to 20, filled in order) "
     + "with submit:true to press Enter once at the end — one call instead of one per field. "
     + "For a single field, pass aloha_id and text directly. One of the two shapes is required: "
     + "either aloha_id with text, or fields."
@@ -202,13 +202,13 @@ private let pageSelectSchema = objectSchema([
 // needs: pass several ids at once.
 private let getTextDescription =
     "Read the visible text (or input value) of elements on the active tab by aloha-id. "
-    + "Pass SEVERAL ids at once as a comma-separated list (\"1f3a9c2b,7b21e40d,3c8f95a1\", up to 20) and each is returned "
+    + "Pass SEVERAL ids at once as a comma-separated list (\"7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1\", up to 20) and each is returned "
     + "labelled with its id — one call instead of one per element."
 
 private let getTextSchema = objectSchema([
     ("aloha_id", schemaField(
         type: "string",
-        description: "One aloha-id, or several as a comma-separated list (\"1f3a9c2b,7b21e40d,3c8f95a1\", up to 20 per call). "
+        description: "One aloha-id, or several as a comma-separated list (\"7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1\", up to 20 per call). "
                    + "Reading a whole list of rows in one call costs one round instead of one round each.")),
     ("max_chars", schemaField(
         type: "integer",

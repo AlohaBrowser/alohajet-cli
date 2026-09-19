@@ -575,7 +575,7 @@ let CONTENT_LEAF_MIN_CHARS = 3
 public let INTERACTIVE_LABEL_CAP = 120
 
 /// The trailing actionable marker appended to every interactive element's line, e.g.
-/// ` {aloha-id="1f3a9c2b" button}`. The literal `aloha-id="…"` token is a contract: id capture
+/// ` {aloha-id="7959-1f3a9c2b" button}`. The literal `aloha-id="…"` token is a contract: id capture
 /// in `findAlohaIdsInMarkdown` reads it back.
 public func interactiveTrailer(_ node: DomNode, _ tag: String) -> String {
     return " {aloha-id=\"\(node.id)\" \(tag)}"

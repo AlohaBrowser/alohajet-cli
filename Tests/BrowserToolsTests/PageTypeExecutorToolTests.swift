@@ -237,6 +237,31 @@ struct PageTypeExecutorToolTests {
         #expect(!result.output.contains("Pass one of THOSE ids"))
     }
 
+    /// An id the page does not hold comes back with the stale-id diagnosis, not a bare "not
+    /// found": the probe misses, the bridge asks the page why, and the page's answer is the
+    /// receipt. The diagnosis itself is pinned by `StaleAlohaIdDiagnosisTests`.
+    @Test func aStaleIdIsDiagnosedOnTheTypePath() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        let diagnosis = "Element with aloha-id 4f3a-2c05abf8 not found. That id was minted for a different "
+            + "page or render (it carries generation 4f3a; this page is generation 9f21), so no element "
+            + "here can ever match it. The page is now https://example.com. Re-read the page and use an id "
+            + "from that new snapshot; retrying this id, or re-navigating to the same URL, cannot make it resolve."
+        fixture.cdp.alohaRawCallReplies = [
+            (match: "resolveTypeTarget", reply: .object([("found", .bool(false))])),
+            (match: "minted for an earlier page", reply: .string(diagnosis)),
+        ]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("4f3a-2c05abf8"), "text": .string("hi")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError == true)
+        #expect(result.output.contains(diagnosis))
+        #expect(fixture.cdp.commands(for: "Input.dispatchKeyEvent").isEmpty)
+    }
+
     /// The probe the bridge ships carries the markers the Node harness extracts by, and the call
     /// sits on its own line after the END comment: a call on the comment's line is a SyntaxError
     /// the bridge's `try?` swallows, which is how eight clicks went into a cookie banner once.

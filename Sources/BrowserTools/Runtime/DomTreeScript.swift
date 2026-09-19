@@ -137,15 +137,51 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   // repeat instead of as a new action. It is not free: e364d24 measured this observation at
   // 2534 tokens against 2316 for the base36 walk counter it replaced, so a /f/books read
   // costs +218 tokens (+9.4%) every step. A loop that ends at round three pays that back.
-  // The body's id is the constant hashString("|/body") on every page and every tab — an id
-  // need only be unique within its walk and resolvable within its page, and an iframe's body
-  // is never walked as a body.
+  // The body's id was the constant hashString("|/body") on every page and every tab, on the
+  // reasoning that an id need only be unique within its walk and resolvable within its page
+  // (an iframe's body is never walked as a body). `documentGeneration` below retires that: the
+  // page an id was minted for is now part of it, because "resolvable within its page" is not a
+  // property the CALLER can check and it was being asked to.
   // Memoised on the descriptor because the highlight labels a node sixty lines before the
   // walk registers it; one memo is what lets both read one id without reordering the walk.
+  // WHICH DOCUMENT these ids belong to. The identity above names a position and a frame, and
+  // nothing in it names the page: `/forums` and `/submit/dataisbeautiful` both hash
+  // `|/body/div[1]/a[2]` to the same string. Two consequences, both measured on WebArena run
+  // 33843492855 (672 `not found` errors over 22 of 33 traces; those traces averaged 167 steps
+  // against 57 for the rest):
+  //   * an id minted on the previous page is INDISTINGUISHABLE from one minted for this page,
+  //     so where the xpath happens to exist here too the click lands on a different element
+  //     and nothing reports it;
+  //   * where it does not exist, `not found` is the whole of what the caller learns, which
+  //     reads like a typo and invites the blind retry those step counts are made of.
+  // The generation prefix closes both: ids from another document can no longer collide with
+  // this one's, and `requireElement` can say an id belongs to a previous render instead of
+  // merely failing to find it. Memoised on `window`, so every walk of THIS document agrees and
+  // the stability across re-walks documented above is unchanged; a navigation or a reload
+  // builds a new window, hence a new generation, which is exactly when old ids stop meaning
+  // anything. With no window — the JSContext the derivation tests run in — there is no document
+  // to scope to and the bare hash is kept. The post-action fingerprint (`PageBridge.swift`)
+  // reads the same `__alohaDocGeneration`, which until now was never seeded.
+  function documentGeneration() {
+    try {
+      if (typeof window === "undefined" || !window) return "";
+      if (!window.__alohaDocGeneration) {
+        const seed = String((window.location && window.location.href) || "")
+          + "|" + Date.now() + "|" + Math.random();
+        window.__alohaDocGeneration = hashString(seed).slice(0, 4);
+      }
+      return String(window.__alohaDocGeneration || "");
+    } catch (e) {
+      return "";
+    }
+  }
+
   function alohaIdFor(descriptor, element) {
     if (descriptor.alohaId) return descriptor.alohaId;
     const identity = scopeKey(descriptor.contextPath) + (authoredIdentity(element) || descriptor.xpath);
-    return (descriptor.alohaId = uniqueAlohaId(hashString(identity)));
+    const generation = documentGeneration();
+    const hashed = hashString(identity);
+    return (descriptor.alohaId = uniqueAlohaId(generation ? `${generation}-${hashed}` : hashed));
   }
 
   // What the page says this element IS, when it says anything durable. getAttribute("id"),
