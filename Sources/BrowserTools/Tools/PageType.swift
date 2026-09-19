@@ -123,11 +123,24 @@ import ToolABI
                 // Settled, not immediate: typing rarely navigates, so this costs the grace window
                 // only in the case where the receipt would have been right anyway.
                 let urlAfter = await bridge.settledPageURL(after: urlBefore)
-                return resolved.tab.naming(
-                    RawToolResult(output: "Typed into element \"\(alohaId)\"."
-                                  + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
-                                  + selectorNote + hint,
-                                  isError: nil))
+                let receipt = RawToolResult(output: "Typed into element \"\(alohaId)\"."
+                                            + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+                                            + selectorNote + hint,
+                                            isError: nil)
+                // THE PAGE, ALWAYS -- not gated on the fingerprint the other tools use. That gate
+                // compares the document generation, the element count and the URL, and a typed
+                // VALUE changes none of them, so gating a type on it suppressed the page every
+                // time. Measured on WebArena run 33956015125 against 33918469392, the four Magento
+                // report tasks that type two dates and run a report:
+                //
+                //     t706  2/3 -> 0/3     t711  3/3 -> 0/3
+                //     t712  3/3 -> 1/3     t713  3/3 -> 0/3
+                //
+                // shopping_admin fell 11/30 to 1/30 and `page_type` calls rose 369 -> 677: unable
+                // to see whether the date had landed in a picker that reformats and rejects input,
+                // the model retyped. For a type the value IS the change, and confirming it is the
+                // whole reason to send the page back.
+                return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved))
             }
             let submitResult = await bridge.pressKeys("Enter")
             if submitResult.isError {
@@ -139,11 +152,23 @@ import ToolABI
             // the receipt reports the URL from before the submit, so a form submission that worked
             // is announced as "The page did NOT navigate" every single time.
             let urlAfter = await bridge.settledPageURL(after: urlBefore)
-            return resolved.tab.naming(
-                RawToolResult(output: "Typed into element \"\(alohaId)\" and pressed Enter to submit."
-                              + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
-                              + selectorNote + hint,
-                              isError: nil))
+            // A form that was SUBMITTED is the one type whose result matters most, and it was the
+            // one branch sending no page at all: `type(submit: true)` returned 230 characters of
+            // receipt and nothing else. Measured over 579 distinct `page_type` calls in WebArena
+            // run 34366647873: 36% came back with a page and 39% with a bare receipt, against 65%
+            // for `page_click`. That gap is this branch. It is also precisely the shape on which
+            // "answered without looking" fires -- 64 of 199 answer turns (32%) in the same run --
+            // because the model submitted a form and had nothing to look at.
+            //
+            // ONCE, AFTER THE WHOLE STRING AND THE ENTER -- never per keystroke, and after
+            // `settledPageURL` has waited out the navigation the Enter caused. Taking it before that
+            // wait would capture the page the form was submitted FROM, which is worse than nothing.
+            let receipt = RawToolResult(
+                output: "Typed into element \"\(alohaId)\" and pressed Enter to submit."
+                    + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+                    + selectorNote + hint,
+                isError: nil)
+            return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved))
         }
     }
 
@@ -173,16 +198,23 @@ import ToolABI
             let urlAfter = bridge.currentPageURL()
             let delta = PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
 
+            // EVERY EXIT FROM HERE CARRIES THE PAGE. This is the path the batch hint tells the
+            // model to prefer -- "Pass the whole form at once" -- so a batch that returned a bare
+            // receipt sent the model down the recommended road and left it blind at the end of
+            // it. `withPageSnapshot` skips an errored receipt on its own, so the partly-filled
+            // case below attaches the page exactly when something WAS filled.
             if !failures.isEmpty {
                 let filledNote = filled.isEmpty ? "No field was filled." : "Filled \(filled.count): \(filled.joined(separator: ", "))."
                 let submitNote = submit ? " Did NOT submit, because the form is only partly filled." : ""
-                return RawToolResult(output: "\(filledNote) Failed \(failures.count) — \(failures.joined(separator: "; "))."
-                                     + submitNote + delta,
-                                     isError: filled.isEmpty ? true : nil)
+                let receipt = RawToolResult(output: "\(filledNote) Failed \(failures.count) — \(failures.joined(separator: "; "))."
+                                            + submitNote + delta,
+                                            isError: filled.isEmpty ? true : nil)
+                return await withPageSnapshot(receipt, context, resolved)
             }
             guard submit else {
-                return RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", "))." + delta,
-                                     isError: nil)
+                let receipt = RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", "))." + delta,
+                                            isError: nil)
+                return await withPageSnapshot(receipt, context, resolved)
             }
             let submitResult = await bridge.pressKeys("Enter")
             if submitResult.isError {
@@ -191,11 +223,14 @@ import ToolABI
                         + "but submitting Enter failed: \(submitResult.output)" + delta,
                     isError: true)
             }
-            let urlFinal = bridge.currentPageURL()
-            return RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", ")) "
-                                 + "and pressed Enter to submit."
-                                 + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlFinal),
-                                 isError: nil)
+            // Settled, like the single-field submit above: the Enter is what navigates, and an
+            // immediate read names the page the form was submitted from.
+            let urlFinal = await bridge.settledPageURL(after: urlBefore)
+            let receipt = RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", ")) "
+                                        + "and pressed Enter to submit."
+                                        + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlFinal),
+                                        isError: nil)
+            return await withPageSnapshot(receipt, context, resolved)
         }
     }
 }

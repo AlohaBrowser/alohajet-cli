@@ -683,6 +683,50 @@ public final class AgentBrowserBridge {
         return url
     }
 
+    /// A cheap answer to "is this the same page the model already holds?", read either side of
+    /// an action so the tool can decide whether to send the page back -- see `withPageSnapshot`.
+    ///
+    /// Three parts, one `Runtime.evaluate`, no DOM walk: the document GENERATION
+    /// (`__alohaDocGeneration`, seeded once per document by the DOM-tree script, so a navigation is
+    /// a new value), the ELEMENT COUNT (an overlay opening, a list expanding, a form replacing
+    /// itself all move it), and the URL (a page at a different address is a different page even
+    /// when its structure matches). Two equal fingerprints mean the ids the model holds are still
+    /// good; two different ones mean the page it holds is stale and must be re-sent.
+    ///
+    /// WHAT IT CANNOT SEE, and this cost a run. A typed VALUE changes none of the three, so a
+    /// `page_type` gated on this never got its page back: on WebArena run 33956015125 the four
+    /// Magento report tasks that type two dates and run a report went 11/30 to 1/30 while
+    /// `page_type` calls rose 369 -> 677, the model retyping because it could not see whether the
+    /// date had landed. `page_type` therefore does NOT gate on this; anything else whose change is
+    /// a value rather than a structure needs the same exemption.
+    ///
+    /// Deliberately NOT a hash of the markdown: producing that is the DOM walk this exists to skip.
+    /// Returns nil when the page cannot answer; `pageMoved` treats a nil on either side as
+    /// "changed", so an unreadable page still gets its snapshot rather than silently losing it.
+    func pageFingerprint() async -> String? {
+        let script = """
+        (function() {
+          try {
+            var generation = String(window.__alohaDocGeneration || "");
+            var count = document.querySelectorAll("*").length;
+            var here = String(window.location && window.location.href || "");
+            return generation + "|" + count + "|" + here;
+          } catch (e) { return ""; }
+        })()
+        """
+        let value: JSValue?
+        do { value = try await backend.evaluateViaCdp(script) } catch { return nil }
+        guard let text = value?.stringValue, !text.isEmpty else { return nil }
+        return text
+    }
+
+    /// Whether the page moved between two `pageFingerprint` reads. A nil on either side counts as
+    /// moved: a page that could not answer must never be mistaken for one that did not change.
+    static func pageMoved(before: String?, after: String?) -> Bool {
+        guard let before, let after else { return true }
+        return before != after
+    }
+
     /// The page's URL after an action, once the page has had a bounded chance to move.
     ///
     /// `currentPageURL()` read immediately after a click is read BEFORE the navigation commits, so

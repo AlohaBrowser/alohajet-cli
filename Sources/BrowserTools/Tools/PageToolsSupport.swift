@@ -93,6 +93,59 @@ func makePageBridge(_ cdpTab: CDPTabHandle, _ signal: AbortSignal) -> AgentBrows
     AgentBrowserBridge(backend: CDPAgentBridgeBackend(tab: cdpTab, signal: signal))
 }
 
+// MARK: - The page an action left behind
+
+/// EVERY ACTION RETURNS THE PAGE IT LEFT BEHIND. Appends the post-action page to a finished
+/// receipt, or returns the receipt untouched.
+///
+/// WHY. A receipt alone -- `Clicked element "2s" (single).` -- tells the model nothing about what
+/// the click did to the page, so it has to spend a round on `manage_tabs read` before it can act
+/// again, and when it does not it acts on ids from the page BEFORE the click. Measured on WebArena
+/// run 34366647873 over 579 `page_type` calls: 36% came back with a page and 39% with a bare
+/// receipt, against 65% for `page_click`; "answered without looking" was 64 of 199 answer turns.
+/// The same `manageTabsRead` the `read` action calls, with the same extraction options, so the two
+/// cannot disagree about what "the page" is. No screenshot: this fires on every action, and the
+/// model needs the ids, which are in the markdown.
+///
+/// NOTHING MOVED, NOTHING TO SEND. A page identical to the one the model already holds costs a DOM
+/// walk here and, far worse, rides in its context for every remaining round: deep in a task that
+/// reached 33k tokens against 27k before this existed, and the run's timeouts were 76-92 LLM
+/// rounds at a 5-6.3 s median. `changed` comes from `AgentBrowserBridge.pageFingerprint`, which
+/// moves exactly when the ids do; an unreadable fingerprint counts as changed, so a snapshot is
+/// never lost to a failed probe. `page_type` passes the default `true`: a typed value moves no
+/// fingerprint, and for a type the value IS the change worth confirming.
+///
+/// An errored receipt is returned as-is: the action did not happen, so the page did not change,
+/// and a failure is not the place to spend a DOM walk. A snapshot is an addition to a receipt,
+/// never a reason to fail one: a read that cannot be taken leaves the receipt alone.
+func withPageSnapshot(_ receipt: RawToolResult, _ context: ToolExecutionContext,
+                      _ resolved: ResolvedPageTab, changed: Bool = true) async -> RawToolResult {
+    guard receipt.isError != true else { return receipt }
+    guard changed else { return receipt }
+    guard let page = await postActionPageSnapshot(context, tabId: resolved.tab.id) else { return receipt }
+    // Mutate a copy rather than build a fresh result: `RawToolResult` carries status, metadata,
+    // llmAttrs, format and outputSchema too, and a receipt that set any of them would lose it.
+    var enriched = receipt
+    enriched.output = receipt.output + "\n" + page
+    return enriched
+}
+
+/// The page as `manage_tabs read` would render it, or nil when the tab cannot be read.
+func postActionPageSnapshot(_ context: ToolExecutionContext, tabId: String) async -> String? {
+    guard let tabsWindow = context.services?.tabsService?.window,
+          let session = context.services?.session else { return nil }
+    let ctx = ManageTabsActionContext(
+        sessionId: context.sessionId,
+        toolCallId: context.toolCallId,
+        session: session,
+        abortSignal: context.signal,
+        webExtractionOptions: context.services?.webExtractionOptions ?? .baseline)
+    let read = await manageTabsRead(tabId, tabsWindow, ctx, false)
+    guard !read.isError, let body = read.output,
+          !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+    return body
+}
+
 /// A caller-supplied `Double` as an `Int`, saturating instead of trapping.
 ///
 /// `Int(_:)` traps on `NaN` and on anything outside `Int`'s range, and JSON has no trouble

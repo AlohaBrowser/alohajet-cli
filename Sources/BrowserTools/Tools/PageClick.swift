@@ -39,6 +39,9 @@ import ToolABI
             // WHERE THE PAGE WAS BEFORE THE CLICK. Two cheap backend reads bracket the action so the
             // receipt can state whether anything moved; see `PageDelta`.
             let urlBefore = bridge.currentPageURL()
+            // AND WHAT THE PAGE'S STRUCTURE WAS, so the receipt can carry the page only when the
+            // click changed it -- see `pageFingerprint`.
+            let fingerprintBefore = await bridge.pageFingerprint()
             // AND WHICH ELEMENT THIS WAS, in terms that survive the next DOM walk. Resolved here, before
             // the click, because afterwards the snapshot may no longer hold the node. Pure cache read —
             // see `PageToolReceipt`.
@@ -63,9 +66,15 @@ import ToolABI
             let clickLanded = !result.isError
                 && (result.pendingResults.first(where: { $0.type == route.pendingType })?.success ?? false)
             let urlAfter = clickLanded ? await bridge.settledPageURL(after: urlBefore) : urlBefore
+            let receipt = Self.interpret(result, route: route, alohaId: alohaId, clickType: clickType,
+                                         urlBefore: urlBefore, urlAfter: urlAfter, selectorNote: selectorNote)
+            // THE PAGE THE NEXT ACTION MUST USE, in this result. Ids are per-document, so the click
+            // above is what voids the ids the model holds; the fingerprint read either side says
+            // whether it did, and only then is the DOM walk spent -- see `withPageSnapshot`.
+            let fingerprintAfter = await bridge.pageFingerprint()
+            let pageMoved = AgentBrowserBridge.pageMoved(before: fingerprintBefore, after: fingerprintAfter)
             return resolved.tab.naming(
-                Self.interpret(result, route: route, alohaId: alohaId, clickType: clickType,
-                               urlBefore: urlBefore, urlAfter: urlAfter, selectorNote: selectorNote))
+                await withPageSnapshot(receipt, context, resolved, changed: pageMoved))
         }
     }
 
