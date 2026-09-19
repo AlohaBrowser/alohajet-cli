@@ -25,7 +25,10 @@ import ToolABI
 ///
 /// Carried in the result's `metadata`, under a key the host reads by name, so it survives the
 /// result path without being parsed out of prose.
-public nonisolated enum PageStructureChange {
+///
+/// Main-actor isolated like the rest of this module (not `nonisolated`): `RawToolResult` is
+/// isolated here, and `stamp` reads and writes its fields.
+public enum PageStructureChange {
     /// Metadata key. A `.bool(true)` under it means the structure moved. The agent repo's
     /// `PageChangeMark.decode` reads this exact string.
     public static let key = "pageStructureChanged"
