@@ -180,7 +180,7 @@ USAGE
 AGENT
   -p <prompt>             ask the AlohaJet agent in the Aloha browser
   --resume <chat-id>      continue that chat (-p prints its id on stderr)
-  --continue              continue the chat the app is on (default: a new one)
+  --continue              continue the last -p chat (default: a new one)
   --headless              run the app with no window (refused if it has one)
   --endpoint <url>        agent server (default http://127.0.0.1:8765, the
                           local app, launched if needed); http to loopback only

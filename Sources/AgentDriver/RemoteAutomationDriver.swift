@@ -424,6 +424,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     private func poll(taskId: String, answering: inout (id: String, task: Task<Void, Never>)?) async throws -> CLIRunResult {
         var asked: Set<String> = []
         var attempt = 0
+        var termsPolls = 0
         while attempt < maxPollAttempts {
             let response = try await transport("GET", agentURL(path: "/agent/result", queryItems: [URLQueryItem(name: "taskId", value: taskId)]), nil)
             guard response.statusCode == 200 else {
@@ -442,7 +443,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
                 if let terms, let question, asked.insert(question.id).inserted {
                     answering = (question.id, Task { await answer(question, with: terms) })
                 }
-                attempt += 1
+                if question != nil, termsPolls < maxPollAttempts { termsPolls += 1 } else { attempt += 1 }
                 try await Task.sleep(for: pollInterval)
             case "done":
                 return Self.decodeTerminal(envelope["result"])

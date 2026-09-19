@@ -586,6 +586,19 @@ struct RemoteAutomationDriverTermsTests {
         #expect(finished.all == [Self.question])
     }
 
+    @Test("polls that wait on the terms question do not spend the turn's budget")
+    func termsWaitHasItsOwnBudget() async throws {
+        let pending = try pendingTermsEnvelope(Self.question)
+        let running = try remoteResultEnvelope(state: "running", result: nil)
+        let stub = RemoteStubServer(resultBodies: [pending, pending, pending, running, running, Self.done])
+        let driver = makeRemoteDriver(stub: stub, maxPollAttempts: 3)
+
+        let result = try await driver.runTask(prompt: "hi")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(await stub.resultCount == 6)
+    }
+
     @Test("a question nobody answers here is left to the host")
     func unansweredQuestionPostsNothing() async throws {
         let stub = RemoteStubServer(resultBodies: [try pendingTermsEnvelope(Self.question)])
