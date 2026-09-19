@@ -163,26 +163,26 @@ struct DuplicateSubmitTests {
     @Test("a tab is only checked once something was typed into it")
     func typedGate() {
         let forms = SubmittedForms()
-        #expect(forms.hasTyped("tab-1") == false)
-        forms.noteTyped("tab-1")
-        #expect(forms.hasTyped("tab-1") == true)
+        #expect(forms.hasTyped("tab-1", scope: "s") == false)
+        forms.noteTyped("tab-1", scope: "s")
+        #expect(forms.hasTyped("tab-1", scope: "s") == true)
         // Other tabs stay unchecked, which is the whole saving.
-        #expect(forms.hasTyped("tab-2") == false)
+        #expect(forms.hasTyped("tab-2", scope: "s") == false)
     }
 
     @Test("an empty tab id is neither recorded nor reported")
     func typedGateEmptyId() {
         let forms = SubmittedForms()
-        forms.noteTyped("")
-        #expect(forms.hasTyped("") == false)
+        forms.noteTyped("", scope: "s")
+        #expect(forms.hasTyped("", scope: "s") == false)
     }
 
     @Test("reset forgets typed tabs too, or a test would leak into the next")
     func typedGateReset() {
         let forms = SubmittedForms()
-        forms.noteTyped("tab-1")
+        forms.noteTyped("tab-1", scope: "s")
         forms.reset()
-        #expect(forms.hasTyped("tab-1") == false)
+        #expect(forms.hasTyped("tab-1", scope: "s") == false)
     }
 
     // MARK: the whole loop, as it happened
@@ -195,18 +195,18 @@ struct DuplicateSubmitTests {
         let key = submissionKey(pageURL: page, values: filled)
 
         // First submit: nothing on record, so it proceeds and lands on the new post.
-        #expect(duplicateSubmitRefusal(alreadyAt: forms.result(for: key)) == nil)
-        forms.record(key, landedOn: "http://127.0.0.1:17782/f/sports/2/looking-for-running-shoe-recommendations-under-100")
+        #expect(duplicateSubmitRefusal(alreadyAt: forms.result(for: key, scope: "s")) == nil)
+        forms.record(key, landedOn: "http://127.0.0.1:17782/f/sports/2/looking-for-running-shoe-recommendations-under-100", scope: "s")
 
         // Second and third: identical form, so both are refused and both are told where id 2 is.
         for _ in 0..<2 {
-            let why = duplicateSubmitRefusal(alreadyAt: forms.result(for: key))
+            let why = duplicateSubmitRefusal(alreadyAt: forms.result(for: key, scope: "s"))
             #expect(why != nil)
             #expect(why?.contains("/f/sports/2/") == true)
         }
 
         // And a genuinely different post still goes through from the same page.
         let other = submissionKey(pageURL: page, values: "title=Trail shoes under $150&&url=")
-        #expect(duplicateSubmitRefusal(alreadyAt: forms.result(for: other)) == nil)
+        #expect(duplicateSubmitRefusal(alreadyAt: forms.result(for: other, scope: "s")) == nil)
     }
 }
