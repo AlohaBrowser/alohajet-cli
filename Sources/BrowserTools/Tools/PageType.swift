@@ -40,6 +40,24 @@ import ToolABI
             isError: true)
     }
 
+    /// Where the keystrokes went when the id named a label or a wrapper rather than a field, or
+    /// nil when they went where the caller pointed. The bridge resolves a `<label>` (or a wrapper
+    /// around exactly one field) to its control and reports that id on `rawResult`; the receipt is
+    /// composed HERE, so it has to say so itself -- the bridge's own sentence never reached the
+    /// model, and a silent redirect is the mis-type the resolution exists to prevent.
+    static func redirect(in result: AgentActionResult) -> (id: String, tag: String)? {
+        guard let id = result.rawResult?["redirectedTo"]?.stringValue, !id.isEmpty else { return nil }
+        return (id, result.rawResult?["redirectedTag"]?.stringValue ?? "field")
+    }
+
+    /// The sentence that follows the receipt's first when the keystrokes were redirected: which id
+    /// the model passed, what it was, and which id to use for this field from now on.
+    static func redirectNote(from alohaId: String, to redirect: (id: String, tag: String)?) -> String {
+        guard let redirect else { return "" }
+        return " \"\(alohaId)\" is a label for that <\(redirect.tag)> and holds no text itself; "
+            + "use \"\(redirect.id)\" for this field from now on."
+    }
+
     struct Field: Equatable {
         let alohaId: String
         let text: String
@@ -102,10 +120,19 @@ import ToolABI
             let urlBefore = bridge.currentPageURL()
             // Which element this was, in replayable terms — resolved before the action, since typing can
             // re-render the form and the snapshot would then hold a different node. See `PageToolReceipt`.
-            let selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
+            var selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
             let typeResult = await bridge.type(alohaId, text, replace: replace)
             if typeResult.isError {
                 return resolved.tab.naming(RawToolResult(output: typeResult.output, isError: true))
+            }
+            // THE ELEMENT THE KEYSTROKES WENT TO, which is the field when the id named its label.
+            // The receipt names that field first, since it is the id the model reuses, and the
+            // selector is the field's too: the snapshot read is still the pre-typing one here.
+            let redirect = Self.redirect(in: typeResult)
+            let typedInto = "\"\(redirect?.id ?? alohaId)\""
+            let redirectNote = Self.redirectNote(from: alohaId, to: redirect)
+            if let redirect {
+                selectorNote = PageToolReceipt.selectorNote(alohaId: redirect.id, tab: resolved.cdpTab)
             }
             // Arms `page_click`'s duplicate-submit form read for THIS tab only -- a duplicate
             // submission needs a filled form, and a filled form needs typing. See `SubmittedForms`.
@@ -126,7 +153,7 @@ import ToolABI
                 // Settled, not immediate: typing rarely navigates, so this costs the grace window
                 // only in the case where the receipt would have been right anyway.
                 let urlAfter = await bridge.settledPageURL(after: urlBefore)
-                let receipt = RawToolResult(output: "Typed into element \"\(alohaId)\"."
+                let receipt = RawToolResult(output: "Typed into element \(typedInto)." + redirectNote
                                             + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
                                             + selectorNote + hint,
                                             isError: nil)
@@ -150,7 +177,8 @@ import ToolABI
                 // The typing LANDED before the Enter failed, so the page has changed and the model
                 // needs it to decide what to do next -- an error that hides it costs a re-read.
                 let receipt = RawToolResult(
-                    output: "Typed into element \"\(alohaId)\", but submitting Enter failed: \(submitResult.output)",
+                    output: "Typed into element \(typedInto), but submitting Enter failed: \(submitResult.output)"
+                        + redirectNote,
                     isError: true)
                 return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved, evenIfError: true))
             }
@@ -170,7 +198,7 @@ import ToolABI
             // `settledPageURL` has waited out the navigation the Enter caused. Taking it before that
             // wait would capture the page the form was submitted FROM, which is worse than nothing.
             let receipt = RawToolResult(
-                output: "Typed into element \"\(alohaId)\" and pressed Enter to submit."
+                output: "Typed into element \(typedInto) and pressed Enter to submit." + redirectNote
                     + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
                     + selectorNote + hint,
                 isError: nil)
@@ -198,7 +226,13 @@ import ToolABI
                 if result.isError {
                     failures.append("\"\(field.alohaId)\": \(result.output)")
                 } else {
-                    filled.append(field.alohaId)
+                    // The id the keystrokes went to, first; and when that is not the id the caller
+                    // passed, which one it was resolved from, so the next call passes the field.
+                    if let redirect = Self.redirect(in: result) {
+                        filled.append("\(redirect.id) (the <\(redirect.tag)> that \(field.alohaId) labels; use it from now on)")
+                    } else {
+                        filled.append(field.alohaId)
+                    }
                     submittedForms.noteTyped(resolved.tab.id, scope: context.sessionId)
                 }
             }
