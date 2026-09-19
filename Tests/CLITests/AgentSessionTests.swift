@@ -301,6 +301,7 @@ struct AgentSessionTests {
         }
     }
 
+#if canImport(Darwin)
     @Test("a terminal answers the terms prompt", arguments: [("y\n", true), ("YES\n", true), ("n\n", false), ("\n", false)])
     func terminalAnswersTheTerms(input: String, accept: Bool) throws {
         try withStub(protocolVersion: 2, termsAnswerableInApp: false) { stub in
@@ -322,4 +323,5 @@ struct AgentSessionTests {
             #expect(stub.requests(path: "/agent/terms").isEmpty)
         }
     }
+#endif
 }
