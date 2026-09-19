@@ -1,6 +1,11 @@
 import Foundation
 import Dispatch
 import Testing
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
 
 // The CLI and the MCP server live in an executable target, which a Swift test target
 // cannot import. So they are tested the way a user meets them: as a process, over argv
@@ -60,8 +65,8 @@ struct RunOutput {
 /// and needs no writer.
 @discardableResult
 func runCLI(
-    _ arguments: [String], stdin: String? = nil, environment overlay: [String: String] = [:],
-    timeout: TimeInterval = 30
+    _ arguments: [String], stdin: String? = nil, terminal: String? = nil,
+    environment overlay: [String: String] = [:], timeout: TimeInterval = 30
 ) throws -> RunOutput {
     let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
     let sandbox = FileManager.default.temporaryDirectory
@@ -86,7 +91,12 @@ func runCLI(
     // depend on it nor hand it to a stub.
     environment.merge(overlay) { _, override in override }
     process.environment = environment
-    process.standardInput = try FileHandle(forReadingFrom: inURL)
+    let pty = try terminal.map { _ in try openTerminal() }
+    defer { if let pty { close(pty.slave); close(pty.master) } }
+    if let pty, let terminal {
+        _ = terminal.withCString { write(pty.master, $0, strlen($0)) }
+    }
+    process.standardInput = try pty.map { FileHandle(fileDescriptor: $0.slave) } ?? FileHandle(forReadingFrom: inURL)
     process.standardOutput = try FileHandle(forWritingTo: outURL)
     process.standardError = try FileHandle(forWritingTo: errURL)
     try process.run()
@@ -110,3 +120,19 @@ func runCLI(
         stdout: String(decoding: (try? Data(contentsOf: outURL)) ?? Data(), as: UTF8.self),
         stderr: String(decoding: (try? Data(contentsOf: errURL)) ?? Data(), as: UTF8.self))
 }
+
+#if canImport(Darwin)
+private func openTerminal() throws -> (master: Int32, slave: Int32) {
+    let master = posix_openpt(O_RDWR | O_NOCTTY)
+    try #require(master >= 0 && grantpt(master) == 0 && unlockpt(master) == 0)
+    let slave = open(try #require(ptsname(master)), O_RDWR | O_NOCTTY)
+    try #require(slave >= 0)
+    return (master, slave)
+}
+#else
+private struct NoTerminal: Error {}
+
+private func openTerminal() throws -> (master: Int32, slave: Int32) {
+    throw NoTerminal()
+}
+#endif
