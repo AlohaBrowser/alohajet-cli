@@ -121,6 +121,80 @@ struct PageAfterActionTests {
         #expect(result.output.contains("127.0.0.1:8801"))
     }
 
+    /// THE POSITIVE CASE: a read the mock CAN serve lands in the receipt, after the receipt's own
+    /// text, with the receipt's fields intact. Without this an implementation that ran the read
+    /// and dropped its output would pass every other test in the suite.
+    @Test func aNavigationAttachesTheRenderedPage() async throws {
+        let fixture = try await makePageToolsCDPFixture(url: "about:blank")
+        fixture.cdp.pageUrl = "about:blank"
+        // Two nodes in the shape `parseDomNode` consumes: a body holding one interactive link.
+        fixture.cdp.domTreeReply = [
+            .object([
+                ("id", .string("root")), ("nodeType", .string("element")),
+                ("element", .object([("tagName", .string("body")), ("attributes", .object([]))])),
+                ("content", .object([("comprehensiveText", .string("Alexander Zverev overview"))])),
+                ("interactivity", .object([("isInteractive", .bool(false))])),
+                ("positioning", .object([("isInViewport", .bool(true)), ("isVisible", .bool(true))])),
+                ("children", .array([.string("link-1")])),
+            ]),
+            .object([
+                ("id", .string("link-1")), ("nodeType", .string("element")),
+                ("element", .object([
+                    ("tagName", .string("a")),
+                    ("attributes", .object([("aloha-id", .string("7f00-rank1")), ("href", .string("/rankings"))])),
+                    ("textContent", .string("Rankings tab")),
+                ])),
+                ("content", .object([("comprehensiveText", .string("Rankings tab"))])),
+                ("interactivity", .object([("isInteractive", .bool(true)), ("isTopElement", .bool(true))])),
+                ("positioning", .object([("isInViewport", .bool(true)), ("isVisible", .bool(true))])),
+                ("children", .array([])),
+            ]),
+        ]
+        let services = NativeToolServices(tabsService: fixture.tabsService, session: SnapshotSession())
+        let result = try await PageNavigateExecutorTool().execute(
+            .object(["action": .string("goto"), "url": .string("http://127.0.0.1:8801/")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+        #expect(result.isError != true, "goto must succeed; got \(result.output)")
+        #expect(pageWasRead(fixture.cdp))
+        // The receipt still leads, and the rendered page follows it.
+        #expect(result.output.contains("127.0.0.1:8801"))
+        #expect(result.output.contains("Rankings tab"), "the rendered page must be appended; got \(result.output)")
+        let receiptAt = try #require(result.output.firstRange(of: "127.0.0.1:8801")).lowerBound
+        let pageAt = try #require(result.output.firstRange(of: "Rankings tab")).lowerBound
+        #expect(receiptAt < pageAt, "the receipt leads, the page follows")
+        // `naming` still stamps the tab identity onto the enriched result.
+        #expect(result.metadata != nil)
+    }
+
+    /// A caller may attach the page to an ERROR receipt when the action changed the page before
+    /// failing -- `page_type` whose typing landed and whose Enter then failed. The error flag and
+    /// the receipt text survive; the page follows.
+    @Test func anErrorReceiptCanOptIntoThePage() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        fixture.cdp.domTreeReply = [
+            .object([
+                ("id", .string("root")), ("nodeType", .string("element")),
+                ("element", .object([("tagName", .string("body")), ("attributes", .object([]))])),
+                ("content", .object([("comprehensiveText", .string("Form still showing the typed title"))])),
+                ("interactivity", .object([("isInteractive", .bool(false))])),
+                ("positioning", .object([("isInViewport", .bool(true)), ("isVisible", .bool(true))])),
+                ("children", .array([])),
+            ]),
+        ]
+        let services = NativeToolServices(tabsService: fixture.tabsService, session: SnapshotSession())
+        let context = makePageToolContext(services: services)
+        let tab = try #require(fixture.tabsService.window?.tabs.getOrRestoreTab(fixture.tabId, restoreIfNeeded: false))
+        let cdpTab = try #require(tab as? CDPTabHandle)
+        let resolved = ResolvedPageTab(tab: tab, cdpTab: cdpTab)
+        let failed = RawToolResult(output: "Typed into element \"t\", but submitting Enter failed: no focus.", isError: true)
+        let enriched = await withPageSnapshot(failed, context, resolved, evenIfError: true)
+        await fixture.client.close()
+        #expect(enriched.isError == true)
+        #expect(enriched.output.hasPrefix(failed.output))
+        #expect(enriched.output.contains("Form still showing the typed title"), "got \(enriched.output)")
+    }
+
     /// No session, no read: the snapshot is an addition to a receipt, never a reason to fail one,
     /// and a host that wires no session gets the pre-existing behaviour byte for byte.
     @Test func withoutASessionNoPageIsRead() async throws {

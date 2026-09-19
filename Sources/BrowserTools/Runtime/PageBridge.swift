@@ -700,6 +700,21 @@ public final class AgentBrowserBridge {
     /// date had landed. `page_type` therefore does NOT gate on this; anything else whose change is
     /// a value rather than a structure needs the same exemption.
     ///
+    /// THE IDS THEMSELVES ARE THE FOURTH PART, and the one that answers the question directly.
+    /// The DOM walk writes each kept node's `aloha-id` back onto the element, so the ids the model
+    /// holds are exactly the `[aloha-id]` attributes now in the document, in document order. A
+    /// digest of that sequence moves when an element is replaced one-for-one (same count, same
+    /// URL, new hash), when the order changes, or when a same-URL document replacement re-walked
+    /// to a different set -- the cases a count cannot see (review of the first version: "one-for-one
+    /// replacements or reorders preserve the count and URL"). A page that was never walked has no
+    /// ids and digests to a constant, which is right: the model holds no ids from it to go stale.
+    ///
+    /// The digest is FNV-1a over the joined ids, folded to 32 bits in JS integer arithmetic, so it
+    /// costs one `querySelectorAll` and a loop -- no DOM walk, no serialization. Shadow roots and
+    /// same-origin frames are not pierced by `querySelectorAll`; ids stamped inside them are
+    /// covered only by the count, which is the known limit of this probe. `__alohaDocGeneration`
+    /// is kept in the string for hosts whose page runtime seeds it; this package's does not.
+    ///
     /// Deliberately NOT a hash of the markdown: producing that is the DOM walk this exists to skip.
     /// Returns nil when the page cannot answer; `pageMoved` treats a nil on either side as
     /// "changed", so an unreadable page still gets its snapshot rather than silently losing it.
@@ -710,7 +725,18 @@ public final class AgentBrowserBridge {
             var generation = String(window.__alohaDocGeneration || "");
             var count = document.querySelectorAll("*").length;
             var here = String(window.location && window.location.href || "");
-            return generation + "|" + count + "|" + here;
+            var ids = document.querySelectorAll("[aloha-id]");
+            var hash = 0x811c9dc5;
+            for (var i = 0; i < ids.length; i++) {
+              var id = ids[i].getAttribute("aloha-id") || "";
+              for (var j = 0; j < id.length; j++) {
+                hash ^= id.charCodeAt(j);
+                hash = Math.imul(hash, 0x01000193) >>> 0;
+              }
+              hash ^= 0x7c;
+              hash = Math.imul(hash, 0x01000193) >>> 0;
+            }
+            return generation + "|" + count + "|" + here + "|" + ids.length + ":" + hash.toString(16);
           } catch (e) { return ""; }
         })()
         """
