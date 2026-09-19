@@ -21,20 +21,45 @@ struct CLIArgumentTests {
         #expect(run.stdout.contains("alohajet mcp") || run.stdout.contains("mcp"))
     }
 
+    static let commands = [
+        "open", "read", "tabs", "close", "quit", "click", "type",
+        "select", "text", "goto", "back", "keys", "wait", "upload", "mcp",
+    ]
+
     @Test func helpAloneSucceeds() throws {
         let run = try runCLI(["--help"])
         #expect(run.status == 0)
         #expect(run.stdout.contains("COMMANDS"))
         #expect(run.stdout.contains("EXIT CODES"))
+        let agent = try #require(run.stdout.range(of: "\nAGENT\n"))
+        let commands = try #require(run.stdout.range(of: "\nCOMMANDS\n"))
+        #expect(agent.lowerBound < commands.lowerBound)
+        #expect(!run.stdout.contains("/agent/task"))
+    }
+
+    @Test("every help page fits 80 columns with one description column",
+          arguments: [["--help"]] + commands.map { [$0, "--help"] })
+    func helpFitsATerminal(_ arguments: [String]) throws {
+        let run = try runCLI(arguments)
+        #expect(run.status == 0, "exited \(run.status): \(run.combined)")
+        var columns = Set<Int>()
+        for line in run.stdout.split(separator: "\n", omittingEmptySubsequences: false) {
+            #expect(line.count <= 80, "\(line.count) columns: \(line)")
+            #expect(!line.contains("\t") && line.last?.isWhitespace != true, "\(line.debugDescription)")
+            if line.hasPrefix("   ") {
+                columns.insert(line.prefix { $0 == " " }.count)
+            } else if line.hasPrefix("  "), let gap = line.dropFirst(2).range(of: "  ") {
+                columns.insert(line.distance(from: line.startIndex, to: gap.lowerBound)
+                    + line[gap.lowerBound...].prefix { $0 == " " }.count)
+            }
+        }
+        #expect(columns.count <= 1, "description columns \(columns.sorted())")
     }
 
     /// Every command the usage block advertises must have a `<command> --help` page.
     /// A command documented only in the summary line is how `click --double` ended up
     /// undiscoverable.
-    @Test("every command has its own help page", arguments: [
-        "open", "read", "tabs", "close", "quit", "click", "type",
-        "select", "text", "goto", "back", "keys", "wait", "upload", "mcp",
-    ])
+    @Test("every command has its own help page", arguments: commands)
     func perCommandHelp(_ command: String) throws {
         let run = try runCLI([command, "--help"])
         #expect(run.status == 0, "\(command) --help exited \(run.status)")

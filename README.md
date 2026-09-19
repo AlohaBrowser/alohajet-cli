@@ -74,12 +74,10 @@ touches no browser:
 
 ```console
 $ alohajet --help | head -1
-alohajet — drive a real Chromium from the command line.
+alohajet — the AlohaJet agent and a scriptable browser, from the command line.
 ```
 
-There is no `--version`, and no `doctor`. `alohajet --version` falls through to unknown-flag
-handling: 84 lines of help, exit 2. The MCP `initialize` handshake is the only surface that
-reports one (`"version": "0.1.0"`).
+`alohajet --version` prints the version. There is no `doctor`.
 
 There is **no prebuilt binary**. `v0.1.0` is tagged and its release build failed, so no
 release exists and no `curl | sh` line works today. [RELEASING.md](RELEASING.md) has the
@@ -180,7 +178,7 @@ $ alohajet --cdp 9999 read                     ; echo $?   # 3  browser unreacha
 ```
 
 One command is not a tool call. `alohajet -p "<prompt>"` hands one turn to an agent loop
-that is already running behind an HTTP endpoint (`POST /agent/task`). **No loop ships in
+that is already running behind an HTTP endpoint (`POST /agent/run`). **No loop ships in
 this package**: the endpoint defaults to `http://127.0.0.1:8765`, the Aloha browser's own
 automation server on this machine, and `--endpoint <url>` names a different one.
 

@@ -77,7 +77,12 @@ func parseArgs(_ argv: [String]) throws -> Args {
             guard index < argv.count else {
                 throw CLIError(message: "\(token) expects a value", code: exitUsage)
             }
-            args.flags[token] = argv[index]
+            if argv[index] == "--help" || argv[index] == "-h" {
+                args.flags[token] = ""
+                args.flags[argv[index]] = ""
+            } else {
+                args.flags[token] = argv[index]
+            }
         } else if token.hasPrefix("-") && token != "-" {
             args.flags[token] = ""
         } else {
@@ -91,153 +96,136 @@ func parseArgs(_ argv: [String]) throws -> Args {
 // MARK: - Help
 
 let commandHelp: [String: String] = [
-    "open": "alohajet open <url>\n  Open a new tab at <url> and print its page as markdown with element refs.\n  Prints the tab id every other command takes; it stays valid until the tab or\n  the browser closes. The tab becomes the one in use, so the next command needs\n  no --tab. <url> must carry a scheme: https://example.com, not example.com.",
-    "read": "alohajet read [--tab <id>]\n  Print a tab's page as markdown. Without --tab: the tab left in use by the last\n  command, else the browser's first http(s) tab.",
-    "tabs": "alohajet tabs\n  List every open tab with its id and URL. ● marks the tab in use; a tab marked\n  [the user's tab] was already open when we attached and close refuses it.",
-    "close": "alohajet close <id>\n  Close a tab by id. In the default lane every tab is one alohajet opened, so any\n  of them can be closed. Under --cdp the browser is the user's: tabs that were\n  already open there are theirs, not ours, and close refuses them.",
-    "quit": "alohajet quit\n  Close the shared browser the default lane launched and delete its profile.\n  Nothing else ends it: it is deliberately still running when a command exits, so\n  the element refs the last command printed are still addressable by the next one.",
-    "click": "alohajet [--tab <id>] click <ref> [--double|--right]\n  Click the element carrying that aloha-id on the tab in use.",
-    "type": "alohajet [--tab <id>] type <ref> <text> [--submit] [--no-replace]\n  Type into an input by ref. --submit presses Enter after; --no-replace appends.",
-    "select": "alohajet [--tab <id>] select <ref> --text <t> | --index <n>\n  Pick an option in a <select> by visible text or zero-based index.",
-    "text": "alohajet [--tab <id>] text <ref>[,<ref>...] [--max-chars <n>]\n  Read the visible text (or input value) of up to 20 elements in one call.",
-    "goto": "alohajet [--tab <id>] goto <url>\n  Navigate the tab in use, in place. http and https only.",
-    "back": "alohajet [--tab <id>] back\n  Step back in the tab in use's history.",
-    "keys": "alohajet [--tab <id>] keys <chord>\n  Send a key or chord to whatever has focus, e.g. \"Enter\", \"Control+a\".",
-    "wait": "alohajet [--tab <id>] wait <css-selector> [--timeout-ms <n>]\n  Poll until an element matches, or the timeout (default 10000, capped at 30000).",
-    "upload": "alohajet [--tab <id>] upload <ref> <path> [<path>...]\n  Attach files to a file input by ref. Paths are read from THIS machine and must\n  be absolute. Clicking the input instead opens a native dialog nothing here can\n  drive, so click refuses it — this is the way in.",
+    "open": """
+        alohajet open <url>
+          Open a new tab at <url> and print its page as markdown with element refs.
+          <url> needs a scheme: https://example.com, not example.com. The new tab is
+          now in use; its id works with --tab until the tab or browser closes.
+        """,
+    "read": """
+        alohajet read [--tab <id>]
+          Print a tab's page as markdown with element refs. Without --tab: the tab
+          left in use by the last command, else the browser's first http(s) tab.
+        """,
+    "tabs": """
+        alohajet tabs
+          List open tabs with their ids and URLs. ● marks the tab in use. A tab
+          marked [the user's tab] was open before alohajet attached; close refuses it.
+        """,
+    "close": """
+        alohajet close <id>
+          Close a tab by id. Under --cdp or --browser aloha, tabs that were already
+          open there belong to the user, and close refuses them.
+        """,
+    "quit": """
+        alohajet quit
+          Close the shared browser and delete its profile. Nothing else ends it: it
+          outlives each command so the refs one command prints work in the next.
+        """,
+    "click": """
+        alohajet [--tab <id>] click <ref> [--double|--right]
+          Click the element with that ref on the tab in use.
+        """,
+    "type": """
+        alohajet [--tab <id>] type <ref> <text> [--submit] [--no-replace]
+          Type into an input by ref. --submit presses Enter after; --no-replace
+          appends instead of replacing.
+        """,
+    "select": """
+        alohajet [--tab <id>] select <ref> --text <t> | --index <n>
+          Pick an option in a <select> by visible text or zero-based index.
+        """,
+    "text": """
+        alohajet [--tab <id>] text <ref>[,<ref>...] [--max-chars <n>]
+          Print the visible text (or input value) of up to 20 elements.
+        """,
+    "goto": """
+        alohajet [--tab <id>] goto <url>
+          Navigate the tab in use, in place. http and https only.
+        """,
+    "back": """
+        alohajet [--tab <id>] back
+          Go back in the tab in use's history.
+        """,
+    "keys": """
+        alohajet [--tab <id>] keys <chord>
+          Send a key or chord to whatever has focus, e.g. "Enter", "Control+a".
+        """,
+    "wait": """
+        alohajet [--tab <id>] wait <css-selector> [--timeout-ms <n>]
+          Wait until an element matches (timeout 10000 ms by default, 30000 max).
+        """,
+    "upload": """
+        alohajet [--tab <id>] upload <ref> <path> [<path>...]
+          Attach files to a file input by ref. Paths must be absolute, on this
+          machine. click refuses file inputs: their native dialog cannot be driven.
+        """,
     "mcp": """
-alohajet mcp [--endpoint <url>]
-  Two products, one verb — the flag picks which.
-  Without --endpoint: serve the nine tools as an MCP server over stdio, driving the
-  browser the connection flags name (the tools are this process's, the Chromium is
-  built on the first tools/call).
-  With --endpoint: serve NOTHING. Relay stdio to the MCP server a running Aloha
-  browser already mounts at <url>/mcp, for a client that accepts no HTTP transport —
-  Claude Desktop's config takes {command, args, env} and drops any entry carrying
-  type/url/headers. No browser is launched on this lane and no tool runs in this
-  process. <url> must be loopback http or https; see ALOHAJET_AGENT_TOKEN.
-"""
+        alohajet mcp [--endpoint <url>]
+          Serve the nine browser tools as an MCP server on stdio. The browser
+          options pick the browser, which starts on the first tool call.
+          With --endpoint, serve nothing: relay stdio to the MCP server of a running
+          Aloha browser at <url>/mcp, for clients that can only run a command, such
+          as Claude Desktop. <url> must be loopback http or https.
+        """
 ]
 
 let usage = """
-alohajet — drive a real Chromium from the command line.
+alohajet — the AlohaJet agent and a scriptable browser, from the command line.
 
 USAGE
-  alohajet [connection flags] <command> [args] [--json]
+  alohajet -p <prompt> [agent options]
+  alohajet [browser options] <command> [args]
+
+AGENT
+  -p <prompt>             ask the AlohaJet agent in the Aloha browser
+  --resume <chat-id>      continue that chat (-p prints its id on stderr)
+  --continue              continue the chat the app is on (default: a new one)
+  --headless              run the app with no window (refused if it has one)
+  --endpoint <url>        agent server (default http://127.0.0.1:8765, the
+                          local app, launched if needed); http to loopback only
+  --json                  print the whole result as one JSON object
+  Until the Terms of Service and Privacy Policy are accepted, -p asks first.
 
 COMMANDS
-  open <url>                        open a tab and print the page
-  read [--tab <id>]                 print a tab as markdown with element refs
-  tabs                              list open tabs
-  close <id>                        close a tab
-  quit                              close the shared browser (see CONNECTION)
-  click <ref> [--double|--right]    click an element by ref
-  type <ref> <text> [--submit] [--no-replace]
-  select <ref> --text <t> | --index <n>
-  text <ref>[,<ref>...]             read element text
-  goto <url> | back                 navigate the tab in use
-  keys <chord>                      send a key or chord
-  wait <css> [--timeout-ms <n>]     wait for an element
-  upload <ref> <path>...            attach files to a file input by ref
-  mcp                               run as an MCP server on stdio
-  mcp --endpoint <url>              relay stdio to a running Aloha browser's own
-                                    MCP server instead of serving these tools
+  open <url>              open a tab and print the page with element refs
+  read                    print the tab in use as markdown with element refs
+  tabs                    list open tabs
+  close <id>              close a tab
+  click <ref>             click an element (--double, --right)
+  type <ref> <text>       type into an input (--submit, --no-replace)
+  select <ref>            choose an option (--text <t> or --index <n>)
+  text <ref>[,<ref>...]   print the text of up to 20 elements
+  goto <url>, back        navigate the tab in use
+  keys <chord>            press a key or chord, e.g. Enter or Control+a
+  wait <css>              wait for a CSS selector (--timeout-ms <n>)
+  upload <ref> <path>...  attach files to a file input
+  quit                    close the shared browser
+  mcp                     serve these tools over MCP on stdio
+  mcp --endpoint <url>    relay MCP on stdio to the Aloha browser's server
 
-AGENT (the ONE thing here that is not a tool call)
-  -p <prompt>                       run one agent turn: hand <prompt> to the agent
-                                    loop already running behind the endpoint (POST
-                                    /agent/run) and print its final answer.
-                                    NO loop runs in this process. Every command
-                                    above needs a browser and no agent; `-p` needs
-                                    an agent and none of the browser flags below.
-                                    Each `-p` runs in a FRESH conversation and
-                                    prints its id on stderr, so a piped answer is
-                                    still just the answer.
-  --endpoint <url>                  the agent to drive. [default: http://127.0.0.1:8765]
-                                    That default is the Aloha browser on THIS
-                                    machine: it is launched or activated for you,
-                                    and a launch that cannot work is refused by name
-                                    (exit 3) rather than by a 30s timeout. Any other
-                                    <url> launches nothing. It must be loopback http
-                                    (127.0.0.1, ::1, localhost) or https: see
-                                    ALOHAJET_AGENT_TOKEN. Present but EMPTY is a
-                                    usage error, not the default — `--endpoint
-                                    "$VAR"` with VAR unset has still named a host.
-  --headless                        on the default endpoint only: bring the app up
-                                    with no window. Refused if an instance is
-                                    already running the other way — `open --args`
-                                    reaches a cold launch and nothing else, so the
-                                    alternative is driving a visible browser while
-                                    claiming not to. Unrelated to the --headless
-                                    under CONNECTION, which is the Chromium lane's;
-                                    the two never appear in one invocation.
-  --resume <chat-id>                continue that conversation instead. A host that
-                                    answers with a different id is refused, not
-                                    silently written to.
-  --continue                        run in whichever conversation the agent is
-                                    already on — what every turn did before the
-                                    default became fresh.
-
-CONNECTION (global; with none of these, the SHARED browser below is used)
-  (default)                 one Chromium, launched on first use and REUSED by every
-                            later command, so refs printed by `open` still work in
-                            `click`. It outlives the command that started it —
-                            `alohajet quit` closes it. Its port is recorded in
-                            <tmp>/alohajet-<uid>/browser.json.
-  --launch                  a throwaway Chromium for THIS command only, terminated
-                            on exit. Refs it prints die with it: single commands
-                            (`open`, `goto`) only.
-  --headless/--no-headless  headless is the default; read only when a browser is
-                            actually launched, not when one is reused
-  --port <n>                debug port to launch on (default: a free one)
-  --cdp <ws-url|port|host:port>
-                            attach to a browser already listening; never terminated,
-                            and its pre-existing tabs are the user's (close refuses)
-  --browser chromium|aloha  which browser to drive. `aloha` attaches to the Aloha
-                            browser's own CDP listener (127.0.0.1:9222, or
-                            ALOHA_CDP_PORT), starting the app when it is not running.
-                            It is the user's browser: never terminated, and its
-                            pre-existing tabs are theirs. Default: chromium
-
-OUTPUT
-  --tab <id>                the tab to act on; every command that touches a page
-                            takes it. Default: the tab the last command left in use,
-                            else the browser's first http(s) tab. Ids are the ones
-                            `open` and `tabs` print — one namespace, no translation
-  --json                    print the RawToolResult as JSON instead of prose
-  -h, --help                this text; `alohajet <command> --help` for one command
-  --version                 print the version and exit
+BROWSER OPTIONS (default: one shared Chromium, kept until `alohajet quit`)
+  --launch                a throwaway Chromium for this command only
+  --no-headless           show the window of a Chromium alohajet launches
+  --port <n>              debug port to launch on (default: a free one)
+  --cdp <endpoint>        attach to a browser: ws:// URL, port or host:port
+  --browser aloha         attach to the Aloha browser, starting it if needed
+  --tab <id>              the tab to act on (default: the tab in use)
+  --json                  print the raw tool result as JSON
 
 ENVIRONMENT
-  ALOHAJET_NETWORK_LOG      OFF by default. Set to a directory to record every
-                            request each agent-opened tab makes to
-                            <dir>/<tabId>.jsonl (0600 in a 0700 directory); =1
-                            uses a temp directory. Credential headers, POST
-                            bodies and credential-named fields are masked;
-                            RESPONSE BODIES ARE NOT — do not enable it on a page
-                            you would not paste into a bug report. Nothing
-                            deletes these files.
-  ALOHAJET_BROWSER          path to the Chromium executable the default and --launch
-                            lanes run. Unset: a system Chrome, else a Chrome for
-                            Testing build downloaded once into Application Support
-  ALOHA_CDP_PORT            the port --browser aloha looks for the Aloha browser's
-                            CDP listener on (default 9222)
-  ALOHA_BROWSER_APP         path to the Aloha .app --browser aloha launches, when it
-                            is not a registered install
-  ALOHAJET_AGENT_TOKEN      the bearer token `-p` and `mcp --endpoint` send to that
-                            endpoint. Unset: read from
-                            ~/Library/Application Support/Aloha/automation-token,
-                            where the Aloha browser provisions it — but that AMBIENT
-                            token is sent to a LOOPBACK --endpoint only, since it
-                            grants full control of the browser and rewrites the
-                            provider API key stored in it. An https --endpoint
-                            elsewhere is served only by this variable, set on purpose.
-                            Absent entirely: no Authorization header is sent and the
-                            endpoint answers 401 — never a silent unauthenticated retry
-  ALOHAJET_DEBUG            log protocol chatter to stderr
+  ALOHAJET_AGENT_TOKEN    token for -p and mcp --endpoint (default: the app's
+                          token file, sent to loopback endpoints only)
+  ALOHAJET_BROWSER        Chromium to launch (default: Chrome, else a download)
+  ALOHA_BROWSER_APP       the Aloha .app to launch
+  ALOHA_CDP_PORT          the Aloha browser's CDP port (default 9222)
+  ALOHAJET_NETWORK_LOG    log tabs' requests to this dir; responses unmasked
+  ALOHAJET_DEBUG          log protocol chatter to stderr
 
 EXIT CODES
-  0 ok    1 tool error    2 usage    3 browser unreachable
+  0 ok, 1 tool or turn failed, 2 usage, 3 browser or app unreachable
+
+`alohajet <command> --help` explains one command; --version prints the version.
 """
 
 // MARK: - Output
