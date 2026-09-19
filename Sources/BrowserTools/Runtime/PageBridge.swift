@@ -1348,29 +1348,124 @@ public final class AgentBrowserBridge {
             // the focus actually TOOK (`document.activeElement`, descended through shadow
             // roots). The second is not redundant: a hidden or readonly input passes the
             // kind check and still swallows everything, which reported a false success.
+            //
+            // AND WHEN THE ID NAMES A LABEL, THE PROBE RESOLVES IT instead of only refusing.
+            // The refusal used to say "re-read the page and pass the aloha-id of the text field
+            // itself", and that is advice the model demonstrably cannot act on: on WebArena run
+            // 34104601895 it fired in 4 of 5 t625 reps, every time on the same `<span>` inside the
+            // Body label, the model re-read and sent the same id again, and the post went in with
+            // an empty body. A label's control is already where a click goes; typing is no
+            // different. `resolveTypeTarget` (between the markers, so the Node harness runs the
+            // bytes that ship) follows the associations HTML itself defines, and redirects only to
+            // EXACTLY ONE candidate: two is a guess, and a guess here types the body into the title.
             let probe = try await backend.evaluateViaCdp("""
             (function() {
               var el = document.querySelector('[aloha-id="\(escaped)"]');
               if (!el) return { found: false };
-              var tag = el.tagName;
-              var inputType = (el.getAttribute('type') || 'text').toLowerCase();
-              var nonText = ['button','submit','reset','checkbox','radio','file','image','range','color','hidden'];
-              var accepts = (tag === 'TEXTAREA'
-                  || (tag === 'INPUT' && nonText.indexOf(inputType) === -1)
-                  || el.isContentEditable === true)
-                && el.disabled !== true && el.readOnly !== true;
-              if (accepts) { el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.focus(); }
-              var active = document.activeElement;
-              while (active && active.shadowRoot && active.shadowRoot.activeElement) {
-                active = active.shadowRoot.activeElement;
+              // BEGIN type-probe js
+              function resolveTypeTarget(el, document) {
+                var nonText = ['button','submit','reset','checkbox','radio','file','image','range','color','hidden'];
+                function kindOf(n) { return (n.getAttribute('type') || 'text').toLowerCase(); }
+                function typable(n) {
+                  if (!n || !n.tagName) return false;
+                  var tag = n.tagName, ty = kindOf(n);
+                  var ok = (tag === 'TEXTAREA'
+                      || (tag === 'INPUT' && nonText.indexOf(ty) === -1)
+                      || n.isContentEditable === true);
+                  return ok && n.disabled !== true && n.readOnly !== true;
+                }
+                // A REDIRECT MUST NEVER ROUTE AROUND THE CREDENTIAL REFUSAL, which is keyed on the id
+                // the model passed. A resolved field is therefore only ever a non-secret one.
+                function eligible(n) { return typable(n) && kindOf(n) !== 'password'; }
+                var target = el;
+                var redirected = '';
+                var redirectedTag = '';
+                var ambiguous = 0;
+                if (!typable(el)) {
+                  var cands = [];
+                  // 1. THE RELATIONSHIP HTML ITSELF DEFINES. A label's control is where a click
+                  //    already goes; typing should be no different.
+                  var label = el.closest ? el.closest('label') : null;
+                  if (label) {
+                    var ctl = label.control || (label.htmlFor ? document.getElementById(label.htmlFor) : null);
+                    if (eligible(ctl)) cands.push(ctl);
+                  }
+                  // 2. An explicit association carried by the element the model named.
+                  var assoc = el.getAttribute('for') || el.getAttribute('aria-controls');
+                  if (assoc) {
+                    var byId = document.getElementById(assoc);
+                    if (eligible(byId)) cands.push(byId);
+                  }
+                  // 3. A single field WRAPPED by it -- a div or span around one input.
+                  if (!cands.length && el.querySelectorAll) {
+                    var inner = el.querySelectorAll('input, textarea, [contenteditable]');
+                    var innerOk = [];
+                    for (var i = 0; i < inner.length; i++) { if (eligible(inner[i])) innerOk.push(inner[i]); }
+                    if (innerOk.length === 1) { cands.push(innerOk[0]); }
+                    else if (innerOk.length > 1) { ambiguous = innerOk.length; }
+                  }
+                  // 4. The field it sits immediately before, which is how most labels are placed.
+                  if (!cands.length && !ambiguous && eligible(el.nextElementSibling)) {
+                    cands.push(el.nextElementSibling);
+                  }
+                  var uniq = [];
+                  for (var j = 0; j < cands.length; j++) {
+                    if (uniq.indexOf(cands[j]) === -1) uniq.push(cands[j]);
+                  }
+                  // EXACTLY ONE, or nothing. Two candidate fields is a guess, and a guess here types
+                  // the body into the title.
+                  if (uniq.length === 1) {
+                    target = uniq[0];
+                    redirected = target.getAttribute('aloha-id') || '';
+                    redirectedTag = target.tagName;
+                  } else if (uniq.length > 1) {
+                    ambiguous = uniq.length;
+                  }
+                }
+                var accepts = typable(target);
+                // THE PAGE'S TYPABLE FIELDS, enumerated so the refusal can NAME them instead of
+                // telling the model to go and look -- and ONLY when about to refuse. Computed
+                // unconditionally, every successful page_type paid for a document-wide
+                // querySelectorAll and up to twelve label lookups it never read: nav-33 at
+                // concurrency 16 turned that into 25 timed-out attempts and a median wall of
+                // 382s against 126s.
+                var fields = [];
+                if (!accepts) {
+                  try {
+                    var all = document.querySelectorAll('input, textarea, [contenteditable]');
+                    for (var k = 0; k < all.length && fields.length < 12; k++) {
+                      var f = all[k];
+                      if (!eligible(f)) continue;
+                      var fid = f.getAttribute('aloha-id');
+                      if (!fid) continue;
+                      var name = (f.getAttribute('aria-label') || f.getAttribute('placeholder')
+                                  || f.getAttribute('name') || '').slice(0, 40);
+                      if (!name && f.labels && f.labels.length) {
+                        name = String(f.labels[0].textContent || '').trim().slice(0, 40);
+                      }
+                      fields.push(fid + (name ? ' (' + name + ')' : '') + ' ' + f.tagName.toLowerCase());
+                    }
+                  } catch (e) { fields = []; }
+                }
+                if (accepts) { target.scrollIntoView({ block: 'center', behavior: 'instant' }); target.focus(); }
+                var active = document.activeElement;
+                while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+                  active = active.shadowRoot.activeElement;
+                }
+                return {
+                  found: true,
+                  acceptsText: accepts,
+                  focused: active === target,
+                  tag: el.tagName,
+                  inputType: el.tagName === 'INPUT' ? kindOf(el) : '',
+                  redirectedTo: redirected,
+                  redirectedTag: redirectedTag,
+                  ambiguous: String(ambiguous),
+                  fields: fields.join(' | ')
+                };
               }
-              return {
-                found: true,
-                acceptsText: accepts,
-                focused: active === el,
-                tag: tag,
-                inputType: tag === 'INPUT' ? inputType : ''
-              };
+              // END type-probe js
+              return resolveTypeTarget(el, document);
             })()
             """)
             guard probe?.objectMember("found")?.boolValue == true else {
@@ -1379,10 +1474,29 @@ public final class AgentBrowserBridge {
             let tag = (probe?.objectMember("tag")?.stringValue ?? "unknown").lowercased()
             let inputType = probe?.objectMember("inputType")?.stringValue ?? ""
             let kind = inputType.isEmpty ? "<\(tag)>" : "<\(tag) type=\(inputType)>"
+            // WHERE THE KEYSTROKES ACTUALLY WENT, when the id named a label or a wrapper.
+            let redirectedTo = probe?.objectMember("redirectedTo")?.stringValue ?? ""
+            let redirectedTag = (probe?.objectMember("redirectedTag")?.stringValue ?? "").lowercased()
+            // Crosses as a STRING: the `JSValue` extension in this file carries stringValue,
+            // boolValue and objectMember, and nothing numeric.
+            let ambiguous = Int(probe?.objectMember("ambiguous")?.stringValue ?? "") ?? 0
             guard probe?.objectMember("acceptsText")?.boolValue == true else {
+                // NAME THE FIELDS rather than telling the model to go and look. On run 34110975237
+                // t625 r0 was told "re-read the page", re-read, and then typed into the
+                // "Formatting help" CHECKBOX and a span, while `textarea("Body")` was listed in
+                // the very observation it was holding. The ids below come from the live page, so
+                // the alternative offered is a fact, not advice.
+                let fields = probe?.objectMember("fields")?.stringValue ?? ""
+                let offer = fields.isEmpty
+                    ? "This page has no text field that can take typing."
+                    : "The text fields on this page are: \(fields). Pass one of THOSE ids."
+                let why = ambiguous > 1
+                    ? "It wraps \(ambiguous) different text fields, so which one you meant cannot be "
+                        + "guessed. "
+                    : ""
                 return AgentActionResult(
                     output: "Element with aloha-id \(alohaId) cannot accept typed text (it is \(kind)). "
-                        + "No keystrokes were sent. Re-read the page and pass the aloha-id of the text field itself.",
+                        + "No keystrokes were sent. \(why)\(offer)",
                     isError: true)
             }
             guard probe?.objectMember("focused")?.boolValue == true else {
@@ -1393,6 +1507,20 @@ public final class AgentBrowserBridge {
                     isError: true)
             }
             try await typeCDP(text, replace: replace)
+            if !redirectedTo.isEmpty {
+                // SAY SO. A silent redirect is the mis-type this whole probe exists to prevent: the
+                // model has to be able to see that its next id is a different one. The sentence is
+                // for a direct caller; `page_type` composes its own receipt and reads the target
+                // off `rawResult`, so the redirect reaches the model either way.
+                return AgentActionResult(
+                    output: "Element \(alohaId) is \(kind), which holds no text, so the keystrokes went "
+                        + "to the <\(redirectedTag)> it labels: aloha-id \(redirectedTo). Use THAT id for "
+                        + "this field from now on.",
+                    rawResult: .object([
+                        ("redirectedTo", .string(redirectedTo)),
+                        ("redirectedTag", .string(redirectedTag)),
+                    ]))
+            }
             return AgentActionResult(output: "Typed text into element \(alohaId)")
         } catch {
             if isAbortError(error) {
