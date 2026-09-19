@@ -70,7 +70,10 @@ import ToolABI
         case let .success(resolved):
             let bridge = makePageBridge(resolved.cdpTab, context.signal)
             let result = await operation(bridge)
-            return resolved.tab.naming(RawToolResult(output: result.output, isError: result.isError ? true : nil))
+            let receipt = RawToolResult(output: result.output, isError: result.isError ? true : nil)
+            // A navigation that landed replaced the page by definition, so the page it landed on
+            // rides in the receipt unconditionally -- see `withPageSnapshot`.
+            return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved))
         }
     }
 }
