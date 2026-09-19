@@ -176,7 +176,14 @@ struct CLIArgumentTests {
             environment: ["ALOHA_BROWSER_APP": "/nonexistent/NoSuch.app"])
         #expect(run.status == 3, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("could not launch the Aloha browser"))
+        // The launcher runs `open -a <app>`, and only macOS's `open` reads `-a` as the app to
+        // launch — so only there does the failure name the bundle. On Linux `/usr/bin/open` is
+        // `xdg-open`, which rejects the flag before looking at its argument, and the message the
+        // CLI relays is `xdg-open: unexpected option '-a'` with no path in it. The exit code and
+        // the "could not launch" prefix hold on both platforms and are asserted on both.
+        #if os(macOS)
         #expect(run.stderr.contains("/nonexistent/NoSuch.app"))
+        #endif
     }
 
     /// `--endpoint "$VAR"` with the variable unset has still NAMED a host; answering it
