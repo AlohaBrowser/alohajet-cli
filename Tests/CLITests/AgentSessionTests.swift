@@ -73,6 +73,16 @@ struct AgentSessionTests {
         #expect(run.stderr.contains("--resume expects a chat id (a UUID)"))
     }
 
+    @Test("-p with a help flag prints the help and contacts nothing", arguments: ["--help", "-h"])
+    func promptHelpContactsNothing(_ flag: String) throws {
+        try withStub(protocolVersion: 2) { stub in
+            let run = try runTurn(["-p", flag], stub: stub)
+            #expect(run.status == 0, "exited \(run.status): \(run.combined)")
+            #expect(run.stdout.contains("-p <prompt>"), "\(run.combined)")
+            #expect(stub.requests.isEmpty, "contacted \(stub.paths)")
+        }
+    }
+
     /// Two flags naming two different conversations. Silently preferring one would run
     /// the turn somewhere the caller did not ask for.
     @Test("--resume and --continue together are refused", arguments: [
