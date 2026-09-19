@@ -34,6 +34,11 @@ struct ControlState: Equatable {
     var selected: String?
     var disabled: String?
     var value: String?
+    /// Whether the control sits inside a `<form>`, and whether clicking it submits one -- read so
+    /// `page_click` can decide whether the duplicate-submit form read is worth its round trip on a
+    /// form nothing was typed into. Neither changes across a click, so neither produces a note.
+    var inForm: Bool = false
+    var submits: Bool = false
 
     static let absent = ControlState(present: false, name: "", pressed: nil, checked: nil,
                                      expanded: nil, selected: nil, disabled: nil, value: nil)
@@ -57,7 +62,9 @@ struct ControlState: Equatable {
             name: text("name") ?? "",
             pressed: text("pressed"), checked: text("checked"),
             expanded: text("expanded"), selected: text("selected"),
-            disabled: text("disabled"), value: text("value"))
+            disabled: text("disabled"), value: text("value"),
+            inForm: (raw["inForm"] as? Bool) ?? false,
+            submits: (raw["submits"] as? Bool) ?? false)
     }
 }
 

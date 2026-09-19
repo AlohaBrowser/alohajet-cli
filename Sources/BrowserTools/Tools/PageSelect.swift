@@ -46,6 +46,9 @@ import ToolABI
             // commonly re-renders dependent controls. See `PageToolReceipt`.
             let selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
             let result = await bridge.selectOptionById(alohaId, text: text, index: index)
+            // A select-only form is a filled form: arm `page_click`'s duplicate-submit read for this
+            // tab the way `page_type` does. See `SubmittedForms`.
+            if !result.isError { submittedForms.noteTyped(resolved.tab.id, scope: context.sessionId) }
             // Settled, not immediate. A select that fires an onchange navigation — Magento's
             // sort-order and page-size controls both do — commits after this line, so an immediate
             // read names the page the select just left.

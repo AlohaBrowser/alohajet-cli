@@ -181,8 +181,16 @@ extension AgentBrowserBridge {
             var disabled = (typeof el.disabled === 'boolean')
               ? (el.disabled ? 'true' : 'false') : attr('aria-disabled');
             var value = (typeof el.value === 'string') ? cap(el.value) : null;
+            // For page_click's duplicate-submit read: is this a submit control inside a form? A
+            // <button> with no type IS a submit button (Postmill's shape); a type="button" is not.
+            var form = el.form || (el.closest ? el.closest('form') : null);
+            var typeAttr = String((el.getAttribute && el.getAttribute('type')) || '').toLowerCase();
+            var submits = (tag === 'button' && typeAttr !== 'button' && typeAttr !== 'reset')
+                       || (tag === 'input' && (typeAttr === 'submit' || typeAttr === 'image'));
             return JSON.stringify({
               present: true,
+              inForm: !!form,
+              submits: !!submits,
               name: cap(name),
               pressed: attr('aria-pressed'),
               checked: checked,
@@ -213,21 +221,35 @@ extension AgentBrowserBridge {
         let script = #"""
         (function() {
           try {
-            var out = [];
+            // EVERY control and the WHOLE value, digested here so the wire carries one short hash
+            // rather than the form: the first version kept 60 controls and 200 characters per value,
+            // so two forms differing only in a 61st field or the tail of a long body collided and
+            // the second was refused (review of the first version). FNV-1a, 32-bit, like the
+            // fingerprint. Password, hidden and file inputs stay out of the identity.
             var nodes = document.querySelectorAll("input, textarea, select");
-            for (var i = 0; i < nodes.length && i < 60; i++) {
+            var hash = 0x811c9dc5, count = 0;
+            function mix(s) {
+              s = String(s == null ? "" : s);
+              for (var j = 0; j < s.length; j++) { hash ^= s.charCodeAt(j); hash = Math.imul(hash, 0x01000193) >>> 0; }
+              hash ^= 0x1f; hash = Math.imul(hash, 0x01000193) >>> 0;
+            }
+            for (var i = 0; i < nodes.length; i++) {
               var el = nodes[i];
               var type = String(el.type || "").toLowerCase();
               if (type === "password" || type === "hidden" || type === "file") { continue; }
               var value;
               if (type === "checkbox" || type === "radio") {
                 value = el.checked ? "1" : "0";
+              } else if (el.tagName && el.tagName.toLowerCase() === "select" && el.multiple) {
+                var picked = [];
+                for (var k = 0; k < el.options.length; k++) { if (el.options[k].selected) picked.push(el.options[k].value); }
+                value = picked.join("\u001f");
               } else {
-                value = String(el.value == null ? "" : el.value).slice(0, 200);
+                value = el.value == null ? "" : el.value;
               }
-              out.push(String(el.name || el.id || i) + "=" + value);
+              mix(el.name || el.id || String(i)); mix(value); count++;
             }
-            return out.join("&&");
+            return count ? ("v1:" + count + ":" + hash.toString(16)) : "";
           } catch (e) { return ""; }
         })()
         """#
@@ -324,7 +346,13 @@ extension AgentBrowserBridge {
     /// runs the identical source against a fake DOM in Node, extracting it by the two markers.
     static let overlayHiderSource = """
         // BEGIN overlay-hider js
-        var CONSENT = /cookie|cookies|consent|privacy|gdpr|accept|agree|preferences|we value your|zustimmen|akzeptieren|datenschutz|einwilligung|accepter|confidentialit|aceptar|privacidad|accetta|aceitar|\\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u044c|\\u043a\\u0443\\u043a\\u0438|\\u0441\\u043e\\u0433\\u043b\\u0430\\u0441/i;
+        // A consent prompt names its TOPIC (cookies, consent, tracking, GDPR) AND offers an ACTION
+        // (accept, reject, manage, preferences); the review's counter-example -- a fixed settings
+        // modal reading "privacy preferences" -- has the action word and no topic, and must not
+        // be treated as one. Seven languages on both sides; "privacy" alone qualifies for neither.
+        var CONSENT_TOPIC = /cookie|cookies|consent|gdpr|tracking|we value your privacy|datenschutz|einwilligung|confidentialit|privacidad|\\u043a\\u0443\\u043a\\u0438|\\u0441\\u043e\\u0433\\u043b\\u0430\\u0441/i;
+        var CONSENT_ACTION = /accept|agree|allow|reject|decline|deny|manage|preferences|settings|zustimmen|akzeptieren|ablehnen|accepter|refuser|aceptar|rechazar|accetta|rifiuta|aceitar|recusar|\\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u044c|\\u043e\\u0442\\u043a\\u043b\\u043e\\u043d/i;
+        function ohIsConsent(t) { return CONSENT_TOPIC.test(t) && CONSENT_ACTION.test(t); }
         function ohText(n) {
           var t = '';
           try { t = n.innerText || n.textContent || ''; } catch (e) {}
@@ -382,7 +410,7 @@ extension AgentBrowserBridge {
             var rr = root.getBoundingClientRect();
             var vw = Math.max(1, window.innerWidth || 1), vh = Math.max(1, window.innerHeight || 1);
             var coverage = (Math.max(0, rr.width) * Math.max(0, rr.height)) / (vw * vh);
-            var consent = CONSENT.test(t);
+            var consent = ohIsConsent(t);
             var blanket = coverage >= 0.6 && !ohHasFormFields(root);
             if (!consent && !blanket) break;
             try { ohHide(root, document); } catch (e) { break; }
@@ -411,7 +439,7 @@ extension AgentBrowserBridge {
           }
           if (!layered || !root) return '';
           var t = ohText(root);
-          if (!CONSENT.test(t)) return '';
+          if (!ohIsConsent(t)) return '';
           var label = ohText(el);
           try { ohHide(root, document); } catch (e) { return ''; }
           return 'NOT CLICKED. "' + (label.length > 40 ? label.slice(0, 40) : label) + '" is a control of a cookie/consent prompt, and this agent answers none of them (policy: no new cookies). The prompt ' + ohDescribe(root, t) + ' was hidden instead; nothing was accepted or rejected. The page beneath is usable -- continue with the task.';

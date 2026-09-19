@@ -50,10 +50,36 @@ func submissionKey(pageURL: String, values: String) -> String {
     if let parsed = URL(string: pageURL), let host = parsed.host, !host.isEmpty {
         let path = parsed.path.isEmpty ? "/" : parsed.path
         page = "\(parsed.scheme ?? "")://\(host)\(parsed.port.map { ":\($0)" } ?? "")\(path)"
+            + identityBearingQuery(parsed)
     } else {
         page = pageURL
     }
     return page + "#" + stableDigest(values)
+}
+
+/// Query parameters that name WHICH resource the form is for -- `/edit?id=2` is a different form
+/// from `/edit?id=1` -- with the tracking parameters that name nothing removed, and sorted so
+/// order cannot split one form into two keys. Empty when nothing identity-bearing remains.
+///
+/// The first version dropped the whole query, on the reasoning that `?utm_source=` must not make
+/// one form into two; the review caught the other half: routing by query parameter is common,
+/// and dropping it refused the second of two legitimate submissions to different records.
+func identityBearingQuery(_ url: URL) -> String {
+    guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+          !items.isEmpty else { return "" }
+    let kept = items
+        .filter { !isTrackingParameter($0.name) }
+        .map { "\($0.name)=\($0.value ?? "")" }
+        .sorted()
+    return kept.isEmpty ? "" : "?" + kept.joined(separator: "&")
+}
+
+/// Parameters that identify a marketing source, a click, or a visitor -- never a resource.
+func isTrackingParameter(_ name: String) -> Bool {
+    let lower = name.lowercased()
+    if lower.hasPrefix("utm_") { return true }
+    return ["fbclid", "gclid", "gbraid", "wbraid", "dclid", "msclkid", "mc_cid", "mc_eid", "yclid",
+            "_ga", "_gl", "ref", "ref_src", "igshid", "twclid", "ttclid"].contains(lower)
 }
 
 /// The refusal for a form this session already submitted, or nil when the click may proceed.
@@ -74,6 +100,12 @@ func duplicateSubmitRefusal(alreadyAt existing: String?) -> String? {
 /// Bounded and lock-guarded for the same reasons as `OpenedTabURLs`: it is reached from whatever
 /// task runs a tool, and entries would otherwise accumulate for the life of the process.
 /// `nonisolated` and self-guarding, like `StepTraceFirstResult`.
+///
+/// SCOPED BY SESSION. One process may host several sessions (the MCP server does), and a form
+/// submitted in one must neither refuse the identical form in another nor reveal where the other
+/// session's submission landed. Every key is prefixed with the caller's `scope` -- the tool
+/// context's session id -- so the registry can stay one process-wide object without leaking
+/// across the sessions that share it.
 nonisolated final class SubmittedForms: @unchecked Sendable {
     private let lock = NSLock()
     private var landedAt: [String: String] = [:]
@@ -81,21 +113,24 @@ nonisolated final class SubmittedForms: @unchecked Sendable {
     private var typed: Set<String> = []
     private let cap = 256
 
-    /// Where the submission identified by `key` landed, or nil if this form is new.
-    func result(for key: String) -> String? {
+    private func scoped(_ scope: String, _ key: String) -> String { scope + "\u{1F}" + key }
+
+    /// Where the submission identified by `key` landed in `scope`, or nil if this form is new.
+    func result(for key: String, scope: String) -> String? {
         lock.lock(); defer { lock.unlock() }
-        return landedAt[key]
+        return landedAt[scoped(scope, key)]
     }
 
-    /// Remember that `key` was submitted and landed on `url`. First writer wins: the URL worth
-    /// reporting is the FIRST one, which is the copy the agent should be looking at, not the
-    /// duplicate it made afterwards.
-    func record(_ key: String, landedOn url: String) {
+    /// Remember that `key` was submitted in `scope` and landed on `url`. First writer wins: the URL
+    /// worth reporting is the FIRST one, which is the copy the agent should be looking at, not
+    /// the duplicate it made afterwards.
+    func record(_ key: String, landedOn url: String, scope: String) {
         guard !key.isEmpty, !url.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
-        if landedAt[key] != nil { return }
-        landedAt[key] = url
-        order.append(key)
+        let full = scoped(scope, key)
+        if landedAt[full] != nil { return }
+        landedAt[full] = url
+        order.append(full)
         while order.count > cap, let oldest = order.first {
             order.removeFirst()
             landedAt.removeValue(forKey: oldest)
@@ -117,16 +152,22 @@ nonisolated final class SubmittedForms: @unchecked Sendable {
     /// Never cleared, deliberately: forgetting would need a navigation hook, and the false
     /// positives it would save are cheap (one extra read on a tab that was typed into once)
     /// while a missed clear would silently disable the guard.
-    func noteTyped(_ tabId: String) {
+    ///
+    /// Named for typing, kept for every FORM-MUTATING tool: `page_select` notes it too, so a
+    /// select-only form is not left outside the guard. The review's other cases -- pre-populated
+    /// forms, checkbox actions, browser-restored values -- are covered from the click side: the
+    /// form is also read whenever the clicked control is a submit control inside a form, which
+    /// the control-state probe already reports (`ControlState.inForm`, `.submits`).
+    func noteTyped(_ tabId: String, scope: String) {
         guard !tabId.isEmpty else { return }
         lock.lock(); defer { lock.unlock() }
-        typed.insert(tabId)
+        typed.insert(scoped(scope, tabId))
     }
 
-    func hasTyped(_ tabId: String) -> Bool {
+    func hasTyped(_ tabId: String, scope: String) -> Bool {
         guard !tabId.isEmpty else { return false }
         lock.lock(); defer { lock.unlock() }
-        return typed.contains(tabId)
+        return typed.contains(scoped(scope, tabId))
     }
 
     /// Test seam only: forget everything.

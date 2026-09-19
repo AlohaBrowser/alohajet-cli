@@ -57,13 +57,20 @@ import ToolABI
             // click timed out 25 of 99 attempts at concurrency 16 (median wall 382 s against 126 s).
             // A duplicate submission needs a filled form, and a filled form needs a page_type on
             // that tab, so the gate cannot miss a case the check could have caught.
-            let valuesBefore = submittedForms.hasTyped(resolved.tab.id)
+            // ...OR the clicked control is a submit control inside a form. That is the read's other
+            // trigger, for forms nothing typed into -- select-only, pre-populated, checkbox actions,
+            // browser-restored values -- and it costs nothing extra: the control-state probe above
+            // already reports both facts.
+            let scope = context.sessionId
+            let submitsAForm = stateBefore?.inForm == true && stateBefore?.submits == true
+            let valuesBefore = (submittedForms.hasTyped(resolved.tab.id, scope: scope) || submitsAForm)
                 ? (await bridge.formValues() ?? "") : ""
             let submitKey = valuesBefore.isEmpty
                 ? "" : submissionKey(pageURL: urlBefore, values: valuesBefore)
             if !submitKey.isEmpty,
-               let refusal = duplicateSubmitRefusal(alreadyAt: submittedForms.result(for: submitKey)) {
-                return RawToolResult(output: refusal, isError: true)
+               let refusal = duplicateSubmitRefusal(alreadyAt: submittedForms.result(for: submitKey, scope: scope)) {
+                // Named like every other resolved return: a refused click still happened on a page.
+                return resolved.tab.naming(RawToolResult(output: refusal, isError: true))
             }
             // POLICY: NO NEW COOKIES. A click aimed at a consent prompt's own control -- Accept,
             // Reject, Manage -- is not delivered. The prompt is hidden instead and the receipt says
@@ -98,7 +105,7 @@ import ToolABI
             // here. Recorded only then: a click that changed nothing submitted nothing, and recording
             // it would refuse the retry that is supposed to follow.
             if !submitKey.isEmpty, clickLanded, urlAfter != urlBefore {
-                submittedForms.record(submitKey, landedOn: urlAfter)
+                submittedForms.record(submitKey, landedOn: urlAfter, scope: scope)
             }
             var receipt = Self.interpret(result, route: route, alohaId: alohaId, clickType: clickType,
                                          urlBefore: urlBefore, urlAfter: urlAfter,
