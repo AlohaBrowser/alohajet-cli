@@ -9,4 +9,4 @@
 // these two CAN drift. They are not allowed to silently: release.yml asserts the tag
 // matches this constant and fails the build when it does not. Bump this in the commit
 // you tag, not after it.
-public let alohajetVersion = "0.4.0"
+public let alohajetVersion = "0.4.2"

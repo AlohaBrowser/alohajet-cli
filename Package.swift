@@ -24,7 +24,7 @@ let package = Package(
         // tightens it.
         .library(name: "ToolABI", targets: ["ToolABI"]),
         .library(name: "CDP", targets: ["CDP"]),
-        .executable(name: "alohajet", targets: ["alohajet"]),
+        .executable(name: "alohajet", targets: ["alohajet-cli"]),
     ],
     dependencies: [
         // The OFFICIAL Model Context Protocol Swift SDK, linked by the EXECUTABLE
@@ -65,17 +65,18 @@ let package = Package(
         // it is the one target in this package that links a dependency, and the four
         // libraries above are built and shipped without it.
         .executableTarget(
-            name: "alohajet",
+            name: "alohajet-cli",
             dependencies: [
                 "BrowserTools", "AgentDriver",
                 .product(name: "MCP", package: "swift-sdk"),
-            ]),
+            ],
+            path: "Sources/alohajet"),
 
         .testTarget(name: "CDPTests", dependencies: ["CDP"]),
         // Drives the built binary as a subprocess — see Tests/CLITests/BinaryUnderTest.swift.
         // The dependency is on the EXECUTABLE so `swift test` builds it first; nothing
         // in this target imports it.
-        .testTarget(name: "CLITests", dependencies: ["alohajet"]),
+        .testTarget(name: "CLITests", dependencies: ["alohajet-cli"]),
         .testTarget(name: "BrowserToolsTests", dependencies: ["BrowserTools"]),
         .testTarget(name: "AgentDriverTests", dependencies: ["AgentDriver"]),
     ]
