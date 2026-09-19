@@ -18,13 +18,16 @@ import Darwin
 // concurrency. `-p` is strictly serial — four requests, in order — which is all this
 // has to serve.
 nonisolated final class AgentStubServer: @unchecked Sendable {
-    struct Request { let method: String, path: String, body: String, authorization: String? }
+    struct Request { let method: String, path: String, body: String, authorization: String?, contentType: String? }
 
     /// The conversation this host is already on — what `/agent/lane` reports and what
     /// `--continue` therefore pins under protocol 2.
     static let lane = "11111111-1111-4111-8111-111111111111"
     /// What the host mints when the caller names no conversation.
     static let minted = "22222222-2222-4222-8222-222222222222"
+    static let termsId = "44444444-4444-4444-8444-444444444444"
+    static let termsUrl = "https://example.com/terms"
+    static let privacyUrl = "https://example.com/privacy"
 
     private var listenFD: Int32 = -1
     private let lock = NSLock()
@@ -37,6 +40,7 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     let ranOverride: String?
     /// The final answer `/agent/result` reports.
     let finalText: String
+    let termsAnswerableInApp: Bool?
     private(set) var port: Int = 0
 
     var url: String { "http://127.0.0.1:\(port)" }
@@ -44,10 +48,12 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     func requests(path: String) -> [Request] { requests.filter { $0.path == path } }
     var paths: [String] { requests.map(\.path) }
 
-    init(protocolVersion: Int = 1, finalText: String = "Four.", ranOverride: String? = nil) {
+    init(protocolVersion: Int = 1, finalText: String = "Four.", ranOverride: String? = nil,
+         termsAnswerableInApp: Bool? = nil) {
         self.protocolVersion = protocolVersion
         self.finalText = finalText
         self.ranOverride = ranOverride
+        self.termsAnswerableInApp = termsAnswerableInApp
     }
 
     func start() throws {
@@ -128,7 +134,8 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
         return Request(method: start[0],
                        path: URLComponents(string: start[1])?.path ?? start[1],
                        body: body,
-                       authorization: header("Authorization"))
+                       authorization: header("Authorization"),
+                       contentType: header("Content-Type"))
     }
 
     private func answer(_ request: Request) -> (status: Int, json: String) {
@@ -152,8 +159,19 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
             return (200, #"{"ok":true}"#)
         case ("/agent/task", 1):
             return (200, #"{"ok":true,"taskId":"T-1"}"#)
+        case ("/agent/terms", _):
+            return (200, #"{"ok":true}"#)
         case ("/agent/result", _):
-            return (200, #"{"state":"done","result":{"finalText":\#(JSONSerialization.escaped(finalText)),"completion":"end_turn"}}"#)
+            let done = #"{"state":"done","result":{"finalText":\#(JSONSerialization.escaped(finalText)),"completion":"end_turn"}}"#
+            guard let answerable = termsAnswerableInApp else { return (200, done) }
+            if let reply = requests(path: "/agent/terms").last {
+                let accepted = (try? JSONSerialization.jsonObject(with: Data(reply.body.utf8)))
+                    .flatMap { ($0 as? [String: Any])?["accept"] as? Bool } == true
+                return (200, accepted ? done
+                    : #"{"state":"done","result":{"finalText":null,"completion":"failed","failureReason":"terms_not_accepted"}}"#)
+            }
+            if answerable, requests(path: "/agent/result").count > 3 { return (200, done) }
+            return (200, #"{"state":"running","result":null,"pendingTerms":{"id":"\#(Self.termsId)","termsUrl":"\#(Self.termsUrl)","privacyUrl":"\#(Self.privacyUrl)","answerableInApp":\#(answerable)}}"#)
         default:
             return (404, #"{"error":"not found"}"#)
         }

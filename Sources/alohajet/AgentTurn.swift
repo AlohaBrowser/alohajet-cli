@@ -8,7 +8,7 @@ import ToolABI
 // `click` and the rest — and no agent loop, deliberately: an agent loop needs a
 // model, a key, a system prompt and a transcript, none of which belong in a browser
 // -control tool. So `-p` hands the prompt to a loop that ALREADY runs behind an
-// HTTP endpoint (`--endpoint <url>`, serving `POST /agent/task`) and reports what
+// HTTP endpoint (`--endpoint <url>`) and reports what
 // comes back.
 //
 // That is the one real difference between `-p` and every other command: `alohajet
@@ -73,7 +73,8 @@ enum AgentTurn {
             // Notices — a host that speaks only the legacy protocol, a resumed id that
             // names no conversation yet — go to stderr, never stdout: a piped `--json`
             // must stay one parseable object.
-            warn: { writeToStandardError("alohajet: note: \($0)\n") }
+            warn: { writeToStandardError("alohajet: note: \($0)\n") },
+            terms: answerTerms
         ).runTurn(prompt: prompt)
 
         // The headless eval surface: the whole result as ONE JSON object on stdout
@@ -94,6 +95,10 @@ enum AgentTurn {
             }
             return exitOK
         }
+        if result.failureReason == "terms_not_accepted" {
+            writeToStandardError("The Terms of Service and the Privacy Policy were not accepted; the model was not asked.\n")
+            return exitToolError
+        }
         let reasonSuffix = result.failureReason.map { ": \($0)" } ?? ""
         switch result.completion {
         case .maxTurns:
@@ -111,6 +116,27 @@ enum AgentTurn {
             writeToStandardError("alohajet: the turn ended without any assistant text\n")
         }
         return exitToolError
+    }
+
+    private static let stdinLines = MCPServer.stdinLines()
+
+    private static func answerTerms(_ question: TermsQuestion) async -> Bool? {
+        guard isatty(STDIN_FILENO) == 1 else {
+            guard question.answerableInApp else { return false }
+            writeToStandardError("Accept the Terms of Service and the Privacy Policy in the app window to continue.\n")
+            return nil
+        }
+        writeToStandardError(
+            "To continue, accept the Terms of Service (\(question.termsUrl))"
+            + " and the Privacy Policy (\(question.privacyUrl)).\nAccept? [y/N] ")
+        var lines = stdinLines.makeAsyncIterator()
+        let line = await lines.next()
+        guard !Task.isCancelled else {
+            writeToStandardError("\n")
+            return nil
+        }
+        let reply = line?.trimmingCharacters(in: .whitespaces).lowercased()
+        return reply == "y" || reply == "yes"
     }
 
     /// Which conversation the turn runs in — the rule itself is `AgentSession.resolve`,

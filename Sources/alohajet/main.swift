@@ -146,7 +146,7 @@ COMMANDS
 AGENT (the ONE thing here that is not a tool call)
   -p <prompt>                       run one agent turn: hand <prompt> to the agent
                                     loop already running behind the endpoint (POST
-                                    /agent/task) and print its final answer.
+                                    /agent/run) and print its final answer.
                                     NO loop runs in this process. Every command
                                     above needs a browser and no agent; `-p` needs
                                     an agent and none of the browser flags below.
