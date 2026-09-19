@@ -159,11 +159,15 @@ func otherTabNote(_ alohaId: String, _ context: ToolExecutionContext,
 /// fingerprint, and for a type the value IS the change worth confirming.
 ///
 /// An errored receipt is returned as-is: the action did not happen, so the page did not change,
-/// and a failure is not the place to spend a DOM walk. A snapshot is an addition to a receipt,
-/// never a reason to fail one: a read that cannot be taken leaves the receipt alone.
+/// and a failure is not the place to spend a DOM walk. EXCEPT when the caller says otherwise with
+/// `evenIfError` -- a `page_type` whose typing landed and whose Enter then failed has changed the
+/// page, and an error that hides the page it changed leaves the model to re-read it. A snapshot is
+/// an addition to a receipt, never a reason to fail one: a read that cannot be taken leaves the
+/// receipt alone.
 func withPageSnapshot(_ receipt: RawToolResult, _ context: ToolExecutionContext,
-                      _ resolved: ResolvedPageTab, changed: Bool = true) async -> RawToolResult {
-    guard receipt.isError != true else { return receipt }
+                      _ resolved: ResolvedPageTab, changed: Bool = true,
+                      evenIfError: Bool = false) async -> RawToolResult {
+    guard receipt.isError != true || evenIfError else { return receipt }
     guard changed else { return receipt }
     guard let page = await postActionPageSnapshot(context, tabId: resolved.tab.id) else { return receipt }
     // Mutate a copy rather than build a fresh result: `RawToolResult` carries status, metadata,

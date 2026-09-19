@@ -147,9 +147,12 @@ import ToolABI
             }
             let submitResult = await bridge.pressKeys("Enter")
             if submitResult.isError {
-                return resolved.tab.naming(RawToolResult(
+                // The typing LANDED before the Enter failed, so the page has changed and the model
+                // needs it to decide what to do next -- an error that hides it costs a re-read.
+                let receipt = RawToolResult(
                     output: "Typed into element \"\(alohaId)\", but submitting Enter failed: \(submitResult.output)",
-                    isError: true))
+                    isError: true)
+                return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved, evenIfError: true))
             }
             // AFTER the Enter, which is the action that navigates. Read before it — as this was —
             // the receipt reports the URL from before the submit, so a form submission that worked
@@ -222,10 +225,13 @@ import ToolABI
             }
             let submitResult = await bridge.pressKeys("Enter")
             if submitResult.isError {
-                return RawToolResult(
+                // Same as the single-field branch: the fields were filled, the page changed, and the
+                // error must not hide it.
+                let receipt = RawToolResult(
                     output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", ")), "
                         + "but submitting Enter failed: \(submitResult.output)" + delta,
                     isError: true)
+                return await withPageSnapshot(receipt, context, resolved, evenIfError: true)
             }
             // Settled, like the single-field submit above: the Enter is what navigates, and an
             // immediate read names the page the form was submitted from.
