@@ -93,6 +93,49 @@ func makePageBridge(_ cdpTab: CDPTabHandle, _ signal: AbortSignal) -> AgentBrows
     AgentBrowserBridge(backend: CDPAgentBridgeBackend(tab: cdpTab, signal: signal))
 }
 
+// MARK: - The id is on another tab
+
+/// THE ID THE MODEL PASSED IS ON A TAB THIS TOOL DID NOT ACT ON. The page tools act on the
+/// focused tab; the model's context holds the pages of EVERY tab it has read. An id from a
+/// background tab is therefore live and correct, and a tool that answers "not found, re-read the
+/// page" sends the model to re-read a page that already has the id. Measured on
+/// AlohaBrowser/alohajet run 33889241270: 40% of "not found" ids were in the very observation
+/// the model was reading, on a tab other than the focused one; 260 opens produced 260 distinct
+/// tabs and 123 of them (47%) were for a URL already open, so the agent manufactures the
+/// ambiguity that then breaks its clicks.
+///
+/// DIAGNOSIS ONLY, on purpose. This never changes which tab an action lands on. Acting on the
+/// owning tab would silently move a write to a page the model did not focus, which on a task with
+/// two tabs of the same site is a worse failure than the one it fixes. Say where the element is;
+/// let the model decide.
+///
+/// Costs nothing on the happy path: it runs only after a tool has already failed, and
+/// `traceDomNode` reads each tab's CACHED snapshot -- no CDP round-trip, no DOM re-extraction.
+func tabHoldingAlohaId(_ alohaId: String, _ context: ToolExecutionContext,
+                       excluding activeTabId: String?) -> TabHandle? {
+    guard !alohaId.isEmpty,
+          let tabsWindow = context.services?.tabsService?.window else { return nil }
+    for tab in tabsWindow.tabs.orderedTabs {
+        if tab.id == activeTabId { continue }
+        guard let traced = tab as? StepTraceTab else { continue }
+        if traced.traceDomNode(forAlohaId: alohaId) != nil { return tab }
+    }
+    return nil
+}
+
+/// The sentence to append to a failed page-tool receipt, or nil when no other tab has the id.
+///
+/// Names the tab id, because that is the argument the model needs to act on it -- a title alone
+/// would tell it where the element is and leave it unable to say so.
+func otherTabNote(_ alohaId: String, _ context: ToolExecutionContext,
+                  excluding activeTabId: String?) -> String? {
+    guard let tab = tabHoldingAlohaId(alohaId, context, excluding: activeTabId) else { return nil }
+    let title = (tab.title?.isEmpty == false) ? " (\"\(tab.title ?? "")\")" : ""
+    return " That id IS on another OPEN tab: \(tab.id)\(title). It is not stale — this tool acted"
+        + " on the focused tab, which is a different page. Focus that tab (manage_tabs action"
+        + " \"focus\") and repeat this call, or act on an id from the focused tab instead."
+}
+
 // MARK: - The page an action left behind
 
 /// EVERY ACTION RETURNS THE PAGE IT LEFT BEHIND. Appends the post-action page to a finished

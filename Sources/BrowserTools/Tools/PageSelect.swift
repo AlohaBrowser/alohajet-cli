@@ -65,8 +65,12 @@ import ToolABI
             // dependent controls or navigates voids the ids the model holds -- see `withPageSnapshot`.
             let fingerprintAfter = await bridge.pageFingerprint()
             let pageMoved = AgentBrowserBridge.pageMoved(before: fingerprintBefore, after: fingerprintAfter)
-            return resolved.tab.naming(
-                await withPageSnapshot(receipt, context, resolved, changed: pageMoved))
+            // Stamped AFTER `naming`, which skips a result that already carries metadata -- see
+            // `PageStructureChange` for what a host does with the mark.
+            return PageStructureChange.stamp(
+                resolved.tab.naming(
+                    await withPageSnapshot(receipt, context, resolved, changed: pageMoved)),
+                moved: pageMoved)
         }
     }
 }

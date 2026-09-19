@@ -392,6 +392,17 @@ final class MockCDP {
             if expression.contains("buildDomTree("), let domTreeReply {
                 return .object([("result", .object([("type", .string("object")), ("value", .array(domTreeReply))]))])
             }
+            // THE CLICK RECEIPT PROBES answer "" -- nothing covered, nothing hidden, no control
+            // state, no form values -- rather than the body-text default below. Each of them treats
+            // a non-empty string as a finding ("a layer was hidden", "the click was delivered to
+            // <x>"), and the consent probe then withholds the click, so the default would turn every
+            // happy-path click test into a refused one. Recognised by the markers the probes carry.
+            if expression.contains("BEGIN overlay-hider js")
+                || expression.contains("elementFromPoint")
+                || expression.contains("aria-pressed")
+                || expression.contains("input, textarea, select") {
+                return .object([("result", .object([("type", .string("string")), ("value", .string(""))]))])
+            }
             // A raw (unwrapped) `window.__aloha.<verb>(...)` call — see
             // `alohaRawCallReplies`'s doc comment.
             if let scripted = alohaRawCallReplies.first(where: { expression.contains($0.match) }) {

@@ -107,6 +107,9 @@ import ToolABI
             if typeResult.isError {
                 return resolved.tab.naming(RawToolResult(output: typeResult.output, isError: true))
             }
+            // Arms `page_click`'s duplicate-submit form read for THIS tab only -- a duplicate
+            // submission needs a filled form, and a filled form needs typing. See `SubmittedForms`.
+            submittedForms.noteTyped(resolved.tab.id)
             // The same one-line affordance `get_text` carries, at the same kind of moment: a round spent on
             // one field, when `page_type` -> `page_type` is the most common consecutive pair in the corpus.
             // Flag-gated, OFF by baseline.
@@ -193,6 +196,7 @@ import ToolABI
                     failures.append("\"\(field.alohaId)\": \(result.output)")
                 } else {
                     filled.append(field.alohaId)
+                    submittedForms.noteTyped(resolved.tab.id)
                 }
             }
             let urlAfter = bridge.currentPageURL()

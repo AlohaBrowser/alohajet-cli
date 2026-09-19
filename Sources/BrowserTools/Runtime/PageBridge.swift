@@ -478,7 +478,9 @@ public final class AgentBrowserBridge {
     public static let downloadWaitTimeoutMs: Double = 1500
     public static let downloadWaitPollMs: Double = 100
 
-    private let backend: AgentBridgeBackend
+    // Internal, not private: the receipt and overlay probes in `ClickReceipts.swift` are an
+    // extension of this class and read the page through it.
+    let backend: AgentBridgeBackend
     public let actionCollector: ActionCollector?
     /// The tab identity recorded on emitted actions (e.g. the post-exec snapshot).
     public let tabId: String?
