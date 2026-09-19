@@ -108,7 +108,7 @@ function check(name, cond, detail) {
 // 1b. the SAME case through the bridge-shaped wrapper: it must compile AND return the note.
 {
   const target = makeEl({ tag: 'a', rect: { left: 100, top: 300, width: 200, height: 40 } });
-  const banner = makeEl({ tag: 'div', position: 'fixed', rect: { left: 0, top: 500, width: 1000, height: 300 }, text: 'This site uses cookies' });
+  const banner = makeEl({ tag: 'div', position: 'fixed', rect: { left: 0, top: 500, width: 1000, height: 300 }, text: 'This site uses cookies. Accept' });
   const doc = makeDocument([target, banner], () => banner.hidden ? target : banner);
   const note = shippedProbe(target, doc, win);
   check('1b bridge-shaped wrapper hides and reports', /Hid a covering overlay/.test(note) && banner.hidden, note);
@@ -129,7 +129,7 @@ function check(name, cond, detail) {
 // 3. shadow host at the body
 {
   const target = makeEl({ tag: 'a', rect: { left: 100, top: 300, width: 200, height: 40 } });
-  const host = makeEl({ tag: 'usercentrics-root', rect: { left: 0, top: 600, width: 1000, height: 200 }, shadowText: 'Privacy Settings  Accept all  Deny' });
+  const host = makeEl({ tag: 'usercentrics-root', rect: { left: 0, top: 600, width: 1000, height: 200 }, shadowText: 'We use cookies. Privacy Settings  Accept all  Deny' });
   const doc = makeDocument([target, host], () => host.hidden ? target : host);
   const note = hideCoveringOverlay(target, doc, win);
   check('3 shadow-DOM consent host hidden', host.hidden, note);
@@ -174,7 +174,7 @@ function check(name, cond, detail) {
 // 8. scroll lock released only when something was hidden
 {
   const target = makeEl({ tag: 'a', rect: { left: 100, top: 300, width: 200, height: 40 } });
-  const banner = makeEl({ tag: 'div', position: 'fixed', rect: { left: 0, top: 500, width: 1000, height: 300 }, text: 'This site uses cookies' });
+  const banner = makeEl({ tag: 'div', position: 'fixed', rect: { left: 0, top: 500, width: 1000, height: 300 }, text: 'This site uses cookies. Accept' });
   const doc = makeDocument([target, banner], () => banner.hidden ? target : banner);
   doc.body.style.overflow = 'hidden';
   hideCoveringOverlay(target, doc, win);
@@ -235,6 +235,27 @@ function check(name, cond, detail) {
   const banner = makeEl({ tag: 'div', position: 'fixed', rect: { left: 0, top: 600, width: 1000, height: 200 }, text: 'We value your privacy Accept', children: [para] });
   const doc = makeDocument([banner], () => para);
   check('13 a paragraph in the banner is not refused', shippedConsentProbe(para, doc, win) === '');
+}
+
+// 14. The review's counter-example: a fixed settings modal that says "privacy preferences" and
+//     holds a form. Action word, no topic word: not a consent prompt. Its Save button is an
+//     ordinary click, and when it covers a target it is left alone (it holds form fields).
+{
+  const save = makeEl({ tag: 'button', text: 'Save preferences' });
+  const modal = makeEl({ tag: 'div', position: 'fixed', rect: FULL, text: 'Account settings  Privacy preferences  Email me about updates  Save preferences', fields: ['input'], children: [save] });
+  const doc = makeDocument([makeEl({ tag: 'main', text: 'page' }), modal], () => save);
+  check('14 a settings modal saying "privacy preferences" is not a consent prompt', shippedConsentProbe(save, doc, win) === '' && !modal.hidden);
+  const target = makeEl({ tag: 'a', rect: { left: 100, top: 300, width: 200, height: 40 } });
+  const doc2 = makeDocument([target, modal], () => modal);
+  check('14 and it is not hidden when it covers a target', hideCoveringOverlay(target, doc2, win) === '' && !modal.hidden);
+}
+
+// 15. Topic without action is not consent on its own.
+{
+  const target = makeEl({ tag: 'a', rect: { left: 100, top: 300, width: 200, height: 40 } });
+  const factOnly = makeEl({ tag: 'div', position: 'fixed', rect: { left: 0, top: 500, width: 1000, height: 200 }, text: 'This site uses cookies.' });
+  const doc = makeDocument([target, factOnly], () => factOnly);
+  check('15 "uses cookies" with no button is not hidden as consent (and is too small to be a blanket)', hideCoveringOverlay(target, doc, win) === '' && !factOnly.hidden);
 }
 
 if (failures) { console.log(failures + ' failure(s)'); process.exit(1); }

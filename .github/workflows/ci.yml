@@ -95,6 +95,12 @@ jobs:
       - name: Test
         run: swift test
 
+      # The overlay hider's page-side JavaScript is a Swift string the Swift tests can only
+      # inspect as text; this runs its logic against a fake DOM, in the exact shape the bridge
+      # ships it (BEGIN/END markers, statements-then-call). Node is on the hosted runner.
+      - name: Page-side overlay hider (fake DOM)
+        run: node Tests/BrowserToolsTests/overlay_hider.js
+
   linux:
     name: Linux (Swift 6.2.3, Ubuntu 24.04)
     runs-on: ubuntu-24.04

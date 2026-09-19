@@ -41,11 +41,37 @@ struct DuplicateSubmitTests {
         #expect(a != b)
     }
 
-    @Test("query and fragment on the form page are ignored, the path is not")
-    func queryIgnored() {
+    @Test("tracking parameters and the fragment are ignored; the path is not")
+    func trackingIgnored() {
         let plain = submissionKey(pageURL: "http://h/submit/sports", values: "t=1")
-        let tracked = submissionKey(pageURL: "http://h/submit/sports?utm=x#top", values: "t=1")
+        let tracked = submissionKey(pageURL: "http://h/submit/sports?utm_source=x&fbclid=y#top", values: "t=1")
         #expect(plain == tracked)
+    }
+
+    @Test("a query parameter that names the resource is part of the identity")
+    func identityQueryCounts() {
+        // Routing by query is common: /edit?id=1 and /edit?id=2 are two forms, and the second
+        // legitimate submission must not be refused because the first went through.
+        let one = submissionKey(pageURL: "http://h/edit?id=1", values: "t=1")
+        let two = submissionKey(pageURL: "http://h/edit?id=2", values: "t=1")
+        #expect(one != two)
+        // Order does not split one form into two keys.
+        #expect(submissionKey(pageURL: "http://h/edit?id=1&mode=full", values: "t=1")
+                == submissionKey(pageURL: "http://h/edit?mode=full&id=1", values: "t=1"))
+        // And a tracking parameter riding along does not either.
+        #expect(one == submissionKey(pageURL: "http://h/edit?id=1&utm_campaign=z", values: "t=1"))
+    }
+
+    @Test("sessions do not see each other's submissions")
+    func scopedBySession() {
+        let forms = SubmittedForms()
+        forms.record("k1", landedOn: "http://h/f/s/2/post", scope: "session-A")
+        #expect(forms.result(for: "k1", scope: "session-A") == "http://h/f/s/2/post")
+        #expect(forms.result(for: "k1", scope: "session-B") == nil,
+                "another session must neither be refused nor learn where session A's form landed")
+        forms.noteTyped("tab-1", scope: "session-A")
+        #expect(forms.hasTyped("tab-1", scope: "session-A"))
+        #expect(!forms.hasTyped("tab-1", scope: "session-B"))
     }
 
     @Test("host and port are part of the identity")
@@ -93,9 +119,9 @@ struct DuplicateSubmitTests {
     @Test("a recorded submission is found again by the same key")
     func recordAndFind() {
         let forms = SubmittedForms()
-        forms.record("k1", landedOn: "http://h/f/s/2/post")
-        #expect(forms.result(for: "k1") == "http://h/f/s/2/post")
-        #expect(forms.result(for: "k2") == nil)
+        forms.record("k1", landedOn: "http://h/f/s/2/post", scope: "s")
+        #expect(forms.result(for: "k1", scope: "s") == "http://h/f/s/2/post")
+        #expect(forms.result(for: "k2", scope: "s") == nil)
     }
 
     /// The FIRST landing is the one worth reporting: it is the copy the agent should be looking
@@ -103,29 +129,29 @@ struct DuplicateSubmitTests {
     @Test("first writer wins")
     func firstWriterWins() {
         let forms = SubmittedForms()
-        forms.record("k1", landedOn: "http://h/f/s/2/post")
-        forms.record("k1", landedOn: "http://h/f/s/3/post")
-        #expect(forms.result(for: "k1") == "http://h/f/s/2/post")
+        forms.record("k1", landedOn: "http://h/f/s/2/post", scope: "s")
+        forms.record("k1", landedOn: "http://h/f/s/3/post", scope: "s")
+        #expect(forms.result(for: "k1", scope: "s") == "http://h/f/s/2/post")
     }
 
     @Test("empty keys and empty urls are not recorded")
     func emptiesIgnored() {
         let forms = SubmittedForms()
-        forms.record("", landedOn: "http://h/x")
-        forms.record("k", landedOn: "")
-        #expect(forms.result(for: "") == nil)
-        #expect(forms.result(for: "k") == nil)
+        forms.record("", landedOn: "http://h/x", scope: "s")
+        forms.record("k", landedOn: "", scope: "s")
+        #expect(forms.result(for: "", scope: "s") == nil)
+        #expect(forms.result(for: "k", scope: "s") == nil)
     }
 
     @Test("the registry is bounded, and forgetting the oldest is what it costs")
     func bounded() {
         let forms = SubmittedForms()
         for i in 0...300 {
-            forms.record("k\(i)", landedOn: "http://h/\(i)")
+            forms.record("k\(i)", landedOn: "http://h/\(i)", scope: "s")
         }
         // The newest survive; the oldest are gone rather than growing for the life of the process.
-        #expect(forms.result(for: "k300") == "http://h/300")
-        #expect(forms.result(for: "k0") == nil)
+        #expect(forms.result(for: "k300", scope: "s") == "http://h/300")
+        #expect(forms.result(for: "k0", scope: "s") == nil)
     }
 
     // MARK: the typed-tab gate

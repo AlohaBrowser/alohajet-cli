@@ -77,13 +77,16 @@ struct ClickReceiptProbesTests {
     // MARK: control state
 
     @Test func controlStateIsParsedFromTheProbe() async {
-        let json = #"{"present":true,"name":"Subscribe","pressed":"false","checked":null,"expanded":null,"selected":null,"disabled":null,"value":null}"#
+        let json = #"{"present":true,"name":"Subscribe","pressed":"false","checked":null,"expanded":null,"selected":null,"disabled":null,"value":null,"inForm":true,"submits":false}"#
         let bridge = AgentBrowserBridge(backend: ProbeBackend(marker: "aria-pressed", answer: .string(json)))
         let state = await bridge.controlState(alohaId: "80bb-1")
         #expect(state?.present == true)
         #expect(state?.name == "Subscribe")
         #expect(state?.pressed == "false")
         #expect(state?.checked == nil)
+        // The two facts page_click's duplicate-submit gate reads off this same probe.
+        #expect(state?.inForm == true)
+        #expect(state?.submits == false)
     }
 
     @Test func anUnreadableControlStateIsNil() async {
