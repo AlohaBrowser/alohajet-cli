@@ -121,6 +121,7 @@ func runCLI(
         stderr: String(decoding: (try? Data(contentsOf: errURL)) ?? Data(), as: UTF8.self))
 }
 
+#if canImport(Darwin)
 private func openTerminal() throws -> (master: Int32, slave: Int32) {
     let master = posix_openpt(O_RDWR | O_NOCTTY)
     try #require(master >= 0 && grantpt(master) == 0 && unlockpt(master) == 0)
@@ -128,3 +129,10 @@ private func openTerminal() throws -> (master: Int32, slave: Int32) {
     try #require(slave >= 0)
     return (master, slave)
 }
+#else
+private struct NoTerminal: Error {}
+
+private func openTerminal() throws -> (master: Int32, slave: Int32) {
+    throw NoTerminal()
+}
+#endif

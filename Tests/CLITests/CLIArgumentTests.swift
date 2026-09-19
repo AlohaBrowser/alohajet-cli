@@ -188,6 +188,7 @@ struct CLIArgumentTests {
 
     // MARK: - `-p`, the agent entry
 
+#if canImport(Darwin)
     /// No `--endpoint` is no longer a usage error: the binary ships inside the app whose
     /// agent it drives, so the loopback automation server beside it is the default and
     /// the flag is the exception. Proven without launching anything by pointing
@@ -203,6 +204,7 @@ struct CLIArgumentTests {
         #expect(run.stderr.contains("could not launch the Aloha browser"))
         #expect(run.stderr.contains("/nonexistent/NoSuch.app"))
     }
+#endif
 
     /// `--endpoint "$VAR"` with the variable unset has still NAMED a host; answering it
     /// with the local default would run the prompt against a browser nobody asked for.
