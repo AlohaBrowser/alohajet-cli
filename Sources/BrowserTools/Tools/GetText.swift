@@ -65,7 +65,7 @@ import ToolABI
                 // decision. Flag-gated and OFF by baseline, so this path stays byte-identical unless asked.
                 let hint = (context.services?.webExtractionOptions ?? .baseline).batchHints && !result.isError
                     ? "\n(Reading one element per call spends a round each. Pass several ids at once: "
-                      + "aloha_id=\"1f3a9c2b,7b21e40d,3c8f95a1\".)"
+                      + "aloha_id=\"7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1\".)"
                     : ""
                 return resolved.tab.naming(
                     RawToolResult(output: text + hint, isError: result.isError ? true : nil))
