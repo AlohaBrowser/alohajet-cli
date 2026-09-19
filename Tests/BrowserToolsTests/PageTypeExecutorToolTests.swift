@@ -103,8 +103,10 @@ struct PageTypeExecutorToolTests {
     /// shipped bytes, so these tests pin only what the BRIDGE does with each answer.
     private func probeReply(acceptsText: Bool, focused: Bool, tag: String = "SPAN",
                             redirectedTo: String = "", redirectedTag: String = "",
-                            ambiguous: String = "0", fields: String = "") -> (match: String, reply: JSValue) {
-        (match: "resolveTypeTarget", reply: .object([
+                            ambiguous: String = "0", fields: String = "",
+                            fieldsTotal: String? = nil) -> (match: String, reply: JSValue) {
+        let total = fieldsTotal ?? (fields.isEmpty ? "0" : String(fields.components(separatedBy: " | ").count))
+        return (match: "resolveTypeTarget", reply: .object([
             ("found", .bool(true)),
             ("acceptsText", .bool(acceptsText)),
             ("focused", .bool(focused)),
@@ -114,7 +116,60 @@ struct PageTypeExecutorToolTests {
             ("redirectedTag", .string(redirectedTag)),
             ("ambiguous", .string(ambiguous)),
             ("fields", .string(fields)),
+            ("fieldsTotal", .string(total)),
         ]))
+    }
+
+    /// The enumeration names twelve fields; on a larger form the refusal must say the list is
+    /// partial rather than tell the model to pick from "the text fields on this page".
+    @Test func aRefusalOnALargeFormSaysTheListIsPartial() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        let twelve = (1...12).map { "f-\($0) (field\($0)) input" }.joined(separator: " | ")
+        fixture.cdp.alohaRawCallReplies = [probeReply(acceptsText: false, focused: false, fields: twelve, fieldsTotal: "15")]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("span-1"), "text": .string("hi")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError == true)
+        #expect(result.output.contains("The first 12 of this page's 15 text fields are: f-1 (field1) input"))
+        #expect(result.output.contains("or read the page for the rest"))
+        #expect(!result.output.contains("The text fields on this page are:"))
+    }
+
+    /// The credential guard applies to the field the keys would actually go to. The page-side
+    /// probe already excludes password-like fields, but the Swift classifier is the policy, so a
+    /// redirect the page did answer with is classified again before anything is sent.
+    @Test func aRedirectIsClassifiedByTheCredentialGuardBeforeTyping() async throws {
+        setenv("ALOHAJET_CREDENTIAL_GUARD", "1", 1)
+        defer { unsetenv("ALOHAJET_CREDENTIAL_GUARD") }
+        let fixture = try await makePageToolsCDPFixture()
+        fixture.cdp.alohaRawCallReplies = [
+            probeReply(acceptsText: true, focused: true, tag: "LABEL", redirectedTo: "pw-like", redirectedTag: "INPUT"),
+            // The snapshot the classifier reads for the REDIRECTED id: a plain text input whose
+            // name says what it holds. The snapshot for the id the model passed falls through to
+            // the mock's default and classifies as nothing.
+            (match: "[aloha-id=\"pw-like\"]", reply: .object([
+                ("bbox", .object([("x", .number(0.0)), ("y", .number(0.0)), ("width", .number(10.0)), ("height", .number(10.0))])),
+                ("tagName", .string("input")),
+                ("label", .string("")),
+                ("role", .string("")),
+                ("inputType", .string("text")),
+                ("name", .string("user_password")),
+            ])),
+        ]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("lbl-1"), "text": .string("hunter2")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError == true)
+        #expect(result.output.contains("refusing to type into a credential field"))
+        #expect(fixture.cdp.commands(for: "Input.dispatchKeyEvent").isEmpty)
     }
 
     /// The t625 shape: the model names the `<span>` inside the Body label. The keystrokes go to
