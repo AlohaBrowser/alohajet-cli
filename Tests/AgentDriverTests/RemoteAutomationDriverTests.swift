@@ -55,6 +55,14 @@ actor RemoteStubServer {
     private(set) var newSessionOverride: String?
     func setNewSessionOverride(_ id: String?) { newSessionOverride = id }
 
+    private var termsStatus = 200
+    private var afterTerms: Data?
+    func answerTerms(status: Int, then envelope: Data) {
+        termsStatus = status
+        afterTerms = envelope
+    }
+    func script(_ bodies: [Data]) { resultBodies = bodies }
+
     func handle(method: String, path: String, body: String) -> RemoteAutomationHTTPResponse {
         requests.append((method, path, body))
         switch path {
@@ -83,6 +91,10 @@ actor RemoteStubServer {
             let accepted = quitStatus == 200
             let payload = accepted ? #"{"ok":true}"# : #"{"ok":false,"error":"not headless"}"#
             return RemoteAutomationHTTPResponse(statusCode: quitStatus, body: Data(payload.utf8))
+        case "/agent/terms":
+            if let afterTerms { resultBodies = [afterTerms] }
+            let payload = termsStatus == 200 ? #"{"ok":true}"# : #"{"ok":false,"error":"stale"}"#
+            return RemoteAutomationHTTPResponse(statusCode: termsStatus, body: Data(payload.utf8))
         case "/agent/result":
             let next = resultBodies.count > 1 ? resultBodies.removeFirst() : (resultBodies.first ?? Data("{}".utf8))
             return RemoteAutomationHTTPResponse(statusCode: 200, body: next)
@@ -100,6 +112,9 @@ actor RemoteStubServer {
     var quitMethods: [String] { requests.filter { $0.path == "/quit" }.map(\.method) }
     func firstTaskBody() -> String? { requests.first { $0.path == "/agent/task" }?.body }
     func firstPermissionsBody() -> String? { requests.first { $0.path == "/agent/permissions" }?.body }
+    var termsRequests: [(method: String, body: String)] {
+        requests.filter { $0.path == "/agent/terms" }.map { ($0.method, $0.body) }
+    }
 }
 
 /// Wire a driver to a stub server with a near-zero poll interval (fast, still
@@ -107,7 +122,8 @@ actor RemoteStubServer {
 /// the injected transport, never a socket.
 func makeRemoteDriver(
     stub: RemoteStubServer, permissions: [CLIPermission] = [],
-    session: AgentSession = .fresh, maxPollAttempts: Int = 50
+    session: AgentSession = .fresh, maxPollAttempts: Int = 50,
+    notes: NoteSink = NoteSink(), terms: RemoteAutomationDriver.TermsResponder? = nil
 ) -> RemoteAutomationDriver {
     let transport: RemoteAutomationDriver.Transport = { method, url, body in
         let bodyStr = body.map { String(decoding: $0, as: UTF8.self) } ?? ""
@@ -117,9 +133,11 @@ func makeRemoteDriver(
         endpoint: URL(string: "http://127.0.0.1:65535")!,
         permissions: permissions,
         session: session,
+        warn: { notes.add($0) },
         transport: transport,
         pollInterval: .milliseconds(1),
-        maxPollAttempts: maxPollAttempts)
+        maxPollAttempts: maxPollAttempts,
+        terms: terms)
 }
 
 // MARK: Fixtures
@@ -463,5 +481,125 @@ struct RemoteAutomationDriverTests {
         #expect(result == remoteSuccessFixture)
         #expect(await stub.newCount == 0)
         #expect(sessionId == nil)   // nothing was chosen, so there is nothing to report
+    }
+}
+
+func pendingTermsEnvelope(_ question: TermsQuestion) throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
+        "state": "running",
+        "result": NSNull(),
+        "pendingTerms": [
+            "id": question.id,
+            "termsUrl": question.termsUrl,
+            "privacyUrl": question.privacyUrl,
+            "answerableInApp": question.answerableInApp,
+        ],
+    ])
+}
+
+nonisolated final class QuestionSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [TermsQuestion] = []
+    func add(_ question: TermsQuestion) { lock.withLock { items.append(question) } }
+    var all: [TermsQuestion] { lock.withLock { items } }
+}
+
+@Suite("RemoteAutomationDriver terms question")
+struct RemoteAutomationDriverTermsTests {
+    static let question = TermsQuestion(
+        id: "Q-1", termsUrl: "https://example.com/terms",
+        privacyUrl: "https://example.com/privacy", answerableInApp: true)
+    static let done = { try! remoteResultEnvelope(state: "done", result: remoteSuccessFixture) }()
+
+    @Test("the responder is asked once while the question repeats, and its answer is posted")
+    func responderIsAskedOnce() async throws {
+        let stub = RemoteStubServer(resultBodies: [try pendingTermsEnvelope(Self.question)])
+        await stub.answerTerms(status: 200, then: Self.done)
+        let asked = QuestionSink()
+        let driver = makeRemoteDriver(stub: stub, maxPollAttempts: 10_000, terms: { question in
+            asked.add(question)
+            while await stub.resultCount < 3 { try? await Task.sleep(for: .milliseconds(1)) }
+            return true
+        })
+
+        let result = try await driver.runTask(prompt: "hi")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(asked.all == [Self.question])
+        let posted = await stub.termsRequests
+        #expect(posted.count == 1)
+        #expect(posted.first?.method == "POST")
+        let body = try #require(posted.first?.body)
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])
+        #expect(object["id"] as? String == "Q-1")
+        #expect(object["accept"] as? Bool == true)
+    }
+
+    @Test("a question that disappears cancels the responder and posts nothing")
+    func clearedQuestionCancelsTheResponder() async throws {
+        let running = try remoteResultEnvelope(state: "running", result: nil)
+        let stub = RemoteStubServer(resultBodies: [try pendingTermsEnvelope(Self.question), running])
+        let cancelled = QuestionSink()
+        let driver = makeRemoteDriver(stub: stub, maxPollAttempts: 10_000, terms: { question in
+            while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(1)) }
+            cancelled.add(question)
+            await stub.script([Self.done])
+            return true
+        })
+
+        let result = try await driver.runTask(prompt: "hi")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(cancelled.all == [Self.question])
+        #expect(await stub.termsRequests.isEmpty)
+    }
+
+    @Test("a stale answer is ignored and any other refusal is a note", arguments: [(409, false), (500, true)])
+    func refusedAnswer(status: Int, warns: Bool) async throws {
+        let stub = RemoteStubServer(resultBodies: [try pendingTermsEnvelope(Self.question)])
+        await stub.answerTerms(status: status, then: Self.done)
+        let notes = NoteSink()
+        let driver = makeRemoteDriver(stub: stub, maxPollAttempts: 10_000, notes: notes, terms: { _ in false })
+
+        let result = try await driver.runTask(prompt: "hi")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(await stub.termsRequests.count == 1)
+        #expect(notes.all.contains { $0.contains("/agent/terms") } == warns)
+    }
+
+    @Test("a terminal result waits for the cancelled responder to finish")
+    func terminalResultWaitsForTheResponder() async throws {
+        let stub = RemoteStubServer(resultBodies: [try pendingTermsEnvelope(Self.question)])
+        let finished = QuestionSink()
+        let driver = makeRemoteDriver(stub: stub, maxPollAttempts: 10_000, terms: { question in
+            await stub.script([Self.done])
+            while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(1)) }
+            await Task.detached { try? await Task.sleep(for: .milliseconds(20)) }.value
+            finished.add(question)
+            return nil
+        })
+
+        let result = try await driver.runTask(prompt: "hi")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(finished.all == [Self.question])
+    }
+
+    @Test("a question nobody answers here is left to the host")
+    func unansweredQuestionPostsNothing() async throws {
+        let stub = RemoteStubServer(resultBodies: [try pendingTermsEnvelope(Self.question)])
+        let asked = QuestionSink()
+        let driver = makeRemoteDriver(stub: stub, maxPollAttempts: 10_000, terms: { question in
+            asked.add(question)
+            await stub.script([Self.done])
+            return nil
+        })
+
+        let result = try await driver.runTask(prompt: "hi")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(asked.all == [Self.question])
+        #expect(await stub.termsRequests.isEmpty)
     }
 }

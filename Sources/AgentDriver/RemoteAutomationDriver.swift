@@ -119,12 +119,20 @@ public extension AgentSession {
     }
 }
 
+public nonisolated struct TermsQuestion: Sendable, Equatable {
+    public let id: String
+    public let termsUrl: String
+    public let privacyUrl: String
+    public let answerableInApp: Bool
+}
+
 public struct RemoteAutomationDriver: AlohaJetDriver {
     /// The transport seam: issue ONE HTTP request (method + absolute URL + optional
     /// body) and yield its status + body. Injected so tests are hermetic (a stub, no
     /// socket); defaults to `liveTransport` (a real `URLSession`).
     public typealias Transport =
         @Sendable (_ method: String, _ url: URL, _ body: Data?) async throws -> RemoteAutomationHTTPResponse
+    public typealias TermsResponder = @Sendable (TermsQuestion) async -> Bool?
 
     /// The agent endpoint's base URL (e.g. `http://127.0.0.1:8765`); the agent
     /// routes are resolved against it.
@@ -141,6 +149,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     /// The maximum number of `running` polls before the wait is abandoned as a
     /// `.failed` timeout — bounds the loop so it never busy-spins forever.
     private let maxPollAttempts: Int
+    private let terms: TermsResponder?
 
     /// - Parameters:
     ///   - endpoint: the agent endpoint's base URL.
@@ -157,7 +166,8 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         warn: @escaping @Sendable (String) -> Void = { _ in },
         transport: @escaping Transport = RemoteAutomationDriver.liveTransport,
         pollInterval: Duration = .milliseconds(250),
-        maxPollAttempts: Int = 2400
+        maxPollAttempts: Int = 2400,
+        terms: TermsResponder? = nil
     ) {
         self.endpoint = endpoint
         self.permissions = permissions
@@ -166,6 +176,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         self.transport = transport
         self.pollInterval = pollInterval
         self.maxPollAttempts = maxPollAttempts
+        self.terms = terms
     }
 
     /// The conversation the turn ran in, reported so a caller can resume it. Filled by
@@ -398,6 +409,20 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     /// `rejected` / `displaced` / an unknown state / a non-200 / an exhausted budget
     /// all map to a `.failed` result.
     private func pollToTerminal(taskId: String) async throws -> CLIRunResult {
+        var answering: (id: String, task: Task<Void, Never>)?
+        let outcome: Result<CLIRunResult, any Error>
+        do {
+            outcome = .success(try await poll(taskId: taskId, answering: &answering))
+        } catch {
+            outcome = .failure(error)
+        }
+        answering?.task.cancel()
+        await answering?.task.value
+        return try outcome.get()
+    }
+
+    private func poll(taskId: String, answering: inout (id: String, task: Task<Void, Never>)?) async throws -> CLIRunResult {
+        var asked: Set<String> = []
         var attempt = 0
         while attempt < maxPollAttempts {
             let response = try await transport("GET", agentURL(path: "/agent/result", queryItems: [URLQueryItem(name: "taskId", value: taskId)]), nil)
@@ -410,6 +435,13 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
             }
             switch state {
             case "running":
+                let question = Self.termsQuestion(envelope["pendingTerms"])
+                if let open = answering, open.id != question?.id {
+                    open.task.cancel()
+                }
+                if let terms, let question, asked.insert(question.id).inserted {
+                    answering = (question.id, Task { await answer(question, with: terms) })
+                }
                 attempt += 1
                 try await Task.sleep(for: pollInterval)
             case "done":
@@ -423,6 +455,28 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
             }
         }
         return Self.failed("timed out waiting for the automation task after \(maxPollAttempts) polls")
+    }
+
+    private func answer(_ question: TermsQuestion, with terms: TermsResponder) async {
+        guard let accept = await terms(question), !Task.isCancelled else { return }
+        do {
+            let response = try await transport(
+                "POST", agentURL(path: "/agent/terms"), Self.jsonBody(["id": question.id, "accept": accept]))
+            if response.statusCode != 200, response.statusCode != 409 {
+                warn("automation server refused /agent/terms" + Self.detail(response))
+            }
+        } catch {
+            if !Task.isCancelled { warn("automation transport error on /agent/terms: \(error)") }
+        }
+    }
+
+    private static func termsQuestion(_ value: Any?) -> TermsQuestion? {
+        guard let object = value as? [String: Any],
+              let id = object["id"] as? String,
+              let termsUrl = object["termsUrl"] as? String,
+              let privacyUrl = object["privacyUrl"] as? String,
+              let answerableInApp = object["answerableInApp"] as? Bool else { return nil }
+        return TermsQuestion(id: id, termsUrl: termsUrl, privacyUrl: privacyUrl, answerableInApp: answerableInApp)
     }
 
     // MARK: - Wire helpers
@@ -480,17 +534,15 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
 
     // MARK: - Live transport
 
-    /// The production transport: a real `URLSession` request/response. The agent
-    /// endpoint reads only the request line + `Content-Length` body, so the sole
-    /// content-type header sent is the one `/agent/run` insists on.
+    /// The production transport: a real `URLSession` request/response.
     public static let liveTransport: Transport = { method, url, body in
         var request = URLRequest(url: url)
         request.httpMethod = method
         if let body { request.httpBody = body }
-        // `/agent/run` REQUIRES it (415 otherwise). Nothing else gets it: the legacy
+        // `/agent/run` REQUIRES it (415 otherwise). The legacy
         // `/agent/task` body is a raw prompt, and labelling that JSON would be a lie the
         // frozen handler happens not to read.
-        if url.path.hasSuffix("/agent/run") {
+        if url.path.hasSuffix("/agent/run") || url.path.hasSuffix("/agent/terms") {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         // Every agent route is bearer-token gated (401 otherwise). The URL is passed

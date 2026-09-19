@@ -22,18 +22,21 @@ struct AgentSessionTests {
 
     /// A turn against the stub, with the ambient token replaced by a known one so the
     /// case neither depends on the developer's real token file nor hands it to a stub.
-    private func runTurn(_ arguments: [String], stub: AgentStubServer) throws -> RunOutput {
+    private func runTurn(_ arguments: [String], stub: AgentStubServer, terminal: String? = nil) throws -> RunOutput {
         try runCLI(arguments + ["--endpoint", stub.url],
+                   terminal: terminal,
                    environment: ["ALOHAJET_AGENT_TOKEN": "test-token"],
                    timeout: 60)
     }
 
     private func withStub<T>(
         protocolVersion: Int = 1, finalText: String = "Four.", ranOverride: String? = nil,
+        termsAnswerableInApp: Bool? = nil,
         _ body: (AgentStubServer) throws -> T
     ) throws -> T {
         let stub = AgentStubServer(
-            protocolVersion: protocolVersion, finalText: finalText, ranOverride: ranOverride)
+            protocolVersion: protocolVersion, finalText: finalText, ranOverride: ranOverride,
+            termsAnswerableInApp: termsAnswerableInApp)
         try stub.start()
         defer { stub.stop() }
         return try body(stub)
@@ -245,5 +248,68 @@ struct AgentSessionTests {
         let run = try runCLI(["-p", "hi", "--endpoint", endpoint, "--json"], timeout: 60)
         #expect(run.status == 1, "exited \(run.status): \(run.combined)")
         #expect(!run.stderr.contains("must be loopback"))
+    }
+
+    static let declined = "The Terms of Service and the Privacy Policy were not accepted; the model was not asked.\n"
+    static let inTheApp = "Accept the Terms of Service and the Privacy Policy in the app window to continue.\n"
+    static let prompt = "To continue, accept the Terms of Service (\(AgentStubServer.termsUrl))"
+        + " and the Privacy Policy (\(AgentStubServer.privacyUrl)).\nAccept? [y/N] "
+
+    private func termsAnswer(_ stub: AgentStubServer) throws -> (request: AgentStubServer.Request, accept: Bool?) {
+        let answers = stub.requests(path: "/agent/terms")
+        #expect(answers.count == 1, "\(answers.count) answers")
+        let request = try #require(answers.first)
+        let object = try #require(
+            try JSONSerialization.jsonObject(with: Data(request.body.utf8)) as? [String: Any])
+        #expect(object["id"] as? String == AgentStubServer.termsId)
+        return (request, object["accept"] as? Bool)
+    }
+
+    @Test("terms the app window cannot answer are declined from a pipe, and the turn says so")
+    func termsDeclinedWithoutAWindow() throws {
+        try withStub(protocolVersion: 2, termsAnswerableInApp: false) { stub in
+            let run = try runTurn(["-p", "hi"], stub: stub)
+            #expect(run.status == 1, "exited \(run.status): \(run.combined)")
+            #expect(run.stderr.hasSuffix(Self.declined), "\(run.stderr)")
+            #expect(run.stdout.isEmpty)
+            let answer = try termsAnswer(stub)
+            #expect(answer.request.method == "POST")
+            #expect(answer.request.contentType == "application/json")
+            #expect(answer.request.authorization == "Bearer test-token")
+            #expect(answer.accept == false)
+        }
+    }
+
+    @Test("terms the app window can answer are left to it when stdin is a pipe")
+    func termsLeftToTheAppWindow() throws {
+        try withStub(protocolVersion: 2, termsAnswerableInApp: true) { stub in
+            let run = try runTurn(["-p", "hi"], stub: stub)
+            #expect(run.status == 0, "exited \(run.status): \(run.combined)")
+            #expect(run.stdout == "Four.\n")
+            #expect(run.stderr.components(separatedBy: Self.inTheApp).count == 2, "\(run.stderr)")
+            #expect(stub.requests(path: "/agent/terms").isEmpty)
+        }
+    }
+
+    @Test("a terminal answers the terms prompt", arguments: [("y\n", true), ("YES\n", true), ("n\n", false), ("\n", false)])
+    func terminalAnswersTheTerms(input: String, accept: Bool) throws {
+        try withStub(protocolVersion: 2, termsAnswerableInApp: false) { stub in
+            let run = try runTurn(["-p", "hi"], stub: stub, terminal: input)
+            #expect(run.status == (accept ? 0 : 1), "exited \(run.status): \(run.combined)")
+            #expect(run.stderr.hasPrefix(Self.prompt), "\(run.stderr)")
+            #expect(try termsAnswer(stub).accept == accept)
+            #expect(run.stderr.hasSuffix(Self.declined) != accept, "\(run.stderr)")
+        }
+    }
+
+    @Test("a terms prompt answered in the app window is closed and posts nothing")
+    func terminalPromptAnsweredInTheApp() throws {
+        try withStub(protocolVersion: 2, termsAnswerableInApp: true) { stub in
+            let run = try runTurn(["-p", "hi"], stub: stub, terminal: "")
+            #expect(run.status == 0, "exited \(run.status): \(run.combined)")
+            #expect(run.stdout == "Four.\n")
+            #expect(run.stderr.hasPrefix(Self.prompt + "\n"), "\(run.stderr)")
+            #expect(stub.requests(path: "/agent/terms").isEmpty)
+        }
     }
 }
