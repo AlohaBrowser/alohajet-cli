@@ -4,10 +4,9 @@
 # Deliberately not the release an app ships: that kind signs and notarizes a DMG of
 # a GUI app from a self-hosted runner holding a Developer ID. This package is a
 # command-line binary with no bundle, no app and no secrets, so it runs entirely on
-# GitHub-hosted runners and signs nothing. What that costs the user is stated in
-# RELEASING.md rather than hidden: an unsigned macOS binary is fine when fetched with
-# curl (no quarantine attribute) and is blocked by Gatekeeper when fetched with a
-# browser, which is the whole reason the install script exists.
+# GitHub-hosted runners and signs nothing. What that costs the user is stated in the
+# README rather than hidden: an unsigned macOS binary is fine when fetched with curl
+# (no quarantine attribute) and is blocked by Gatekeeper when fetched with a browser.
 name: release
 
 on:
@@ -119,7 +118,7 @@ jobs:
           stage="dist/alohajet-${version}-${{ matrix.name }}"
           mkdir -p "$stage"
           cp "$binary" "$stage/alohajet"
-          cp LICENSE README.md SECURITY.md "$stage/" 2>/dev/null || true
+          cp LICENSE THIRD-PARTY-NOTICES README.md "$stage/"
           tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "alohajet-${version}-${{ matrix.name }}"
           rm -rf "$stage"
 

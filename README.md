@@ -1,15 +1,14 @@
 # alohajet
 
-**Drive a real browser from the command line and from MCP. Stable element refs, nine
-tools, and four libraries with no SwiftPM dependencies — the CLI is the one target that
-links one, the official MCP SDK, and only for `alohajet mcp --endpoint`.**
+**Drive a real browser from the command line and from MCP. Stable element refs, and four
+libraries with no SwiftPM dependencies — the CLI is the one target that links one, the
+official MCP SDK, and only for `alohajet mcp --endpoint`.**
 
-[Tool reference](docs/tools.md) · [A real session](docs/demo.md) · [Security](SECURITY.md)
-· [Releasing](RELEASING.md) · [Working on it](docs/development.md)
+[Tool reference](docs/tools.md) · [A real session](docs/demo.md)
 
 Playwright was built to script a browser you control. alohajet is built to hand a browser
 to a model: it attaches to a Chromium that already exists — one it launched, or one you
-were already using — and exposes nine verbs that can finish a task on a web page.
+were already using — and exposes a small set of verbs that can finish a task on a web page.
 
 The reason to pick it over the alternatives is that **element references are derived from
 the page, not minted per snapshot**. Competing tools hand out `[ref=e1]`, `[ref=e2]` over
@@ -33,8 +32,8 @@ page, three different browsers, same ref. You can reproduce the proof yourself i
 minute; it needs Python 3 and nothing else.
 
 **What it is not**, before you spend the minute: not a Playwright replacement — no
-assertions, no test runner, no trace viewer. Not a general CDP console — nine tools,
-deliberately, against chrome-devtools-mcp's ~57. No coordinate clicking, so a `<canvas>`
+assertions, no test runner, no trace viewer. Not a general CDP console — a deliberately
+small set against chrome-devtools-mcp's ~57. No coordinate clicking, so a `<canvas>`
 game or a WebGL viewport is unreachable. No extraction verb, no readability pass. Every one
 of those is expanded, with the reproduction, under [Limitations](#limitations).
 
@@ -77,9 +76,9 @@ alohajet — the AlohaJet agent and a scriptable browser, from the command line.
 
 `alohajet --version` prints the version. There is no `doctor`.
 
-There is **no prebuilt binary**. `v0.1.0` is tagged and its release build failed, so no
-release exists and no `curl | sh` line works today. [RELEASING.md](RELEASING.md) has the
-detail.
+Prebuilt macOS and Linux tarballs are attached to every
+[release](https://github.com/AlohaBrowser/alohajet-cli/releases), with a `SHA256SUMS`
+beside them. Nothing is signed or notarized.
 
 To remove it: `rm ~/.local/bin/alohajet`, then `rm -rf "$TMPDIR/alohajet-$(id -u)"` and
 `rm -rf ~/Library/Application Support/AlohaJet` — the latter only exists if it downloaded a
@@ -88,10 +87,11 @@ Chrome, and it is the 145 MB one. The throwaway `$TMPDIR/alohajet-cdp-<uuid>` pr
 `Sources/CDP/CDP.swift` deletes a profile once it can prove the owning pid is gone, and a
 stderr log once it is a day old.
 
-As a library, add it to your `Package.swift` and depend on the `BrowserTools` product:
+As a library:
 
 ```swift
-.package(url: "https://github.com/AlohaBrowser/alohajet-cli.git", branch: "main")
+.package(url: "https://github.com/AlohaBrowser/alohajet-cli.git", from: "0.4.3")
+.product(name: "BrowserTools", package: "alohajet-cli")
 ```
 
 ## A real session
@@ -130,7 +130,7 @@ Two things there are not decoration. The `<untrusted_page_markdown K="BA0AFD9D">
 a keyed fence around everything the page said, so a model can tell page text from
 instructions; the key is fresh per read, so a page cannot close the fence and write outside
 it. It is a **delimiter, not a defence** — nothing detects prompt injection, and a model
-that ignores the fence is on its own ([SECURITY.md](SECURITY.md)). The paragraph above it is
+that ignores the fence is on its own. The paragraph above it is
 the tool's own preamble to the model, sent on every read — verbose on purpose, and the one
 thing this page shortens. Every cut on this page is marked `...`; nothing else is edited.
 
@@ -215,8 +215,8 @@ not help it.
 ```
 
 To drive the browser you already have open instead of the shared one, add the
-connection flag — and read [SECURITY.md](SECURITY.md) first, because that config hands the
-agent every tab and every logged-in session in that browser:
+connection flag — that config hands the agent every tab and every logged-in session in
+that browser:
 
 ```json
 {
@@ -229,8 +229,8 @@ agent every tab and every logged-in session in that browser:
 }
 ```
 
-A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.1.0"}`, and
-`tools/list` returns the nine tools below with `readOnlyHint=true` on exactly two,
+A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.4.3"}`, and
+`tools/list` returns the tools below with `readOnlyHint=true` on exactly two,
 `get_text` and `page_wait_for`. The hint is per tool, not per call, so `manage_tabs` is
 false even though its `list` and `read` actions only observe. `manage_tabs` with
 `include_screenshot: true` returns a second content block of type `image` next to the text;
@@ -464,7 +464,7 @@ Two consequences worth internalising:
   hashes to the same string. [docs/demo.md](docs/demo.md) shows exactly that happening.
 
 
-## The nine tools
+## The tools
 
 Full descriptions, defaults and constraints: **[docs/tools.md](docs/tools.md)** — generated
 from `Sources/BrowserTools/Tools/Schemas.swift`, with a test
@@ -526,24 +526,9 @@ reproduced on this machine before it was written down.
 every transcript and the ref-stability proof were produced on macOS. The Linux job builds
 and runs the suite; it does not re-run the proof.
 
-**`close` refuses tabs alohajet itself opened, under `--cdp` and `--browser aloha`.** Each
-CLI command is a new process, and the "we opened this" bookkeeping does not survive it:
-
-```console
-$ alohajet --cdp 9787 open https://example.com
-Tab ID: 4FA9185C1D3265C7DA3AB09AD3A7879F
-
-$ alohajet --cdp 9787 close 4FA9185C1D3265C7DA3AB09AD3A7879F
-Cannot close "Example Domain": it is the user's tab, not one you opened.
-You may only close tabs opened by manage_tabs.
-```
-
-`close` works across processes on the default shared lane, where the bookkeeping lives in
-`browser.json`. On the other two lanes it is effectively dead.
-
-**"The tab in use" does not survive a process on those lanes either.** After the `open`
-above, a later bare `alohajet --cdp 9787 read` reads the browser's *first* http(s) tab, not
-the one `open` just took. Pass `--tab <id>` explicitly outside the default lane.
+**`close` refuses tabs it did not open.** A tab that was already there when alohajet
+attached is the user's; `close` says so and exits non-zero. Tabs alohajet opened close
+normally, across processes, on every lane.
 
 **No coordinate clicking, and that is a real gap.** Everything is addressed by ref, so
 anything the DOM walk does not emit is unreachable: a `<canvas>` game, a WebGL viewport, a
@@ -555,14 +540,14 @@ win.
 
 **No extraction verb.** There is no `web_extract`, no readability pass, no site-JSON
 extractor, no "give me the article". `nativeAgentToolNames` in
-`Sources/BrowserTools/Tools/Tools.swift` is exactly the nine tools above and none of them
-is an extractor. What you get is the rendered DOM serialized to markdown.
+`Sources/BrowserTools/Tools/Tools.swift` is exactly the tools above and none of them is an
+extractor. What you get is the rendered DOM serialized to markdown.
 
 **Whole capability areas are simply absent.** No performance traces or Lighthouse audits.
 No console messages. No network-request inspection a model can query. No heap snapshots. No
 device emulation, throttling, or viewport resize. No extension or PWA tools. No
 `evaluate_script`. No `hover`, `drag`, or dialog handling. No screencast.
-chrome-devtools-mcp has all of those across ~57 tools; this has nine, deliberately.
+chrome-devtools-mcp has all of those across ~57 tools; this has a deliberately small set.
 
 **`ALOHAJET_NETWORK_LOG` is a debugging aid, and a rough one.** The file is named from an
 internal id you cannot correlate to anything the CLI prints — a tab printed as
@@ -581,24 +566,19 @@ round-trip and image tokens on every read, so it is off by default. The CLI cann
 one at all.
 
 **Two sessions as the same user share one browser.** The default lane records its browser
-in `$TMPDIR/alohajet-<uid>/browser.json`, so a second alohajet driving the "same" tab from
-another terminal is not hypothetical — see the trap in
-[docs/development.md](docs/development.md). Give the second one its own `TMPDIR`, or its
-own `--cdp`.
+in `$TMPDIR/alohajet-<uid>/browser.json`, so a second alohajet drives the same tab from
+another terminal. Give the second one its own `TMPDIR`, or its own `--cdp`.
 
 **Chrome/Chromium only.** It speaks CDP. Firefox and Safari are out.
 
 **Rough edges you will meet.** A JavaScript stack trace leaks into tool output when a ref
-is not found. `manage_tabs list` sources its "in use" marker from the browser's own active
-tab rather than the session's, so in practice it marks nothing, while `alohajet tabs
---help` still claims it does. `page_type`'s result nudges CLI users toward
+is not found. `page_type`'s result nudges CLI users toward
 `fields=[{aloha_id, text}, ...]`, a shape the CLI has no flag for — that text is written
 for the MCP surface and emitted on both.
 
 ## Security
 
-Read [SECURITY.md](SECURITY.md) before pointing this at a browser you are logged into. The
-short version: URL validation refuses everything that is not `http(s)` — `file:`, `data:`,
+Before pointing this at a browser you are logged into: URL validation refuses everything that is not `http(s)` — `file:`, `data:`,
 `javascript:` — on both the destination and the tab a tool is standing on; password fields
 are masked in the page before their values cross the wire; the network log is off by
 default. There is no host allow-list, no sandbox, and no prompt-injection detection.
@@ -607,8 +587,10 @@ sessions, by design.
 
 ## Using it as a library
 
-`BrowserToolSession` is the whole API: connect, `run` a tool by name, shut down. The
-snippet below was compiled and run as written, and it leaves no browser behind.
+`BrowserToolSession` is the supported entry point: connect, `run` a tool by name, shut
+down. Everything else the libraries expose is plumbing, not a promise — at 0.x there is no
+API stability guarantee. The snippet below was compiled and run as written, and it leaves
+no browser behind.
 
 ```swift
 import BrowserTools
@@ -640,10 +622,10 @@ because `-p` needs an endpoint this package does not provide.
 
 Apache 2.0 — see [LICENSE](LICENSE).
 
-This package carries no third-party source and vendors no tree: the CDP client, the
-WebSocket transport, the page-side runtime scripts, the DOM serializer and the tool layer
-were written for it. It declares one SwiftPM dependency, the official
+This package vendors no source tree. It declares one SwiftPM dependency, the official
 [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk), and it hangs on the
 `alohajet` executable target alone — `mcp --endpoint` relays onto a running browser's own
 MCP server over that SDK's transports rather than re-implementing Streamable HTTP. The
-four library products link nothing.
+four library products link nothing; the released `alohajet` binary links that SDK and its
+transitive dependencies statically — their notices are in
+[THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).
