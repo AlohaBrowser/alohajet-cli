@@ -67,9 +67,11 @@ public nonisolated enum AutomationToken {
     /// Whether `url` names this machine over the loopback interface.
     ///
     /// The numeric forms are PARSED, not prefix-matched: `127.0.0.1.evil.example` has
-    /// the prefix and is a remote name that resolves wherever its owner points it, and
-    /// `127.1` lacks the dotted-quad shape and IS loopback. `inet_pton` is the arbiter
-    /// of both, and it also rejects a host that merely looks numeric.
+    /// the prefix and is a remote name that resolves wherever its owner points it.
+    /// `inet_pton` is the arbiter, and it is strict dotted-quad — the short forms
+    /// `127.1` and `0x7f.1` are refused along with a host that merely looks numeric.
+    /// Refusing a real loopback address costs a user one retry; accepting a name that
+    /// is not one hands out a browser-control credential.
     ///
     /// KNOWN CEILING: `localhost` is trusted by name, not resolved — rewriting it needs
     /// root, and a root attacker owns the token file anyway. Resolve it if that ever

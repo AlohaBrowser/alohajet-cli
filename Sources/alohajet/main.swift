@@ -447,6 +447,11 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
         // a signal never got to remove its throwaway profile, and the record about to be
         // overwritten is the last thing that knows where it is. Remove it now or nothing
         // ever will: that is how a machine ends up with seven abandoned profile dirs.
+        //
+        // Said out loud, because the refs the last command printed die with it and the next
+        // command's "no page open" names the wrong cause.
+        writeToStandardError(
+            "alohajet: the shared browser on port \(port) is gone; starting a new one\n")
         if let profile = browser.profile { try? FileManager.default.removeItem(atPath: profile) }
         if let stderrLog = browser.stderrLog { try? FileManager.default.removeItem(atPath: stderrLog) }
     }
@@ -773,7 +778,21 @@ func main() async -> Int32 {
         let (tool, arguments) = try await toolCall(command, args, session)
         let result = await session.run(tool, arguments: arguments)
         emit(result, json: json)
-        code = result.isError == true ? exitToolError : exitOK
+        // Every page tool catches its own transport loss into an error RESULT, so a dead
+        // browser arrives here indistinguishable from a page that said no. Ask the socket:
+        // a wrapper script branches on exit 3 to restart the browser, and exit 1 sends it
+        // round the same failing command instead.
+        if result.isError != true {
+            code = exitOK
+        } else if await session.client.isConnected {
+            code = exitToolError
+        } else {
+            let url = URLComponents(string: session.webSocketEndpoint)
+            let where_ = [url?.host, url?.port.map(String.init)].compactMap { $0 }.joined(separator: ":")
+            writeToStandardError(
+                "alohajet: the browser at \(where_.isEmpty ? session.webSocketEndpoint : where_) is gone\n")
+            code = exitUnreachable
+        }
         rememberTab(command, args, result, ok: code == exitOK)
     } catch let error as CLIError {
         report(error, json: json)

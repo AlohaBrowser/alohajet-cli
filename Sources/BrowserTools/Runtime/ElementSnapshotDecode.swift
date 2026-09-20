@@ -25,6 +25,7 @@ public func decodeElementSnapshot(_ value: JSValue?) -> ElementSnapshot? {
     snapshot.innerText = value["innerText"]?.stringValue
     snapshot.altText = value["altText"]?.stringValue
     snapshot.inputType = value["inputType"]?.stringValue
+    snapshot.autocomplete = value["autocomplete"]?.stringValue
     snapshot.placeholder = value["placeholder"]?.stringValue
     snapshot.disabled = value["disabled"]?.boolValue
     snapshot.required = value["required"]?.boolValue

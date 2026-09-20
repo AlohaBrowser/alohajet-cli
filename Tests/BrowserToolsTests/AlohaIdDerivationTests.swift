@@ -116,6 +116,22 @@ import JavaScriptCore
         #expect(script.contains(#"stale.removeAttribute("aloha-id")"#))
         #expect(clearAt.lowerBound < walkAt.lowerBound)
     }
+
+    /// An authored `id="clickme"` hashes to a ref of nothing but decimal digits, which is a
+    /// canonical array index — `for...in` would hand it back first and numerically ascending,
+    /// ahead of every ref containing a letter, whatever the page says.
+    @Test func anAuthoredNameCanHashToAnAllDigitRef() {
+        let value = evaluate(#"alohaIdFor({ xpath: "/body/div", contextPath: [] }, mockElement({ id: "clickme" }))"#)
+        #expect(value == "38397819")
+    }
+
+    /// Which is why the wire payload is built from the recorded walk order and never from the
+    /// node map's keys. Needs a real DOM to reproduce end to end; this is the runnable half.
+    @Test func theMetadataLoopWalksTheRecordedOrder() {
+        let script = buildAgentDomTreeScript(highlight: false, focusInteractive: true)
+        #expect(script.contains("const metadata = [];\n    for (const id of order) {"))
+        #expect(script.contains("return { rootId, map: nodeMap, order: orderedIds };"))
+    }
 }
 
 #endif

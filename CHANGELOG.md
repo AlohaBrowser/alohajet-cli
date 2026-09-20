@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The provisioned Chrome for Testing moved from 126.0.6478.126 to 153.0.8010.52.
 - `LICENSE` now asserts the copyright owner instead of carrying the Apache-2.0 template
   placeholder.
+- **Source-breaking.** Constants the libraries publish are spelled the way Swift spells
+  them. Fourteen keep their visibility and only change name: `ACTIVITY_TRACKING_CONFIG` →
+  `activityTrackingConfig`, `CONTROL_CHAR_RE` → `controlCharRe`,
+  `DEFAULT_LABEL_MAX_LENGTH` → `defaultLabelMaxLength`, `GZIP_MAGIC_BYTE_1` →
+  `gzipMagicByte1`, `GZIP_MAGIC_BYTE_2` → `gzipMagicByte2`, `MAX_BODY_CAPTURE_BYTES` →
+  `maxBodyCaptureBytes`, `MAX_UPLOAD_TOTAL_BYTES` → `maxUploadTotalBytes`,
+  `MAX_URL_LENGTH` → `maxUrlLength`, `NOOP_LOGGER` → `noopLogger`,
+  `SENSITIVE_FIELD_NAMES` → `sensitiveFieldNames`, `TYPING_SESSION_CONFIG` →
+  `typingSessionConfig`, `URL_CREDENTIALS_REASON` → `urlCredentialsReason`,
+  `URL_FILE_PROTOCOL_REASON` → `urlFileProtocolReason`, `URL_MALFORMED_REASON` →
+  `urlMalformedReason`.
 
 ### Fixed
 
@@ -33,9 +44,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `scripts/install.sh`, which pointed at a repository that does not hold this project, and
-  `RELEASING.md`, `SECURITY.md` and `docs/development.md`, which described a state the
-  code left behind.
-- The unused `SdkTabResult` surface and its mapping functions.
+  `RELEASING.md` and `docs/development.md`, which described a state the code left behind.
+  `SECURITY.md` was split rather than dropped: the threat model is
+  [docs/threat-model.md](docs/threat-model.md) and the reporting channel is
+  [docs/SECURITY.md](docs/SECURITY.md).
+- **Source-breaking.** `ClickableXYDecision` and `checkElementClickableXY` are gone; no
+  tool reached them and nothing replaces them.
+- **Source-breaking.** Ten constants of the DOM serializer, the element-snapshot redactor
+  and the untrusted-content fence left the public surface and were renamed with the rest:
+  `CLEAN_DOM_DROPPED_TAGS`, `FULL_CONTENT_TEXT_CAP`, `INLINE_TEXT_TAGS`,
+  `INTERACTIVE_LABEL_CAP`, `SELECT_OPTIONS_VISIBLE_CAP`, `SELECT_SELECTED_BEYOND_CAP`,
+  `SENSITIVE_QUERY_PARAM_PATTERN`, `STRUCTURE_TAGS`, `TYPED_TEXT_PREVIEW_MAX_LENGTH` and
+  `UNTRUSTED_CONTENT_SECRET_KEY`. They tune behaviour this package owns end to end and
+  were never a contract a consumer could hold it to; a host that needs one of those values
+  declares its own.
+- **Source-breaking.** `CDPJSONEndpointError`, `GlobalScope`, `getGlobalScope` and
+  `cleanDomIsMarkedHidden` keep their names and are no longer `public`.
 
 ## [0.4.3] - 2026-09-20
 
@@ -205,7 +229,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   6.2.4, whose frontend crashes compiling this package for a universal binary. No tag had
   produced a macOS asset before.
 
-[Unreleased]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.4...HEAD
 [0.4.4]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.0...v0.4.2

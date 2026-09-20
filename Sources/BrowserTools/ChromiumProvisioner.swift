@@ -316,9 +316,16 @@ public final class ChromiumProvisioner {
             executable: "powershell",
             arguments: ["-NoProfile", "-Command", "Expand-Archive -LiteralPath '\(archivePath)' -DestinationPath '\(dir)' -Force"])
         #else
+        // Absolute, not `env unzip`: this is the step that turns downloaded bytes into
+        // the browser that gets launched, and the rest of that path (pinned URL, in-source
+        // digest checked before the bytes touch disk) does not consult PATH either.
+        let unzip = ["/usr/bin/unzip", "/bin/unzip"].first { FileManager.default.isExecutableFile(atPath: $0) }
+        guard let unzip else {
+            throw ChromiumProvisionerError.archiveExtractionFailed("no unzip at /usr/bin/unzip or /bin/unzip")
+        }
         let result = try runChromiumHelperProcess(
-            executable: "/usr/bin/env",
-            arguments: ["unzip", "-q", "-o", archivePath, "-d", dir])
+            executable: unzip,
+            arguments: ["-q", "-o", archivePath, "-d", dir])
         #endif
         if result != 0 {
             throw ChromiumProvisionerError.archiveExtractionFailed("zip extraction failed (\(result))")

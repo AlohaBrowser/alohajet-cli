@@ -4,9 +4,9 @@
 # Deliberately not the release an app ships: that kind signs and notarizes a DMG of
 # a GUI app from a self-hosted runner holding a Developer ID. This package is a
 # command-line binary with no bundle, no app and no secrets, so it runs entirely on
-# GitHub-hosted runners and signs nothing. What that costs the user is stated in the
-# README rather than hidden: an unsigned macOS binary is fine when fetched with curl
-# (no quarantine attribute) and is blocked by Gatekeeper when fetched with a browser.
+# GitHub-hosted runners and signs nothing. What that costs the user: an unsigned macOS
+# binary is fine when fetched with curl (no quarantine attribute) and is blocked by
+# Gatekeeper when fetched with a browser, until `xattr -d com.apple.quarantine` clears it.
 name: release
 
 on:
@@ -40,14 +40,22 @@ jobs:
             runner: macos-15
             asset: alohajet-macos-universal
             build_flags: "--arch arm64 --arch x86_64"
+          # `--static-swift-stdlib` is what makes the tarball usable at all: SwiftPM on
+          # Linux links the runtime dynamically by default, so the binary resolves
+          # libswiftCore.so and libFoundation*.so out of /usr/lib/swift — a directory that
+          # exists in this container and on no machine that merely downloaded the release.
+          # Measured in swift:6.2.3-noble: the dynamic binary answers
+          # "error while loading shared libraries: libswiftCore.so" in a bare ubuntu:24.04,
+          # the static one runs. What it still asks of the host is libcurl.so.4, which
+          # FoundationNetworking links, over libc/libstdc++/libgcc — so any box with curl.
           - name: linux-x86_64
             runner: ubuntu-24.04
             container: swift:6.2.3-noble
             asset: alohajet-linux-x86_64
-            build_flags: ""
+            build_flags: "--static-swift-stdlib"
     container: ${{ matrix.container || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Select a toolchain that can build this package
         # macOS only: the Linux leg runs in swift:6.2.3-noble, which is already right.
@@ -129,6 +137,15 @@ jobs:
           # A tarball whose binary cannot start is worse than no release. `--help`
           # touches argument parsing and the usage table and launches no browser.
           "$binary" --help > /dev/null
+          # But that ran inside the Swift image, where every runtime library is on the
+          # box, so it says nothing about the machine that downloads the tarball. The
+          # linkage is the part that travels: a dependency under /usr/lib/swift means the
+          # asset only starts on a host with a toolchain installed.
+          if command -v ldd > /dev/null && ldd "$binary" | grep -q '/usr/lib/swift'; then
+            echo "$binary links the Swift runtime dynamically; it would not start without a toolchain" >&2
+            ldd "$binary" >&2
+            exit 1
+          fi
           stage="dist/alohajet-${version}-${{ matrix.name }}"
           mkdir -p "$stage"
           cp "$binary" "$stage/alohajet"
@@ -139,7 +156,7 @@ jobs:
           tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "alohajet-${version}-${{ matrix.name }}"
           rm -rf "$stage"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}.tar.gz
@@ -156,7 +173,7 @@ jobs:
       attestations: write
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
           merge-multiple: true
@@ -178,8 +195,13 @@ jobs:
             dist/*.tar.gz
             dist/SHA256SUMS
 
+      # `tag_name` is not optional here: the action throws "GitHub Releases requires a
+      # tag" whenever GITHUB_REF is not refs/tags/*, which is every workflow_dispatch run —
+      # and it throws at the very end, after the matrix has built and the attestations
+      # have been minted against a release that never appears.
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
+          tag_name: ${{ inputs.version || github.ref_name }}
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS

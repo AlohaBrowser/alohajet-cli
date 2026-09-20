@@ -78,6 +78,7 @@ public struct ElementSnapshot: Sendable, Equatable {
     public var innerText: String?
     public var altText: String?
     public var inputType: String?
+    public var autocomplete: String?
     public var placeholder: String?
     public var disabled: Bool?
     public var required: Bool?
@@ -110,6 +111,7 @@ public func buildElementSnapshotSummary(_ raw: ElementSnapshot) -> ElementSnapsh
     if let v = raw.innerText { summary.innerText = truncateLabel_2(v, 120) }
     if let v = raw.altText { summary.altText = truncateLabel_2(v) }
     if let v = raw.inputType { summary.inputType = v.lowercased() }
+    if let v = raw.autocomplete { summary.autocomplete = v.lowercased() }
     if let v = raw.placeholder { summary.placeholder = truncateLabel_2(v) }
     if let v = raw.disabled { summary.disabled = v }
     if let v = raw.required { summary.required = v }
@@ -123,7 +125,7 @@ public func buildElementSnapshotSummary(_ raw: ElementSnapshot) -> ElementSnapsh
 
 public func isPasswordField(_ element: ElementSnapshot) -> Bool {
     if element.inputType == "password" { return true }
-    let haystack = "\(element.label) \(element.placeholder ?? "") \(element.name ?? "") \(element.htmlId ?? "") \(element.ariaLabel ?? "")".lowercased()
+    let haystack = "\(element.label) \(element.placeholder ?? "") \(element.name ?? "") \(element.htmlId ?? "") \(element.ariaLabel ?? "") \(element.autocomplete ?? "")".lowercased()
     for fragment in sensitiveFieldNames where haystack.contains(fragment) {
         return true
     }

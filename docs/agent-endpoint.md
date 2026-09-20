@@ -124,10 +124,15 @@ A `running` envelope may carry:
                     "answerableInApp": false } }
 ```
 
+All four fields are required. A `pendingTerms` object missing any one of them decodes to
+no question at all: the client asks nothing, warns about nothing, and keeps polling — and
+the turn then waits for an answer that cannot come.
+
 The client asks the user once per `id` and replies `POST /agent/terms` with
 `{"id": "…", "accept": true}`. `200` and `409` are both accepted; anything else is a
-stderr notice, not a failure. Polls carrying a question do not consume the poll budget, so
-a user thinking it over cannot time the turn out.
+stderr notice, not a failure. Polls carrying a question draw on a separate budget of 2400
+polls (~10 minutes) before they start consuming the turn's own, so ordinary deliberation
+cannot time the turn out. Expire a question yourself rather than leaving one standing.
 
 ## 4. `POST /quit`
 

@@ -4,7 +4,9 @@
 libraries with no SwiftPM dependencies — the CLI is the one target that links one, the
 official MCP SDK, and only for `alohajet mcp --endpoint`.**
 
-[Tool reference](docs/tools.md) · [A real session](docs/demo.md)
+[Tool reference](docs/tools.md) · [A real session](docs/demo.md) ·
+[Threat model](docs/threat-model.md) · [Contributing](docs/CONTRIBUTING.md) ·
+[Security](docs/SECURITY.md)
 
 Playwright was built to script a browser you control. alohajet is built to hand a browser
 to a model: it attaches to a Chromium that already exists — one it launched, or one you
@@ -50,8 +52,8 @@ of those is expanded, with the reproduction, under [Limitations](#limitations).
 |---|---|
 | Swift | 6.2 or newer |
 | OS | macOS 14+. Everything on this page was run on macOS 26.2 (arm64), Swift 6.2.3, Google Chrome 152.0.7977.77. |
-| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. |
-| Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 145 MB Chrome for Testing is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
+| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. The release tarball needs `libcurl.so.4` — present wherever `curl` is, and `apt-get install -y libcurl4` on a minimal image. |
+| Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 191 MB Chrome for Testing is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
 | Python 3 | only to serve the fixture pages in [The proof](#the-proof) and [docs/demo.md](docs/demo.md). |
 | Dependencies | none in the four library products (`BrowserTools`, `AgentDriver`, `CDP`, `ToolABI`) — Foundation only, no vendored tree. One in the `alohajet` executable: the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) (`from: "0.12.1"`), which `mcp --endpoint` relays over and nothing else uses. A consumer linking the libraries resolves it and compiles none of it. |
 
@@ -82,16 +84,25 @@ alohajet — the AlohaJet agent and a scriptable browser, from the command line.
 
 Prebuilt macOS and Linux tarballs are attached to every
 [release](https://github.com/AlohaBrowser/alohajet-cli/releases), with a `SHA256SUMS`
-beside them. Nothing is signed or notarized.
+beside them. Nothing is signed or notarized, so provenance is what there is to check:
+
+```sh
+sha256sum -c SHA256SUMS
+gh attestation verify alohajet-macos-universal.tar.gz --repo AlohaBrowser/alohajet-cli
+```
+
+The attestation is a Sigstore build-provenance statement binding each asset — and
+`SHA256SUMS` itself — to the workflow, repository and commit that produced it.
 
 To remove it: `rm ~/.local/bin/alohajet`, then `rm -rf "$TMPDIR/alohajet-$(id -u)"` and
 `rm -rf ~/Library/Application Support/AlohaJet` — the latter only exists if it downloaded a
-Chrome, and it is the 145 MB one. The throwaway `$TMPDIR/alohajet-cdp-<uuid>` profiles and
+Chrome, and it is the 191 MB one. The throwaway `$TMPDIR/alohajet-cdp-<uuid>` profiles and
 `alohajet-chrome-stderr-*.log` files reap themselves (`reapStaleProfiles` in
 `Sources/CDP/CDP.swift`): a profile once the owning pid is provably gone, a log once it is
 a day old.
 
-As a library:
+As a library. Every library product is `@MainActor`-isolated by default, so a call from a
+non-isolated context needs an `await` or an actor hop:
 
 ```swift
 .package(url: "https://github.com/AlohaBrowser/alohajet-cli.git", exact: "0.4.4")
@@ -480,9 +491,16 @@ below were read back off a live `tools/list`, so they are the schema, not a para
 | `page_upload` | `aloha_id`, `paths` (array of absolute paths, 1+) | `aloha_id`, `paths` |
 
 `page_type` and `get_text` are the two batch tools, and the batching is the point: filling
-a five-field form is one call, not five rounds. Both caps are 20 and both are declared in
-the schema (`maxItems`), not merely enforced at runtime, so a validating provider can see
-them.
+a five-field form is one call, not five rounds. Both caps are 20. `page_type` takes an
+array, so its cap is declared in the schema as `maxItems` and a validating provider sees
+it; `get_text` takes a comma-separated string, where `maxItems` is not expressible, so its
+cap lives in the description and is enforced when the tool runs — ids past the twentieth
+are not read, and the result says how many were.
+
+A `get_text` batch is an error only when **every** id failed, so one stale ref does not
+cost you the rest of the read. A batch that resolved at least one id exits 0 with the
+failures named in place, one line per id: `alohajet text a,b || handle` will not catch a
+missing element, and a script that cares has to read the labelled lines.
 
 Only `http` and `https` URLs are accepted, and **the scheme is not optional**:
 
@@ -500,7 +518,7 @@ Every variable the sources actually read, checked with
 
 | variable | default | effect |
 |---|---|---|
-| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. A path that is not an executable file is an error (exit 3), never a quiet fall-through to another browser. Unset and with no system Chrome, **Chrome for Testing 153.0.8010.52 is downloaded on first use** — a 145 MB zip, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing`. There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
+| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. A path that is not an executable file is an error (exit 3), never a quiet fall-through to another browser. Unset and with no system Chrome, **Chrome for Testing 153.0.8010.52 is downloaded on first use** — a 191 MB zip on mac-arm64, 196 MB on linux64, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing`. There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
 | `ALOHAJET_NETWORK_LOG` | off | a directory (or `1` for a temp dir) to record each agent-opened tab's requests as JSONL, `0600` in a `0700` directory. Read the limitation below before trusting it. |
 | `ALOHAJET_CREDENTIAL_GUARD` | off | `1` makes `page_type` refuse to type into a field it classifies as a credential field. Password-field *masking on read* is always on and is not controlled by this. |
 | `ALOHAJET_MARKDOWN_URLS` | off | `1` includes each link's `href`: `[Learn more](https://iana.org/domains/example) {aloha-id="719a97a0" a}` |
@@ -549,8 +567,10 @@ chrome-devtools-mcp has all of those across ~57 tools; this has a deliberately s
 internal id you cannot correlate to anything the CLI prints — a tab printed as
 `915E5DE332A24AF2218E6A9717ED027E` logged to `tab-914C8BAA-7A1.jsonl` — and the main
 document request is never recorded, only subresources, so a page whose only request is its
-own HTML produces an empty file. Response bodies are **not** masked, and nothing deletes
-these files.
+own HTML produces an empty file. Response bodies are kept, with credential-named fields
+inside them masked against a fixed sixteen-name list (`access_token`, `client_secret`,
+`refresh_token`, `password`, …); everything else in a body reaches disk verbatim, and
+nothing deletes these files.
 
 **The launched Chromium advertises itself as HeadlessChrome.** Its User-Agent is
 `...HeadlessChrome/152.0.0.0 Safari/537.36`, so a site that gates on it will refuse the
@@ -579,7 +599,18 @@ Before pointing this at a browser you are logged into: URL validation refuses ev
 are masked in the page before their values cross the wire; the network log is off by
 default. There is no host allow-list, no sandbox, and no prompt-injection detection.
 `--cdp` and `--browser aloha` against your everyday browser hand an agent your logged-in
-sessions, by design.
+sessions, by design. `page_upload` reads any path the caller names and base64s it into the
+page: the filesystem is a trust domain this package does not fence.
+
+Two things that paragraph is too short to say. **A CDP port has no authentication** —
+Chrome's `--remote-debugging-port` is unauthenticated by design, loopback binding is
+Chrome's default rather than a promise this package makes, and any process running as the
+same user can connect and read cookies or evaluate JavaScript on any origin. And **no
+notion of which host is acceptable exists**: `http://169.254.169.254/latest/meta-data/`,
+`http://192.168.1.1` and an internal hostname on your VPN are all valid `http` URLs and
+are all accepted. What is defended and what is deliberately not is set out per lane in
+[docs/threat-model.md](docs/threat-model.md); report a bypass through
+[docs/SECURITY.md](docs/SECURITY.md).
 
 ## Using it as a library
 

@@ -548,12 +548,19 @@ public actor CDPClient: CDPTransport {
         channel
     }
 
+    /// Whether the channel is up. False once ``close()`` ran or the transport failed
+    /// under us — the difference between a tool that failed and a browser that is gone.
+    public var isConnected: Bool { !isClosed && channel != nil }
+
     private func handleReceiveFailure(_ error: Error) {
         guard !isClosed else { return }
         isClosed = true
         channel = nil
+        // `connectionClosed`, not the transport's own error: a dead browser surfaced as
+        // `NSPOSIXErrorDomain Code=57` carrying the internal devtools URL in its userInfo,
+        // which is neither a sentence for the operator nor a case a caller can match on.
         for (_, continuation) in pending {
-            continuation.resume(throwing: error)
+            continuation.resume(throwing: CDPError.connectionClosed)
         }
         pending.removeAll()
         for (_, continuation) in eventContinuations {

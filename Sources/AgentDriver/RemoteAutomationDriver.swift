@@ -252,7 +252,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
                 requested = current
             }
 
-            var body: [String: Any] = ["prompt": prompt, "permissions": permissions.map(\.rawValue)]
+            var body: [String: Any] = ["prompt": prompt, "permissions": CLIPermission.wireOrder(permissions)]
             if let requested { body["conversation"] = requested }
             let response = try await transport("POST", agentURL(path: "/agent/run"), Self.jsonBody(body))
             guard response.statusCode == 200, let object = Self.jsonObject(response.body) else {
@@ -531,7 +531,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     }
 
     private static func permissionsBody(_ permissions: [CLIPermission]) -> Data {
-        let object: [String: Any] = ["permissions": permissions.map(\.rawValue)]
+        let object: [String: Any] = ["permissions": CLIPermission.wireOrder(permissions)]
         return (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
     }
 

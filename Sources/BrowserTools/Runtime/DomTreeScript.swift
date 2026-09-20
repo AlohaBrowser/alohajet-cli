@@ -131,6 +131,12 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   }
 
   const nodeMap = {};
+  // Document order, kept apart from nodeMap because `for...in` does not preserve it: an
+  // aloha-id whose hex happens to be all digits ("38397819") is a canonical array index,
+  // and JS enumerates those first and numerically ascending, ahead of every other key.
+  // The read's element order IS the page's structure, so hoisting ~2% of refs to the top
+  // of every read silently mis-describes the page.
+  const orderedIds = [];
   const takenAlohaIds = new Set();
 
   // THE ONLY PLACE AN ALOHA-ID COMES FROM. Read `identity` top to bottom; the first rung
@@ -1512,6 +1518,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       }
       const id = alohaIdFor(descriptor, body);
       nodeMap[id] = descriptor;
+      orderedIds.push(id);
       try {
         body.setAttribute("aloha-id", id);
         descriptor.attributes["aloha-id"] = id;
@@ -1605,6 +1612,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       };
       const id = alohaIdFor(descriptor, null);
       nodeMap[id] = descriptor;
+      orderedIds.push(id);
       return id;
     }
 
@@ -1837,6 +1845,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
 
     const id = alohaIdFor(descriptor, element);
     nodeMap[id] = descriptor;
+    orderedIds.push(id);
     try {
       element.setAttribute("aloha-id", id);
       descriptor.attributes["aloha-id"] = id;
@@ -1895,9 +1904,9 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     }
     console.log("[DOM Debug] Semantic tags in final map:", semanticCounts);
   }
-  return { rootId, map: nodeMap };
+  return { rootId, map: nodeMap, order: orderedIds };
 };
-    const { map } = collectDomTree(\#(collectAllInteractive), \#(debug));
+    const { map, order } = collectDomTree(\#(collectAllInteractive), \#(debug));
 
     const debugStats = {
       totalNodes: 0,
@@ -2018,7 +2027,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     }
 
     const metadata = [];
-    for (const id in map) {
+    for (const id of order) {
       const nodeData = map[id];
       if (!nodeData) continue;
 
