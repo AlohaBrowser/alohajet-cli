@@ -14,7 +14,7 @@ import Foundation
 /// exists before it is copied into a CDP response — a Swift-side filter would be
 /// redacting a secret that had already crossed the wire and into whatever the host logs.
 ///
-/// The fragment list mirrors ``sensitiveFieldNames`` in ToolABI (which drives the
+/// The fragment list mirrors ``SENSITIVE_FIELD_NAMES`` in ToolABI (which drives the
 /// credential-typing guard) with one deliberate difference: bare `pass` is NOT here.
 /// It matches "Passenger", "Passport" and "Bypass", and blanking those fields' values
 /// would corrupt ordinary page reads silently — the exact failure mode that makes a

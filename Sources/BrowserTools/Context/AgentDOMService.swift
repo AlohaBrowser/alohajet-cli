@@ -1072,7 +1072,7 @@ public final class AgentDOMService {
                     success: false,
                     error: "File upload failed at the staging stage: no upload staging is available.")
             }
-            let staged = try await staging.stage(filePaths, maxTotalBytes: maxUploadTotalBytes, signal: signal)
+            let staged = try await staging.stage(filePaths, maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: signal)
             if !filePaths.isEmpty && staged.cdpPaths.isEmpty && staged.files.isEmpty {
                 return UploadResult(
                     success: false,

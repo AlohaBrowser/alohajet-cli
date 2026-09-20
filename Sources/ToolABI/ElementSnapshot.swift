@@ -2,21 +2,21 @@ import Foundation
 
 // MARK: - Action label / snapshot building
 
-public let defaultLabelMaxLength = 80
-public let typedTextPreviewMaxLength = 40
+public let DEFAULT_LABEL_MAX_LENGTH = 80
+public let TYPED_TEXT_PREVIEW_MAX_LENGTH = 40
 
 /// Field-name fragments that indicate a sensitive (password-like) field.
-public let sensitiveFieldNames: Set<String> = [
+public let SENSITIVE_FIELD_NAMES: Set<String> = [
     "password", "passwd", "pwd", "pass", "new-password", "current-password",
     "newpassword", "currentpassword"
 ]
 
 /// Query-parameter names that should be redacted from logged URLs.
-public let sensitiveQueryParamPattern = "(token|auth|sess(ion)?|jwt|bearer|sig|signature|key|secret|password|otp|code|access|refresh|api[_-]?key|nonce)"
+public let SENSITIVE_QUERY_PARAM_PATTERN = "(token|auth|sess(ion)?|jwt|bearer|sig|signature|key|secret|password|otp|code|access|refresh|api[_-]?key|nonce)"
 
 /// Collapses whitespace and truncates a label to `maxLength`, appending an
 /// ellipsis when truncated.
-public func truncateLabel_2(_ value: String, _ maxLength: Int = defaultLabelMaxLength) -> String {
+public func truncateLabel_2(_ value: String, _ maxLength: Int = DEFAULT_LABEL_MAX_LENGTH) -> String {
     let collapsed = collapseWhitespace(value).trimmingCharacters(in: .whitespacesAndNewlines)
     if collapsed.count <= maxLength { return collapsed }
     let sliceCount = max(0, maxLength - 1)
@@ -55,7 +55,7 @@ public func getElementCenterPoint(_ bbox: ElementBBox) -> ActionPoint {
 public func redactSensitiveUrlParams(_ url: String) -> String {
     guard var components = URLComponents(string: url) else { return url }
     if let items = components.queryItems {
-        let kept = items.filter { !matches($0.name, sensitiveQueryParamPattern, caseInsensitive: true) }
+        let kept = items.filter { !matches($0.name, SENSITIVE_QUERY_PARAM_PATTERN, caseInsensitive: true) }
         components.queryItems = kept.isEmpty ? nil : kept
     }
     if let fragment = components.fragment,
@@ -124,7 +124,7 @@ public func buildElementSnapshotSummary(_ raw: ElementSnapshot) -> ElementSnapsh
 public func isPasswordField(_ element: ElementSnapshot) -> Bool {
     if element.inputType == "password" { return true }
     let haystack = "\(element.label) \(element.placeholder ?? "") \(element.name ?? "") \(element.htmlId ?? "") \(element.ariaLabel ?? "")".lowercased()
-    for fragment in sensitiveFieldNames where haystack.contains(fragment) {
+    for fragment in SENSITIVE_FIELD_NAMES where haystack.contains(fragment) {
         return true
     }
     return false
@@ -225,7 +225,7 @@ public func buildTypeAction(_ base: ActionBuilderBase, element: ElementSnapshot,
     let summary = buildElementSnapshotSummary(element)
     let point = getElementCenterPoint(summary.bbox)
     let redacted = isPasswordField(summary)
-    let preview = redacted ? "•••" : truncateLabel_2(text, typedTextPreviewMaxLength)
+    let preview = redacted ? "•••" : truncateLabel_2(text, TYPED_TEXT_PREVIEW_MAX_LENGTH)
     let verb = replace == true ? "Replaced" : "Typed"
     let label: String
     if base.isError == true {

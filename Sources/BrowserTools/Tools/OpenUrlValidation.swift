@@ -6,14 +6,14 @@ import Foundation
 // which a real tab (as opposed to a fresh `about:blank`) will happily load and
 // hand back through `get_text`.
 
-public let maxURLLength = 8192
+public let MAX_URL_LENGTH = 8192
 
-public let controlCharacterPattern = "[\\x00-\\x1f\\x7f]"
+public let CONTROL_CHAR_RE = "[\\x00-\\x1f\\x7f]"
 
 /// Names the host's local-file reader when it has one (``HostToolNames/localFileRead``), and
 /// says nothing about it when it does not. A model that is told only what it cannot do
 /// retries the same thing.
-public var urlFileProtocolReason: String {
+public var URL_FILE_PROTOCOL_REASON: String {
     let base = "URL not allowed: file:// cannot be opened by browser tools. These tools drive a browser over CDP; they are not a local file reader."
     guard let reader = HostToolNames.localFileRead else { return base }
     return base + " Use \(reader) with the absolute path instead."
@@ -23,9 +23,9 @@ public func urlBadProtocolReason(_ proto: String) -> String {
     "URL not allowed: only http and https URLs can be opened via browser tools (got \(proto))."
 }
 
-public let urlCredentialsReason = "URL not allowed: URLs containing 'user:password@' are rejected."
+public let URL_CREDENTIALS_REASON = "URL not allowed: URLs containing 'user:password@' are rejected."
 
-public let urlMalformedReason = "URL not allowed: malformed or oversized URL."
+public let URL_MALFORMED_REASON = "URL not allowed: malformed or oversized URL."
 
 public enum OpenUrlValidation: Equatable, Sendable {
     case ok(normalized: String)
@@ -37,30 +37,30 @@ public enum OpenUrlValidation: Equatable, Sendable {
 /// URLs; returns the normalized href otherwise.
 public func validateOpenUrl(_ value: String?) -> OpenUrlValidation {
     guard let value else {
-        return .rejected(reason: urlMalformedReason)
+        return .rejected(reason: URL_MALFORMED_REASON)
     }
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty {
-        return .rejected(reason: urlMalformedReason)
+        return .rejected(reason: URL_MALFORMED_REASON)
     }
-    if trimmed.count > maxURLLength {
-        return .rejected(reason: urlMalformedReason)
+    if trimmed.count > MAX_URL_LENGTH {
+        return .rejected(reason: URL_MALFORMED_REASON)
     }
-    if urlRegexTest(trimmed, pattern: controlCharacterPattern) {
-        return .rejected(reason: urlMalformedReason)
+    if urlRegexTest(trimmed, pattern: CONTROL_CHAR_RE) {
+        return .rejected(reason: URL_MALFORMED_REASON)
     }
     guard let parsed = ParsedWebUrl(trimmed) else {
-        return .rejected(reason: urlMalformedReason)
+        return .rejected(reason: URL_MALFORMED_REASON)
     }
     let proto = parsed.protocolScheme
     if proto != "http:" && proto != "https:" {
         if proto == "file:" {
-            return .rejected(reason: urlFileProtocolReason)
+            return .rejected(reason: URL_FILE_PROTOCOL_REASON)
         }
         return .rejected(reason: urlBadProtocolReason(proto))
     }
     if !parsed.username.isEmpty || !parsed.password.isEmpty {
-        return .rejected(reason: urlCredentialsReason)
+        return .rejected(reason: URL_CREDENTIALS_REASON)
     }
     return .ok(normalized: parsed.href)
 }

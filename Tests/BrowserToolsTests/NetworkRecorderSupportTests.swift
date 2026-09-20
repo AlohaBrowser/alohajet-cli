@@ -82,8 +82,8 @@ struct DecodeBase64BodyGzipTests {
             return
         }
         // Sanity: the produced data begins with the gzip magic bytes.
-        #expect(Int(gzipped[gzipped.startIndex]) == gzipMagicByte1)
-        #expect(Int(gzipped[gzipped.index(after: gzipped.startIndex)]) == gzipMagicByte2)
+        #expect(Int(gzipped[gzipped.startIndex]) == GZIP_MAGIC_BYTE_1)
+        #expect(Int(gzipped[gzipped.index(after: gzipped.startIndex)]) == GZIP_MAGIC_BYTE_2)
         let decoded = decodeBase64Body(gzipped.base64EncodedString())
         #expect(decoded == original)
     }
@@ -168,7 +168,7 @@ struct NetworkRecorderEventTests {
         let sink = RecordSink()
         let (recorder, _) = makeRecorder(sink)
         recorder.onCDPMessage("Network.requestWillBeSent", requestParams(id: "r1", url: "https://x.test/page"))
-        // text/css is NOT in capturableMimeTypes -> shouldCaptureBody is false.
+        // text/css is NOT in CAPTURABLE_MIME_TYPES -> shouldCaptureBody is false.
         recorder.onCDPMessage("Network.responseReceived", .object([
             ("requestId", .string("r1")),
             ("response", .object([
@@ -202,7 +202,7 @@ struct NetworkRecorderEventTests {
     @Test func ignoredResourceTypesAreSkipped() {
         let sink = RecordSink()
         let (recorder, _) = makeRecorder(sink)
-        // "Image" is in ignoredResourceTypes.
+        // "Image" is in IGNORED_RESOURCE_TYPES.
         recorder.onCDPMessage("Network.requestWillBeSent", requestParams(id: "r1", url: "https://x.test/logo.png", type: "Image"))
         recorder.onCDPMessage("Network.loadingFailed", .object([("requestId", .string("r1"))]))
         #expect(sink.all.isEmpty)
@@ -223,10 +223,10 @@ struct NetworkRecorderEventTests {
     @Test func postDataIsClampedToCaptureBudget() {
         let sink = RecordSink()
         let (recorder, _) = makeRecorder(sink)
-        let big = String(repeating: "a", count: maxBodyCaptureBytes + 500)
+        let big = String(repeating: "a", count: MAX_BODY_CAPTURE_BYTES + 500)
         recorder.onCDPMessage("Network.requestWillBeSent", requestParams(id: "r1", url: "https://x.test/upload", method: "POST", postData: big))
         recorder.onCDPMessage("Network.loadingFailed", .object([("requestId", .string("r1"))]))
-        #expect(sink.all.first?.postData?.count == maxBodyCaptureBytes)
+        #expect(sink.all.first?.postData?.count == MAX_BODY_CAPTURE_BYTES)
     }
 
     @Test func unknownMethodIsIgnored() {

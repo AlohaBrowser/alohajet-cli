@@ -106,6 +106,70 @@ extension TabToolResult {
     }
 }
 
+public enum SdkTabResult: Equatable, Sendable {
+    case error(String)
+    case read(String)
+    case open(tabId: String, title: String?, url: String, faviconUrl: String?)
+    case close(tabId: String, title: String?, url: String?, faviconUrl: String?)
+    case focus(tabId: String)
+    case unfocus(previousTabId: String?)
+    case list([TabSummary])
+    case findByText([AlohaIdMatch])
+}
+
+public func toolErrorToSdkError(_ result: TabToolResult) -> SdkTabResult {
+    if let output = result.output, !output.isEmpty {
+        return .error(output)
+    }
+    if let error = result.error, !error.isEmpty {
+        return .error(error)
+    }
+    if result.error != nil {
+        return .error("")  // non-string truthy errors collapse to String(error); empty here
+    }
+    return .error("Unknown tool error")
+}
+
+public func sdkReadResult(_ result: TabToolResult) -> SdkTabResult {
+    if result.isError { return toolErrorToSdkError(result) }
+    return .read(result.output ?? "")
+}
+
+public func sdkOpenResult(_ result: TabToolResult) -> SdkTabResult {
+    if result.isError { return toolErrorToSdkError(result) }
+    guard let tabId = result.tabId, let url = result.url, !tabId.isEmpty, !url.isEmpty else {
+        return .error("openTab succeeded but returned no tabId — internal bug, please report.")
+    }
+    return .open(tabId: tabId, title: result.title, url: url, faviconUrl: result.faviconUrl)
+}
+
+public func sdkCloseResult(_ result: TabToolResult, _ fallbackTabId: String) -> SdkTabResult {
+    if result.isError { return toolErrorToSdkError(result) }
+    return .close(
+        tabId: result.tabId ?? fallbackTabId, title: result.title, url: result.url,
+        faviconUrl: result.faviconUrl)
+}
+
+public func sdkFocusResult(_ result: TabToolResult, _ fallbackTabId: String) -> SdkTabResult {
+    if result.isError { return toolErrorToSdkError(result) }
+    return .focus(tabId: result.tabId ?? fallbackTabId)
+}
+
+public func sdkUnfocusResult(_ result: TabToolResult) -> SdkTabResult {
+    if result.isError { return toolErrorToSdkError(result) }
+    return .unfocus(previousTabId: result.previousTabId)
+}
+
+public func sdkListResult(_ result: TabToolResult) -> SdkTabResult {
+    if result.isError { return toolErrorToSdkError(result) }
+    return .list(result.tabs ?? [])
+}
+
+public func sdkFindByTextResult(_ result: TabToolResult) -> SdkTabResult {
+    if result.isError { return toolErrorToSdkError(result) }
+    return .findByText(result.matches ?? [])
+}
+
 public func listTabs(_ tabs: [TabSummary]) -> TabToolResult {
     let lines = tabs.enumerated().map { index, tab -> String in
         let activeMarker = tab.isActive ? "● " : ""
@@ -122,6 +186,10 @@ public func listTabs(_ tabs: [TabSummary]) -> TabToolResult {
 
 public func abortedResultOrNull(_ aborted: Bool) -> TabToolResult? {
     aborted ? TabToolResult(output: executionStoppedError, isError: true) : nil
+}
+
+public func abortedSdkErrorOrNull(_ aborted: Bool) -> SdkTabResult? {
+    aborted ? .error(executionStoppedError) : nil
 }
 
 public func isAbortLikeError(_ error: Error?) -> Bool {

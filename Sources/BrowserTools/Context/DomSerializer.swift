@@ -198,7 +198,7 @@ public struct DomNode: Sendable {
 
 /// Tags whose entire subtree is dropped: none contributes readable content, all of them
 /// inflate the serialization.
-public let cleanDomDroppedTags: Set<String> = ["style", "script", "noscript", "svg"]
+public let CLEAN_DOM_DROPPED_TAGS: Set<String> = ["style", "script", "noscript", "svg"]
 
 /// Everything not matched here is preserved, so the attributes a reader needs — `href`,
 /// `src`, `alt`, `aria-label`, and the interactive/aria attributes the serializer consults
@@ -257,7 +257,7 @@ public func cleanDomTree(_ nodes: [DomNode]) -> [DomNode] {
     func dropsSubtree(_ node: DomNode) -> Bool {
         if node.nodeType == "COMMENT_NODE" { return true }
         let tag = node.element.tagName.lowercased()
-        if cleanDomDroppedTags.contains(tag) { return true }
+        if CLEAN_DOM_DROPPED_TAGS.contains(tag) { return true }
         if cleanDomIsMarkedHidden(node) { return true }
         return false
     }
@@ -503,8 +503,8 @@ public func siteJsonStructuredBlock(
     return lines.joined(separator: "\n")
 }
 
-public let inlineTextTags: Set<String> = ["legend", "h1", "h2", "h3", "h4", "h5", "h6", "figcaption", "caption", "dt", "p"]
-public let structureTags: Set<String> = ["header", "footer", "aside", "main", "article", "section", "nav", "fieldset"]
+public let INLINE_TEXT_TAGS: Set<String> = ["legend", "h1", "h2", "h3", "h4", "h5", "h6", "figcaption", "caption", "dt", "p"]
+public let STRUCTURE_TAGS: Set<String> = ["header", "footer", "aside", "main", "article", "section", "nav", "fieldset"]
 
 public func normalizeWhitespace(_ raw: String?) -> String {
     let collapsed = (raw ?? "").replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
@@ -519,7 +519,7 @@ public func collectDescendantText(_ node: DomNode, _ nodesById: [String: DomNode
         visited.insert(childId)
         guard let child = nodesById[childId] else { continue }
         let tag = child.element.tagName.lowercased()
-        if child.nodeType == "TEXT_NODE" || inlineTextTags.contains(tag) || (child.interactivity.isHighlighted && child.interactivity.isTopElement) {
+        if child.nodeType == "TEXT_NODE" || INLINE_TEXT_TAGS.contains(tag) || (child.interactivity.isHighlighted && child.interactivity.isTopElement) {
             let text = normalizeWhitespace(child.content.comprehensiveText ?? child.element.textContent ?? "")
             if !text.isEmpty { collected.append(text) }
         } else {
@@ -568,11 +568,11 @@ public func truncateLabel(_ raw: String, _ maxLength: Int = 20) -> String {
 // while every ACTIONABLE element keeps a trailing `{aloha-id="ID" tag}` marker so navigation
 // never degrades (tab.click(id) / findByText still resolve).
 
-public let fullContentTextCap = 1000
+public let FULL_CONTENT_TEXT_CAP = 1000
 /// Shortest standalone content-leaf text worth surfacing. Below this it's almost always UI chrome
 /// (a bare vote/count "0", a separator "."), never a price or label the reader needs.
-let contentLeafMinChars = 3
-public let interactiveLabelCap = 120
+let CONTENT_LEAF_MIN_CHARS = 3
+public let INTERACTIVE_LABEL_CAP = 120
 
 /// The trailing actionable marker appended to every interactive element's line, e.g.
 /// ` {aloha-id="1f3a9c2b" button}`. The literal `aloha-id="…"` token is a contract: id capture
@@ -581,22 +581,22 @@ public func interactiveTrailer(_ node: DomNode, _ tag: String) -> String {
     return " {aloha-id=\"\(node.id)\" \(tag)}"
 }
 
-public let selectOptionsVisibleCap = 1000
-public let selectSelectedBeyondCap = 50
+public let SELECT_OPTIONS_VISIBLE_CAP = 1000
+public let SELECT_SELECTED_BEYOND_CAP = 50
 
 public func renderSelectOptions(_ id: String, _ options: [DomSelectOption], _ multiple: Bool) -> String {
     if options.isEmpty { return "[options: empty]" }
     let multiLabel = multiple ? " (multi)" : ""
-    let visibleCount = min(options.count, selectOptionsVisibleCap)
+    let visibleCount = min(options.count, SELECT_OPTIONS_VISIBLE_CAP)
     var selectedBeyondCap: [(idx: Int, opt: DomSelectOption)] = []
-    var y = selectOptionsVisibleCap
+    var y = SELECT_OPTIONS_VISIBLE_CAP
     while y < options.count {
         if options[y].selected {
             selectedBeyondCap.append((idx: y, opt: options[y]))
         }
         y += 1
     }
-    let selectedBeyondShown = min(selectedBeyondCap.count, selectSelectedBeyondCap)
+    let selectedBeyondShown = min(selectedBeyondCap.count, SELECT_SELECTED_BEYOND_CAP)
     var rendered: [String] = []
     var v = 0
     while v < visibleCount {
@@ -811,15 +811,15 @@ func scrollMarker(_ node: DomNode) -> String {
 
 private func interactiveLabel(_ node: DomNode, _ nodesById: [String: DomNode]) -> String {
     if let ariaLabel = node.element.attributes["aria-label"], !ariaLabel.isEmpty {
-        return truncateText(normalizeWhitespace(ariaLabel), interactiveLabelCap)
+        return truncateText(normalizeWhitespace(ariaLabel), INTERACTIVE_LABEL_CAP)
     }
     if let ariaPlaceholder = node.element.attributes["aria-placeholder"], !ariaPlaceholder.isEmpty {
-        return truncateText(normalizeWhitespace(ariaPlaceholder), interactiveLabelCap)
+        return truncateText(normalizeWhitespace(ariaPlaceholder), INTERACTIVE_LABEL_CAP)
     }
     let raw = (node.content.comprehensiveText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? node.content.comprehensiveText : nil) ?? node.element.textContent ?? ""
     let text = normalizeWhitespace(raw)
     if text.isEmpty { return "" }
-    return truncateText(text, interactiveLabelCap)
+    return truncateText(text, INTERACTIVE_LABEL_CAP)
 }
 
 private func renderInputControl(_ node: DomNode) -> String {
@@ -996,7 +996,7 @@ func renderInteractiveNode(_ node: DomNode, _ depth: Int, _ nodesById: [String: 
         return text.isEmpty ? "" : String(repeating: " ", count: min(depth, 6)) + text
     }
     let tag = node.element.tagName.lowercased()
-    if structureTags.contains(tag) && node.children.count > 0 {
+    if STRUCTURE_TAGS.contains(tag) && node.children.count > 0 {
         var c = "<\(tag) aloha-id=\"\(node.id)\""
         if let role = node.element.attributes["role"], !role.isEmpty {
             c += " role=\"\(role)\""
@@ -1013,7 +1013,7 @@ func renderInteractiveNode(_ node: DomNode, _ depth: Int, _ nodesById: [String: 
         c += " />"
         return String(repeating: " ", count: min(depth, 6)) + c
     }
-    if inlineTextTags.contains(tag) && node.positioning.isVisible {
+    if INLINE_TEXT_TAGS.contains(tag) && node.positioning.isVisible {
         let text = truncateText(node.content.comprehensiveText ?? node.element.textContent ?? "", 200)
         if !text.isEmpty {
             var c = "<\(tag) aloha-id=\"\(node.id)\""
@@ -1063,13 +1063,13 @@ private func headingPrefix(_ tag: String) -> String? {
 
 private func contentText(_ node: DomNode) -> String {
     let raw = node.content.comprehensiveText ?? node.element.textContent ?? ""
-    return truncateText(normalizeWhitespace(raw), fullContentTextCap)
+    return truncateText(normalizeWhitespace(raw), FULL_CONTENT_TEXT_CAP)
 }
 
 /// Tags whose own line is suppressed because the walker renders their content via children
 /// (list containers descend to `<li>`; table containers descend to `<tr>`; cells are folded
 /// into their row).
-private let structuralContainerTags: Set<String> = ["ul", "ol", "table", "thead", "tbody", "tfoot", "th", "td", "colgroup", "col"]
+private let STRUCTURAL_CONTAINER_TAGS: Set<String> = ["ul", "ol", "table", "thead", "tbody", "tfoot", "th", "td", "colgroup", "col"]
 
 /// A header row (cells are `<th>`) is followed by a `| --- |` separator.
 private func renderTableRow(_ node: DomNode, _ nodesById: [String: DomNode]) -> String {
@@ -1104,7 +1104,7 @@ func nodeIsKeptInteractive(_ node: DomNode) -> Bool {
     // A sealed region is always an <iframe> — the only two places that set `sealedMarker`
     // both produce one — so it reaches the serializer through the two branches that admit
     // an iframe: here, and the early keep test in `renderInteractiveNode`. The structural
-    // landmark branch of `renderFullNode` is gated on structureTags (header, footer,
+    // landmark branch of `renderFullNode` is gated on STRUCTURE_TAGS (header, footer,
     // aside, main, article, section, nav, fieldset) and can never see one, so it appends
     // no sealed marker. That asymmetry is deliberate; verified by instrumenting that
     // branch to shout and running every suite, including real Chrome — it never fired.
@@ -1120,7 +1120,7 @@ private func dedupKey(_ s: String) -> String {
 
 /// Value symbols that make a short string worth keeping even under the min-length gate — a "£5"
 /// price or "20%" must survive while a bare vote-count "0"/"19" is dropped.
-private let valueSymbols: Set<Character> = ["£", "$", "€", "¥", "₽", "₹", "%"]
+private let VALUE_SYMBOLS: Set<Character> = ["£", "$", "€", "¥", "₽", "₹", "%"]
 
 /// A content-bearing leaf that `renderFullNode` would otherwise drop — a non-highlighted element
 /// with no content branch, e.g. `<div class="price">£89.95</div>`. Its text is surfaced **once**,
@@ -1135,24 +1135,24 @@ private func contentLeafLine(_ node: DomNode, _ listLevel: Int, _ nodesById: [St
     guard node.nodeType != "TEXT_NODE" else { return nil }   // text nodes are handled by renderFullNode
     guard node.positioning.isInViewport, node.positioning.isVisible else { return nil }
     let tag = node.element.tagName.lowercased()
-    if structuralContainerTags.contains(tag) { return nil }
-    if structureTags.contains(tag) { return nil }
+    if STRUCTURAL_CONTAINER_TAGS.contains(tag) { return nil }
+    if STRUCTURE_TAGS.contains(tag) { return nil }
     // Leaf among kept nodes only: if any child resolves to a kept node, that child carries the text.
     for childId in node.children where nodesById[childId] != nil { return nil }
     let raw = (node.content.comprehensiveText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
                ? node.content.comprehensiveText : nil) ?? node.element.textContent ?? ""
     let text = normalizeWhitespace(raw)
     guard text.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
-    let hasValueSymbol = text.contains(where: { valueSymbols.contains($0) })
-    guard text.count >= contentLeafMinChars || hasValueSymbol else { return nil }
+    let hasValueSymbol = text.contains(where: { VALUE_SYMBOLS.contains($0) })
+    guard text.count >= CONTENT_LEAF_MIN_CHARS || hasValueSymbol else { return nil }
     let key = dedupKey(text)
     if !key.isEmpty, emittedAncestorKeys.contains(key) { return nil }
     let indent = String(repeating: " ", count: min(max(listLevel, 0), 4) * 2)
-    return indent + truncateText(text, fullContentTextCap)
+    return indent + truncateText(text, FULL_CONTENT_TEXT_CAP)
 }
 
 /// Punctuation that never takes a space before it when prose parts are rejoined.
-private let clingingPunctuation: Set<Character> = [".", ",", ";", ":", "!", "?", ")", "]", "}", "%", "\u{2019}"]
+private let CLINGING_PUNCTUATION: Set<Character> = [".", ",", ";", ":", "!", "?", ")", "]", "}", "%", "\u{2019}"]
 
 /// Renders a PROSE block as ONE line in document order, keeping inline link/button text IN
 /// PLACE with its `{aloha-id …}` trailer, and reporting every node id it consumed so the walker
@@ -1210,10 +1210,10 @@ private func proseLine(
     // ("… the community. It uses …", not "… the community . It …").
     var joined = ""
     for part in parts {
-        if !joined.isEmpty, !(part.first.map { clingingPunctuation.contains($0) } ?? false) { joined += " " }
+        if !joined.isEmpty, !(part.first.map { CLINGING_PUNCTUATION.contains($0) } ?? false) { joined += " " }
         joined += part
     }
-    return truncateText(joined, fullContentTextCap)
+    return truncateText(joined, FULL_CONTENT_TEXT_CAP)
 }
 
 func renderFullNode(
@@ -1225,14 +1225,14 @@ func renderFullNode(
 ) -> String {
     if node.nodeType == "TEXT_NODE" {
         if !node.positioning.isInViewport { return "" }
-        let text = truncateText(normalizeWhitespace(node.element.textContent ?? node.element.childText ?? ""), fullContentTextCap)
+        let text = truncateText(normalizeWhitespace(node.element.textContent ?? node.element.childText ?? ""), FULL_CONTENT_TEXT_CAP)
         return text.isEmpty ? "" : text
     }
     let tag = node.element.tagName.lowercased()
 
     // Interactive elements take priority: they always render with their actionable trailer so
     // navigation never degrades, even when they sit inside a heading / list item / cell.
-    if nodeIsKeptInteractive(node) && !structureTags.contains(tag) {
+    if nodeIsKeptInteractive(node) && !STRUCTURE_TAGS.contains(tag) {
         let line = emitInViewportElement(node, depth, nodesById, options)
         return line.isEmpty ? "" : line + occlusionMarker(node) + scrollMarker(node) + (node.sealedMarker ?? "")
     }
@@ -1254,11 +1254,11 @@ func renderFullNode(
     if tag == "tr" {
         return renderTableRow(node, nodesById)
     }
-    if structuralContainerTags.contains(tag) { return "" }
+    if STRUCTURAL_CONTAINER_TAGS.contains(tag) { return "" }
 
     // Structural landmarks (nav/main/header/…) keep a minimal line + trailer so their ids stay
     // clickable and occlusion/scroll keep keying off them.
-    if structureTags.contains(tag) && node.children.count > 0 {
+    if STRUCTURE_TAGS.contains(tag) && node.children.count > 0 {
         var c = "[\(tag)"
         if let role = node.element.attributes["role"], !role.isEmpty { c += " role=\"\(role)\"" }
         if let ariaLabel = node.element.attributes["aria-label"], !ariaLabel.isEmpty { c += " \"\(normalizeWhitespace(ariaLabel))\"" }
@@ -1276,7 +1276,7 @@ func renderFullNode(
         return c + occlusionMarker(node) + scrollMarker(node)
     }
 
-    if inlineTextTags.contains(tag) && node.positioning.isVisible {
+    if INLINE_TEXT_TAGS.contains(tag) && node.positioning.isVisible {
         let text = proseLine(node, nodesById, options, &consumed) ?? contentText(node)
         return text.isEmpty ? "" : text
     }

@@ -1295,7 +1295,7 @@ final class NetworkLogWriter {
         // The request body is where a login POSTs the password and an API POSTs the token.
         // The log keeps that a request HAD one, and how big, never what was in it.
         if let postData = record.postData {
-            members.append(("postData", .string("\(redactedValue) (\(postData.count) chars)")))
+            members.append(("postData", .string("\(REDACTED_VALUE) (\(postData.count) chars)")))
         }
         if let status = record.status { members.append(("status", .number(Double(status)))) }
         if let statusText = record.statusText { members.append(("statusText", .string(statusText))) }
@@ -1320,7 +1320,7 @@ final class NetworkLogWriter {
         "x-api-key", "x-auth-token", "x-csrf-token", "x-refresh-token", "x-session-token",
     ]
 
-    static let redactedValue = "***"
+    static let REDACTED_VALUE = "***"
 
     /// Header names whose value is a whole URL. Their value is not itself a credential —
     /// masking it outright would throw away the request shape a log gets opened for — but
@@ -1334,7 +1334,7 @@ final class NetworkLogWriter {
     /// Header names lowercased for the match, so `Set-Cookie` and `set-cookie` redact alike.
     static func redactHeaderValue(name: String, value: String) -> String {
         let lowered = name.lowercased()
-        if sensitiveHeaderNames.contains(lowered) { return redactedValue }
+        if sensitiveHeaderNames.contains(lowered) { return REDACTED_VALUE }
         if urlValuedHeaderNames.contains(lowered) { return redactSensitiveUrlParams(value) }
         return value
     }
