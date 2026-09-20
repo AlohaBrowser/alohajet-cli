@@ -24,10 +24,8 @@ enum ResolvePageTabOutcome {
 /// THE active-tab chain for the seven atomic page tools, which must never name
 /// different pages in one turn. Session store first, so an in-turn
 /// `manage_tabs use` outranks the foreground pin `pinForegroundTab` writes.
-func activeTabIdForPageTools(_ context: ToolExecutionContext, _ tabsWindow: TabsWindow) -> String? {
-    context.services?.session?.getActiveBrowserTabId()
-        ?? tabsWindow.tabs.activeTabId
-        ?? tabsWindow.tabs.orderedTabs.first?.id
+func activeTabIdForPageTools(_ session: ChatModeSession?, _ tabsWindow: TabsWindow) -> String? {
+    session?.getActiveBrowserTabId() ?? tabsWindow.tabs.activeTabId
 }
 
 /// Falls back to adopting a live page target on a miss. `nil` when nothing live carries the
@@ -60,7 +58,7 @@ func resolveActivePageTab(
     guard let tabsWindow = context.services?.tabsService?.window else {
         return .failure(RawToolResult(output: "\(toolName) failed: the tabs service is not available.", isError: true))
     }
-    guard let activeTabId = activeTabIdForPageTools(context, tabsWindow) else {
+    guard let activeTabId = activeTabIdForPageTools(context.services?.session, tabsWindow) else {
         return .failure(RawToolResult(
             output: "\(toolName) failed: no active browser tab. Take one first (manage_tabs action \"use\", or open one).",
             isError: true))

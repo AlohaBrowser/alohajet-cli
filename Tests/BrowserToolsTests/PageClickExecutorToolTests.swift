@@ -53,6 +53,16 @@ struct PageClickExecutorToolTests {
         #expect(result.output.contains("no active browser tab"))
     }
 
+    @Test func aTabNobodyTookIsNotDrivenImplicitly() async throws {
+        let tool = PageClickExecutorTool()
+        let usersTab = PageToolsStubTabHandle(id: "users-tab", url: "https://user.example/", openedByHuman: true)
+        let window = PageToolsStubTabsWindow(PageToolsStubTabsModel([usersTab]))
+        let services = NativeToolServices(tabsService: PageToolsStubTabsService(window))
+        let result = try await tool.execute(.object(["aloha_id": .string("btn-1")]), makePageToolContext(services: services))
+        #expect(result.isError == true)
+        #expect(result.output.contains("no active browser tab"))
+    }
+
     @Test func nonInteractiveTabIsRejected() async throws {
         let tool = PageClickExecutorTool()
         let stubTab = PageToolsStubTabHandle(id: "t1", url: "https://a.example")

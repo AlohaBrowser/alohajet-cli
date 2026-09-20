@@ -193,7 +193,9 @@ alohajet: app already running with a visible window — quit it, or drop --headl
 `alohajet mcp` speaks Model Context Protocol over stdio: newline-delimited JSON-RPC 2.0,
 protocol versions `2024-11-05`, `2025-03-26` and `2025-06-18`. Only protocol traffic goes
 to stdout; diagnostics go to stderr. No browser is launched until the first `tools/call`,
-so a host that only lists tools pays nothing.
+so a host that only lists tools pays nothing. That browser is the one the browser options
+name — by default the SAME shared Chromium `alohajet open` uses, kept until `alohajet
+quit`, so a host and a shell see one browser and one set of tabs between them.
 
 The block below goes wherever your host keeps `mcpServers` — for Claude Code that is
 `.mcp.json` beside the project, and `claude mcp list` then answers
@@ -212,7 +214,7 @@ not help it.
 }
 ```
 
-To drive the browser you already have open instead of a fresh headless one, add the
+To drive the browser you already have open instead of the shared one, add the
 connection flag — and read [SECURITY.md](SECURITY.md) first, because that config hands the
 agent every tab and every logged-in session in that browser:
 

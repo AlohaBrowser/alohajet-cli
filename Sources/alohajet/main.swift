@@ -105,7 +105,8 @@ let commandHelp: [String: String] = [
     "read": """
         alohajet read [--tab <id>]
           Print a tab's page as markdown with element refs. Without --tab: the tab
-          left in use by the last command, else the browser's first http(s) tab.
+          left in use by the last command, else one alohajet opened. A tab of
+          the user's own is read only when --tab names it.
         """,
     "tabs": """
         alohajet tabs
@@ -266,14 +267,21 @@ func emit(_ result: RawToolResult, json: Bool) {
 /// every later invocation attaches to `port`, and `quit` uses `profile`/`stderrLog` to
 /// leave nothing behind. Two things changed besides the writer: the path is not
 /// `~/.alohajet` (that directory belongs to the Aloha app, and a public tool must not
-/// write into another product's home), and `tab` carries the one piece of session state
-/// a one-command-per-process CLI otherwise cannot keep — which tab is in use.
+/// write into another product's home), and `lanes` carries the session state a
+/// one-command-per-process CLI otherwise cannot keep — which tab is in use, and which
+/// tabs alohajet itself opened — for each browser it talks to, against the
+/// `webSocketDebuggerUrl` it was recorded at, which every browser mints fresh per launch.
 struct SharedBrowser: Codable {
-    var port: Int
+    var port: Int?
     var profile: String?
     var stderrLog: String?
-    /// The tab the last command acted on, so the next one needs no `--tab`.
+    var lanes: [String: LaneState]?
+}
+
+struct LaneState: Codable, Equatable {
+    var endpoint: String?
     var tab: String?
+    var openedTabs: [String]?
 }
 
 /// `<tmp>/alohajet-<uid>/`: per-user (a shared `/tmp` must not hand one user's debug
@@ -282,9 +290,8 @@ let sharedStateDirectory = temporaryDirectory
     .appendingPathComponent("alohajet-\(getuid())", isDirectory: true).path
 let sharedStatePath = (sharedStateDirectory as NSString).appendingPathComponent("browser.json")
 
-/// The shared browser this invocation is using, once `connect` has resolved one. `nil`
-/// under `--launch` and `--cdp`, which own no state to carry.
-var sharedState: SharedBrowser?
+var laneKey: String?
+var lane = LaneState()
 
 func readSharedState() -> SharedBrowser? {
     guard let data = FileManager.default.contents(atPath: sharedStatePath) else { return nil }
@@ -300,8 +307,17 @@ func writeSharedState(_ state: SharedBrowser) {
         atPath: sharedStatePath, contents: data, attributes: [.posixPermissions: 0o600])
 }
 
-func clearSharedState() {
-    try? FileManager.default.removeItem(atPath: sharedStatePath)
+func updateSharedState(_ mutate: (inout SharedBrowser) -> Void) {
+    var state = readSharedState() ?? SharedBrowser()
+    mutate(&state)
+    writeSharedState(state)
+}
+
+func laneKeyFor(_ args: Args) -> String? {
+    if args.value("--browser") == "aloha" { return "aloha" }
+    if let endpoint = args.value("--cdp") { return "cdp:\(endpoint)" }
+    if args.has("--launch") { return nil }
+    return "shared"
 }
 
 /// The Chromium the launch lanes run: `ALOHAJET_BROWSER` when set, else a system Chrome,
@@ -332,6 +348,18 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
     // `alohajet: CLIError(message: "--port expects a number, got \"frotz\"", code: 2)` —
     // under exit code 3 (browser unreachable) rather than 2 (usage).
     let requestedPort = try args.int("--port")
+    let key = laneKeyFor(args)
+    let recorded = key.flatMap { readSharedState()?.lanes?[$0] } ?? LaneState()
+    let recordedOwnership = recorded.endpoint.map {
+        AgentOwnedTabs(endpoint: $0, ids: Set(recorded.openedTabs ?? []))
+    }
+
+    func adopt(_ session: BrowserToolSession) -> BrowserToolSession {
+        laneKey = key
+        lane = recorded.endpoint == session.webSocketEndpoint ? recorded : LaneState()
+        lane.endpoint = session.webSocketEndpoint
+        return session
+    }
 
     func launch() async throws -> BrowserToolSession {
         do {
@@ -351,10 +379,12 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
     func attach(_ endpoint: String) async throws -> BrowserToolSession {
         do {
             if endpoint.hasPrefix("ws://") || endpoint.hasPrefix("wss://") {
-                return try await BrowserToolSession.attach(webSocketURL: endpoint)
+                return try await BrowserToolSession.attach(
+                    webSocketURL: endpoint, agentOwnedTabs: recordedOwnership)
             }
             if let port = Int(endpoint) {
-                return try await BrowserToolSession.attach(port: port)
+                return try await BrowserToolSession.attach(
+                    port: port, agentOwnedTabs: recordedOwnership)
             }
             let parts = endpoint.split(separator: ":")
             guard parts.count == 2, let port = Int(parts[1]) else {
@@ -362,7 +392,8 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
                     message: "--cdp expects a ws:// url, a port, or host:port — got \"\(endpoint)\"",
                     code: exitUsage)
             }
-            return try await BrowserToolSession.attach(host: String(parts[0]), port: port)
+            return try await BrowserToolSession.attach(
+                host: String(parts[0]), port: port, agentOwnedTabs: recordedOwnership)
         } catch let error as BrowserToolSessionError {
             throw CLIError(message: error.description, code: exitUnreachable)
         }
@@ -381,7 +412,7 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
         }
         do {
             let url = try await AlohaBrowser().endpoint()
-            return try await attach(url.absoluteString)
+            return adopt(try await attach(url.absoluteString))
         } catch let error as AlohaBrowserError {
             throw CLIError(message: error.description, code: exitUnreachable)
         }
@@ -391,10 +422,10 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
     }
 
     if let endpoint = args.value("--cdp") {
-        return try await attach(endpoint)
+        return adopt(try await attach(endpoint))
     }
     if args.has("--launch") {
-        return try await launch()
+        return adopt(try await launch())
     }
 
     // The shared lane. `ownsBrowser: true` is the whole difference between this and
@@ -403,28 +434,29 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
     // ponytail: last writer wins. Two commands starting from cold at the same instant
     // both launch, and one browser ends up unrecorded — the usual pid-file race. Take a
     // lock on the state file if that ever bites; a human typing commands cannot hit it.
-    if let recorded = readSharedState() {
-        if let session = try? await BrowserToolSession.attach(port: recorded.port, ownsBrowser: true) {
-            sharedState = recorded
-            return session
+    if let browser = readSharedState(), let port = browser.port {
+        if let session = try? await BrowserToolSession.attach(
+            port: port, ownsBrowser: true, agentOwnedTabs: recordedOwnership) {
+            return adopt(session)
         }
         // The recorded browser is not answering, so it is gone — but a browser killed by
         // a signal never got to remove its throwaway profile, and the record about to be
         // overwritten is the last thing that knows where it is. Remove it now or nothing
         // ever will: that is how a machine ends up with seven abandoned profile dirs.
-        if let profile = recorded.profile { try? FileManager.default.removeItem(atPath: profile) }
-        if let stderrLog = recorded.stderrLog { try? FileManager.default.removeItem(atPath: stderrLog) }
+        if let profile = browser.profile { try? FileManager.default.removeItem(atPath: profile) }
+        if let stderrLog = browser.stderrLog { try? FileManager.default.removeItem(atPath: stderrLog) }
     }
     let session = try await launch()
-    guard let browser = session.launchedBrowser else { return session }
-    let state = SharedBrowser(
-        port: browser.port, profile: browser.userDataDir, stderrLog: browser.stderrLog, tab: nil)
-    writeSharedState(state)
-    sharedState = state
+    guard let launched = session.launchedBrowser else { return adopt(session) }
+    updateSharedState {
+        $0.port = launched.port
+        $0.profile = launched.userDataDir
+        $0.stderrLog = launched.stderrLog
+    }
     // Hand the browser over to the file we just wrote: `shutdown()` now closes only our
     // socket, and the next invocation attaches to the same Chromium.
     session.releaseBrowser()
-    return session
+    return adopt(session)
 }
 
 /// `alohajet quit` — the only thing that ends the shared browser.
@@ -433,12 +465,12 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
 /// and can be reused, and a CLI must never send a signal to a process it cannot prove is
 /// the browser it launched. A CDP connection to the recorded port IS that proof.
 func quitSharedBrowser() async -> Int32 {
-    guard let state = readSharedState() else {
+    guard let state = readSharedState(), let port = state.port else {
         writeToStandardOutput("No shared browser is running." + "\n")
         return exitOK
     }
     var closed = false
-    if let session = try? await BrowserToolSession.attach(port: state.port) {
+    if let session = try? await BrowserToolSession.attach(port: port) {
         _ = try? await session.client.send(method: "Browser.close", params: [:])
         await session.shutdown()
         closed = true
@@ -448,23 +480,27 @@ func quitSharedBrowser() async -> Int32 {
     }
     if let profile = state.profile { try? FileManager.default.removeItem(atPath: profile) }
     if let stderrLog = state.stderrLog { try? FileManager.default.removeItem(atPath: stderrLog) }
-    clearSharedState()
+    updateSharedState {
+        $0.port = nil
+        $0.profile = nil
+        $0.stderrLog = nil
+        $0.lanes?["shared"] = nil
+    }
     writeToStandardOutput((closed
-        ? "Closed the shared browser on port \(state.port)."
-        : "No browser was listening on port \(state.port); cleared the stale record.") + "\n")
+        ? "Closed the shared browser on port \(port)."
+        : "No browser was listening on port \(port); cleared the stale record.") + "\n")
     return exitOK
 }
 
 // MARK: - Commands
 
 /// The tab a page command should act on when `--tab` was not given: the tab in use, then
-/// the one the last invocation left in use, then the browser's first http(s) tab.
+/// the one the last invocation left in use, then the newest tab alohajet itself opened.
 ///
-/// `nil` when the browser has no web tab at all. It used to answer the fresh
-/// `about:blank` in that case, and the page tools then rejected it as `URL not allowed:
-/// malformed or oversized URL` — a message that is wrong twice over (the URL is neither
-/// malformed nor oversized) about a tab the user never asked for. There is no tab to
-/// read; say so.
+/// `nil` when nothing here belongs to alohajet — and NEVER the browser's first http(s)
+/// tab, which on `--cdp` and `--browser aloha` is the page the user is reading. A `read`
+/// that landed there was a leak and a `goto`/`type` that landed there drove their tab;
+/// the caller is told to open one or name one with `--tab` instead.
 ///
 /// ponytail: scrapes the `ID:`/`URL:` lines out of `manage_tabs list`'s prose, because
 /// the tab list is not exposed any other way. Swap it for a structured accessor if one
@@ -475,26 +511,23 @@ func resolveTab(_ session: BrowserToolSession, _ explicit: String?) async -> Str
     let listing = await session.run("manage_tabs", arguments: ["action": "list"])
     guard listing.isError != true else { return nil }
 
-    var tabs: [(id: String, url: String, isActive: Bool)] = []
-    var pendingActive = false
+    var tabs: [(id: String, url: String)] = []
     for line in listing.output.split(separator: "\n", omittingEmptySubsequences: false) {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("ID: ") {
-            tabs.append((String(trimmed.dropFirst(4)), "", pendingActive))
+            tabs.append((String(trimmed.dropFirst(4)), ""))
         } else if trimmed.hasPrefix("URL: "), !tabs.isEmpty {
             tabs[tabs.count - 1].url = String(trimmed.dropFirst(5))
-        } else if !trimmed.isEmpty {
-            pendingActive = trimmed.contains("\u{25CF}")
         }
     }
     let web = tabs.filter { $0.url.hasPrefix("http://") || $0.url.hasPrefix("https://") }
     guard !web.isEmpty else { return nil }
-    // The remembered tab is checked against the live list, not trusted: it may have been
-    // closed since, and a stale id would fail every later command with "not found".
-    if let remembered = sharedState?.tab, web.contains(where: { $0.id == remembered }) {
+    // The remembered ids are checked against the live list, not trusted: a tab may have
+    // been closed since, and a stale id would fail every later command with "not found".
+    if let remembered = lane.tab, web.contains(where: { $0.id == remembered }) {
         return remembered
     }
-    return (web.first { $0.isActive } ?? web.first)?.id
+    return (lane.openedTabs ?? []).last { id in web.contains { $0.id == id } }
 }
 
 /// The tab id a `manage_tabs` result named, off the metadata channel the tool already
@@ -539,6 +572,7 @@ func toolCall(
         return ("manage_tabs", ["action": "read", "tab_id": tabId])
 
     case "tabs":
+        session.setActiveBrowserTab(lane.tab)
         return ("manage_tabs", ["action": "list"])
 
     case "close":
@@ -611,17 +645,29 @@ func toolCall(
 
 // MARK: - Entry point
 
-/// Carry "the tab in use" to the next invocation. Nothing else can: each command is its
-/// own process, so the session pointer the page tools read is born empty every time and
-/// `read` after `open` used to land on whichever tab the browser model happened to list
-/// first. Only the shared lane has anywhere to keep it.
+/// Carry "the tab in use", and which tabs are ours to close, to the next invocation.
+/// Nothing else can: each command is its own process, so the session pointer the page
+/// tools read is born empty every time and every tab the browser reports looks like the
+/// user's. A browser alohajet did not launch has no other way to tell them apart.
 func rememberTab(_ command: String, _ args: Args, _ result: RawToolResult, ok: Bool) {
-    guard var state = sharedState, ok else { return }
-    let next = command == "close" ? nil : (args.value("--tab") ?? resultTabId(result) ?? state.tab)
-    guard next != state.tab else { return }
-    state.tab = next
-    sharedState = state
-    writeSharedState(state)
+    guard let key = laneKey, ok else { return }
+    var next = lane
+    switch command {
+    case "open":
+        if let opened = resultTabId(result) {
+            next.openedTabs = Array(((next.openedTabs ?? []).filter { $0 != opened } + [opened]).suffix(64))
+            next.tab = opened
+        }
+    case "close":
+        let closed = resultTabId(result) ?? args.positional.dropFirst().first
+        next.openedTabs = (next.openedTabs ?? []).filter { $0 != closed }
+        if next.tab == closed { next.tab = nil }
+    default:
+        next.tab = args.value("--tab") ?? resultTabId(result) ?? next.tab
+    }
+    guard next != lane else { return }
+    lane = next
+    updateSharedState { $0.lanes = ($0.lanes ?? [:]).merging([key: next]) { _, latest in latest } }
 }
 
 func report(_ error: CLIError, json: Bool) {
@@ -689,7 +735,7 @@ func main() async -> Int32 {
         if args.has("--endpoint") {
             return await MCPRelay.main(args)
         }
-        return await MCPServer.main(Array(args.positional.dropFirst()))
+        return await MCPServer.main(args)
     }
 
     // `quit` connects to the recorded browser, not to a new one: it is the command that

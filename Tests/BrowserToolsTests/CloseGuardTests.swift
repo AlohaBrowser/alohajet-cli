@@ -105,6 +105,20 @@ import ToolABI
     #expect(model.closed == ["agents-tab"])
 }
 
+@Test @MainActor func listMarksTheTabThePageToolsAddress() {
+    let (_, window, ctx) = fixture()
+    ctx.session.setActiveBrowserTab("agents-tab")
+    let output = manageTabsList(window, ctx.session).output ?? ""
+    #expect(output.contains("● agents-tab"))
+    #expect(output.components(separatedBy: "●").count == 2)
+}
+
+@Test @MainActor func listMarksNothingWhenNoTabIsInUse() {
+    let (_, window, ctx) = fixture()
+    let output = manageTabsList(window, ctx.session).output ?? ""
+    #expect(!output.contains("●"))
+}
+
 @Test @MainActor func listNamesWhichTabsAreTheUsers() {
     let (_, window, _) = fixture()
     let output = manageTabsList(window).output ?? ""

@@ -47,7 +47,7 @@ import ToolABI
             if let live = tabsWindow.tabs as? LiveTabMetadataRefreshing {
                 await live.refreshTabMetadata()
             }
-            result = manageTabsList(tabsWindow)
+            result = manageTabsList(tabsWindow, session)
         case "read":
             guard let tabId else {
                 return RawToolResult(output: "tab_id is required for the read action", isError: true)
@@ -210,9 +210,9 @@ func tabIsInteractiveWeb(_ tab: TabHandle) -> Bool {
     isInteractiveWebTab(InteractiveTabDescriptor(tabType: tab.tabType, hasAgentDom: tab.agentDOM != nil))
 }
 
-func manageTabsList(_ tabsWindow: TabsWindow) -> TabToolResult {
+func manageTabsList(_ tabsWindow: TabsWindow, _ session: ChatModeSession? = nil) -> TabToolResult {
     let tabsModel = tabsWindow.tabs
-    let activeTabId = tabsModel.activeTabId
+    let activeTabId = activeTabIdForPageTools(session, tabsWindow)
     let summaries = tabsModel.orderedTabs.map { tab -> TabSummary in
         // Redact non-http(s) URLs so `list` does not leak a local file path (the
         // page tools refuse to act on such tabs; the path itself is the secret).

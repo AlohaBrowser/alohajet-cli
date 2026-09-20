@@ -232,6 +232,27 @@ struct MCPProtocolTests {
         #expect(text.contains("two different browsers"), "\(text)")
     }
 
+    @Test func mcpLaunchesTheBrowserTheEnvironmentNames() throws {
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alohajet-mcp-browser-env-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+        let marker = sandbox.appendingPathComponent("argv")
+        let wrapper = sandbox.appendingPathComponent("chrome")
+        try "#!/bin/sh\necho \"$@\" > '\(marker.path)'\nexit 0\n"
+            .write(to: wrapper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
+
+        let run = try runCLI(
+            ["mcp"],
+            stdin: #"{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"manage_tabs","arguments":{"action":"list"}}}"# + "\n",
+            environment: ["ALOHAJET_BROWSER": wrapper.path],
+            timeout: 90)
+        #expect(FileManager.default.fileExists(atPath: marker.path),
+                "mcp launched a browser other than ALOHAJET_BROWSER: \(run.combined)")
+        #expect(run.stdout.contains("Could not reach a browser"), "\(run.combined)")
+    }
+
     /// Blank lines are ignored, not answered — a host that flushes an extra newline must
     /// not receive a parse error for it.
     @Test func blankLinesAreIgnored() throws {

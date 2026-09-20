@@ -25,11 +25,9 @@ enum MCPServer {
 
     /// Serve MCP over stdin/stdout until EOF. Returns the process exit code.
     ///
-    /// `arguments` is argv after the `mcp` subcommand; connection flags may also precede
-    /// it (`alohajet --cdp 9222 mcp`), so the full argv is what gets scanned.
-    static func main(_ arguments: [String]) async -> Int32 {
-        let connection = MCPConnection(arguments + Array(CommandLine.arguments.dropFirst()))
-
+    /// `args` is the CLI's own parse of argv, and the browser comes from the CLI's own
+    /// `connect`: the browser options mean here exactly what they mean everywhere else.
+    static func main(_ args: Args) async -> Int32 {
         // The browser is built on the FIRST tools/call, not at startup: a host that
         // launches this server at boot and only ever lists tools must not pay for a
         // Chromium, and a launch failure is worth reporting to the model in a tool result
@@ -96,14 +94,15 @@ enum MCPServer {
                 }
                 if session == nil, sessionFailure == nil {
                     do {
-                        session = try await connection.open()
+                        session = try await connect(args)
                         // A host that kills the server instead of closing stdin must not
                         // leave the browser behind. No-op for an attached one.
                         session?.installSignalReaper()
                     } catch {
                         // Latched: retrying a connection that already failed once, on
                         // every tool call, only multiplies the timeout.
-                        let detail = (error as? BrowserToolSessionError)?.description ?? "\(error)"
+                        let detail = (error as? CLIError)?.message
+                            ?? (error as? BrowserToolSessionError)?.description ?? "\(error)"
                         sessionFailure = "Could not reach a browser: \(detail)"
                         log(sessionFailure!)
                     }
@@ -249,88 +248,5 @@ enum MCPServer {
             return .object(Dictionary(members.map { ($0.0, workflowValue($0.1)) },
                                       uniquingKeysWith: { _, last in last }))
         }
-    }
-}
-
-// MARK: - Connection
-
-/// Which browser this server drives, from the CLI's own connection flags: `--cdp
-/// <ws-url|port|host:port>` attaches to a running one, `--browser aloha` attaches to the
-/// Aloha browser's own CDP listener, and anything else launches a throwaway Chromium
-/// (`--no-headless` to watch it, `--port` to fix the debug port).
-///
-/// Parsed here rather than shared with `main.swift` because the two front ends are
-/// written by different hands and this file must not break when the CLI's parser moves.
-/// What is NOT duplicated is the aloha lane: both front ends resolve it through the one
-/// `AlohaBrowser`, and what comes back is an endpoint string that joins the `--cdp` path
-/// below. An MCP host configured `--browser aloha` that silently got a throwaway headless
-/// Chromium instead is worse than one that fails outright — the model then drives a
-/// browser nobody is looking at and every answer is about the wrong tabs.
-struct MCPConnection {
-    private var endpoint: String?
-    private var browser: String?
-    private var headless = true
-    private var port: Int?
-
-    init(_ argv: [String]) {
-        var index = 0
-        while index < argv.count {
-            let token = argv[index]
-            // `--flag=value` and `--flag value` both work, matching the CLI.
-            let (name, inlineValue): (String, String?) = {
-                guard let equals = token.firstIndex(of: "=") else { return (token, nil) }
-                return (String(token[token.startIndex..<equals]), String(token[token.index(after: equals)...]))
-            }()
-            func take() -> String? {
-                if let inlineValue { return inlineValue }
-                index += 1
-                return index < argv.count ? argv[index] : nil
-            }
-            switch name {
-            case "--cdp": endpoint = take()
-            case "--browser": browser = take()
-            case "--port": port = take().flatMap(Int.init)
-            case "--no-headless", "--headed": headless = false
-            default: break
-            }
-            index += 1
-        }
-    }
-
-    func open() async throws -> BrowserToolSession {
-        var endpoint = self.endpoint
-        switch browser {
-        case nil, "chromium":
-            break
-        case "aloha":
-            guard endpoint == nil else {
-                throw BrowserToolSessionError.connectFailed(
-                    "--browser aloha and --cdp name two different browsers; pass one")
-            }
-            do {
-                endpoint = try await AlohaBrowser().endpoint().absoluteString
-            } catch let error as AlohaBrowserError {
-                throw BrowserToolSessionError.connectFailed(error.description)
-            }
-        case let other?:
-            throw BrowserToolSessionError.connectFailed(
-                "--browser expects chromium or aloha, got \"\(other)\"")
-        }
-
-        guard let endpoint else {
-            return try await BrowserToolSession.launch(headless: headless, port: port)
-        }
-        if endpoint.hasPrefix("ws://") || endpoint.hasPrefix("wss://") {
-            return try await BrowserToolSession.attach(webSocketURL: endpoint)
-        }
-        if let port = Int(endpoint) {
-            return try await BrowserToolSession.attach(port: port)
-        }
-        let parts = endpoint.split(separator: ":")
-        guard parts.count == 2, let port = Int(parts[1]) else {
-            throw BrowserToolSessionError.connectFailed(
-                "--cdp expects a ws:// url, a port, or host:port — got \"\(endpoint)\"")
-        }
-        return try await BrowserToolSession.attach(host: String(parts[0]), port: port)
     }
 }

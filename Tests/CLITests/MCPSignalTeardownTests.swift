@@ -5,7 +5,10 @@ import Glibc
 import Dispatch
 import Testing
 
-// A signalled `alohajet mcp` must DIE. Not "kill the browser and keep breathing" — die.
+// A signalled `alohajet mcp --launch` must DIE. Not "kill the browser and keep
+// breathing" — die. `--launch` is the lane whose browser the server OWNS: the default
+// lane joins the shared browser, which outlives every command on purpose and is ended
+// by `alohajet quit` alone, so there is nothing there for a signal to reap.
 //
 // The acceptance test this replaces checked the browser and the profile were gone and
 // went green while the server itself hung forever: `browser.terminate()` ran, and the
@@ -58,7 +61,7 @@ struct MCPSignalTeardownTests {
         let stdin = Pipe(), stdout = Pipe()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = ["mcp"]
+        process.arguments = ["--launch", "mcp"]
         var environment = ProcessInfo.processInfo.environment
         // The launched browser's throwaway profile lands here, which is how the checks
         // below can name it. Only honoured because the CLI reads `$TMPDIR` — see

@@ -643,6 +643,8 @@ public final class CDPTabsModel: TabsModel {
     /// there is no user to protect and the seeded `about:blank` is our own.
     private let seededTabsAreHuman: Bool
 
+    private let agentOwnedTabIds: Set<String>
+
     /// Handed to every handle this model builds, so both doors a navigation leaves by are
     /// metered by the same gate. See ``NavigationPacer``.
     private let navigationPacer: NavigationPacer?
@@ -657,6 +659,7 @@ public final class CDPTabsModel: TabsModel {
         agentControllerId: String? = nil,
         sessionId: String? = nil,
         seededTabsAreHuman: Bool = true,
+        agentOwnedTabIds: Set<String> = [],
         navigationPacer: NavigationPacer? = nil,
         onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)? = nil
     ) {
@@ -664,8 +667,13 @@ public final class CDPTabsModel: TabsModel {
         self.agentControllerId = agentControllerId
         self.sessionId = sessionId
         self.seededTabsAreHuman = seededTabsAreHuman
+        self.agentOwnedTabIds = agentOwnedTabIds
         self.navigationPacer = navigationPacer
         self.onTabCreated = onTabCreated
+    }
+
+    private func seededOwnership(_ targetId: String) -> Bool {
+        seededTabsAreHuman && !agentOwnedTabIds.contains(targetId)
     }
 
     public var activeTabId: String? {
@@ -698,7 +706,7 @@ public final class CDPTabsModel: TabsModel {
             tabType: "website",
             title: nil,
             faviconUrl: nil,
-            openedByHuman: true,
+            openedByHuman: seededOwnership(id),
             pacer: navigationPacer)
         register(handle)
         return handle
@@ -819,7 +827,7 @@ public final class CDPTabsModel: TabsModel {
                 tabType: "website",
                 title: title,
                     faviconUrl: nil,
-                openedByHuman: seededTabsAreHuman,
+                openedByHuman: seededOwnership(targetId),
                 pacer: navigationPacer)
             register(handle)
         }
@@ -936,7 +944,7 @@ extension CDPTabsModel: LivePageTargetAdopting {
             tabType: "website",
             title: title,
             faviconUrl: nil,
-            openedByHuman: true,
+            openedByHuman: seededOwnership(id),
             pacer: navigationPacer)
         register(handle)
         return handle
@@ -1218,6 +1226,7 @@ public func makeCDPBrowserTabsService(
     agentControllerId: String? = nil,
     sessionId: String? = nil,
     seededTabsAreHuman: Bool = true,
+    agentOwnedTabIds: Set<String> = [],
     navigationPacer: NavigationPacer? = nil,
     onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)? = nil
 ) async -> TabsService {
@@ -1226,6 +1235,7 @@ public func makeCDPBrowserTabsService(
         agentControllerId: agentControllerId,
         sessionId: sessionId,
         seededTabsAreHuman: seededTabsAreHuman,
+        agentOwnedTabIds: agentOwnedTabIds,
         navigationPacer: navigationPacer,
         onTabCreated: onTabCreated)
     if seed { await model.seedFromBrowser() }

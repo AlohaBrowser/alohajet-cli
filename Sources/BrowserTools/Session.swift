@@ -59,6 +59,20 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
     }
 }
 
+public struct AgentOwnedTabs: Sendable {
+    public let endpoint: String
+    public let ids: Set<String>
+
+    public init(endpoint: String, ids: Set<String>) {
+        self.endpoint = endpoint
+        self.ids = ids
+    }
+
+    public func ids(matching endpoint: String) -> Set<String> {
+        self.endpoint == endpoint ? ids : []
+    }
+}
+
 /// A live browser plus the eight tools wired to drive it.
 ///
 /// Build one with ``launch(executablePath:headless:port:userDataDir:profileDirectory:sessionId:networkLogDirectory:webExtractionOptions:)``
@@ -73,6 +87,7 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
     public let client: CDPClient
     public let sessionId: String
     public let webExtractionOptions: AgentWebExtractionOptions
+    public let webSocketEndpoint: String
 
     /// The launched browser, or `nil` when this session attached to one it does not own.
     private let browser: ChromeLauncher.Handle?
@@ -97,7 +112,8 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         tabsService: TabsService,
         sessionId: String,
         networkDir: String?,
-        webExtractionOptions: AgentWebExtractionOptions
+        webExtractionOptions: AgentWebExtractionOptions,
+        webSocketEndpoint: String
     ) {
         self.client = client
         self.browser = browser
@@ -105,6 +121,7 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         self.sessionId = sessionId
         self.networkDir = networkDir
         self.webExtractionOptions = webExtractionOptions
+        self.webSocketEndpoint = webSocketEndpoint
         self.tools = Dictionary(uniqueKeysWithValues: getNativeAgentTools().map { ($0.name, $0) })
         if let networkDir {
             try? FileManager.default.createDirectory(atPath: networkDir, withIntermediateDirectories: true)
@@ -143,8 +160,10 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         }
 
         let client: CDPClient
+        let endpoint: String
         do {
             let wsURL = try await launcher.discoverWebSocketURL(port: debugPort, timeout: 30, handle: handle)
+            endpoint = wsURL.absoluteString
             client = CDPClient(webSocketURL: wsURL)
             try await client.connect()
         } catch {
@@ -156,7 +175,7 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         return await make(
             client: client, browser: handle, sessionId: sessionId,
             networkLogDirectory: networkLogDirectory, webExtractionOptions: webExtractionOptions,
-            ownsBrowser: true)
+            ownsBrowser: true, endpoint: endpoint, agentOwnedTabs: nil)
     }
 
     /// Attach to a browser this process did not launch, by its `webSocketDebuggerUrl`.
@@ -173,7 +192,8 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         sessionId: String = "alohajet",
         networkLogDirectory: String? = nil,
         webExtractionOptions: AgentWebExtractionOptions = .enriched,
-        ownsBrowser: Bool = false
+        ownsBrowser: Bool = false,
+        agentOwnedTabs: AgentOwnedTabs? = nil
     ) async throws -> BrowserToolSession {
         let client: CDPClient
         do {
@@ -195,7 +215,7 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         return await make(
             client: client, browser: nil, sessionId: sessionId,
             networkLogDirectory: networkLogDirectory, webExtractionOptions: webExtractionOptions,
-            ownsBrowser: ownsBrowser)
+            ownsBrowser: ownsBrowser, endpoint: webSocketURL, agentOwnedTabs: agentOwnedTabs)
     }
 
     /// Attach to a browser already serving a debug port, discovering its websocket URL
@@ -206,7 +226,8 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         sessionId: String = "alohajet",
         networkLogDirectory: String? = nil,
         webExtractionOptions: AgentWebExtractionOptions = .enriched,
-        ownsBrowser: Bool = false
+        ownsBrowser: Bool = false,
+        agentOwnedTabs: AgentOwnedTabs? = nil
     ) async throws -> BrowserToolSession {
         let wsURL: URL
         do {
@@ -217,7 +238,7 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         return try await attach(
             webSocketURL: wsURL.absoluteString, sessionId: sessionId,
             networkLogDirectory: networkLogDirectory, webExtractionOptions: webExtractionOptions,
-            ownsBrowser: ownsBrowser)
+            ownsBrowser: ownsBrowser, agentOwnedTabs: agentOwnedTabs)
     }
 
     private static func make(
@@ -226,7 +247,9 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
         sessionId: String,
         networkLogDirectory: String?,
         webExtractionOptions: AgentWebExtractionOptions,
-        ownsBrowser: Bool
+        ownsBrowser: Bool,
+        endpoint: String,
+        agentOwnedTabs: AgentOwnedTabs?
     ) async -> BrowserToolSession {
         // Seeded from the browser's live page targets, so an attached session can address
         // the tabs that were already open and a launched one inherits its `about:blank`.
@@ -237,12 +260,13 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
             client: client,
             agentControllerId: sessionId,
             sessionId: sessionId,
-            seededTabsAreHuman: !ownsBrowser)
+            seededTabsAreHuman: !ownsBrowser,
+            agentOwnedTabIds: agentOwnedTabs?.ids(matching: endpoint) ?? [])
         let networkDir = networkLogDirectory ?? environmentNetworkLogDirectory(sessionId: sessionId)
         return BrowserToolSession(
             client: client, browser: browser, tabsService: tabsService,
             sessionId: sessionId, networkDir: networkDir,
-            webExtractionOptions: webExtractionOptions)
+            webExtractionOptions: webExtractionOptions, webSocketEndpoint: endpoint)
     }
 
     public var toolNames: [String] { nativeAgentToolNames }
