@@ -33,6 +33,39 @@ private let fixtureHTML = """
 </body></html>
 """
 
+
+private let uploadFixtureHTML = """
+<!doctype html>
+<html><head><title>Upload Fixture</title></head>
+<body>
+  <h1>Upload Fixture</h1>
+  <p id="log">no-change-yet</p>
+  <input type="file" id="file1" aria-label="alpha upload">
+  <div id="zone" class="dropzone">Drop files here to upload</div>
+  <input type="file" id="file2" aria-label="beta upload">
+  <div id="wrap" class="dropzone">Choose a file to upload<input type="file" id="file3" style="display:none"></div>
+  <script>
+    window.__ev = [];
+    for (const el of document.querySelectorAll('input[type=file]')) {
+      el.addEventListener('change', () => {
+        window.__ev.push(el.id + '!' + Array.from(el.files).map(f => f.name + ':' + f.size).join('+'));
+        document.getElementById('log').textContent = window.__ev.join(' | ');
+      });
+    }
+  </script>
+</body></html>
+"""
+
+private let editableFixtureHTML = """
+<!doctype html>
+<html><head><title>Editable Fixture</title></head>
+<body>
+  <h1>Editable Fixture</h1>
+  <div contenteditable="true">plain editable</div>
+  <div contenteditable>bare editable <b>nested bolded</b></div>
+</body></html>
+"""
+
 @Suite("end to end, real browser", .serialized, .enabled(if: browserIsAvailable || browserIsRequired))
 struct RealBrowserE2ETests {
 
@@ -124,6 +157,132 @@ struct RealBrowserE2ETests {
         let after = await session.run("manage_tabs", arguments: ["action": "list"])
         #expect(!after.output.contains(secret.path))
         #expect(!after.output.contains("SECRET-CANARY"))
+    }
+
+
+    @Test func uploadRefusesAStaleIdAndAnElementThatHoldsNoFileInput() async throws {
+        try #require(browserIsAvailable)
+
+        let server = LocalPageServer(html: uploadFixtureHTML)
+        try server.start()
+        defer { server.stop() }
+        let payload = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alohajet-e2e-upload-\(UUID().uuidString).txt")
+        try Data("hello!".utf8).write(to: payload)
+        defer { try? FileManager.default.removeItem(at: payload) }
+
+        let session = try await BrowserToolSession.launch(headless: true, port: nil)
+        defer { Task { await session.shutdown() } }
+
+        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+        #expect(opened.isError != true, "open failed: \(opened.output)")
+        let tabId = try #require(tabIdentifier(opened))
+
+        let stale = await session.run("page_upload", arguments: ["aloha_id": "zzzz999", "paths": [payload.path]])
+        #expect(stale.isError == true, "a stale id was accepted: \(stale.output)")
+        #expect(stale.output.contains("zzzz999"))
+        #expect(stale.output.lowercased().contains("read"))
+
+        let zoneId = try #require(alohaId(forLabel: "Drop files here", in: opened.output),
+                                  "the dropzone carried no aloha-id:\n\(opened.output)")
+        let onZone = await session.run("page_upload", arguments: ["aloha_id": zoneId, "paths": [payload.path]])
+        #expect(onZone.isError == true, "an element holding no file input was accepted: \(onZone.output)")
+        #expect(onZone.output.contains(zoneId))
+
+        let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+        #expect(after.output.contains("no-change-yet"), "a refused upload still reached a file input:\n\(after.output)")
+    }
+
+    @Test func uploadAttachesToTheNamedInputAndFiresOneChange() async throws {
+        try #require(browserIsAvailable)
+
+        let server = LocalPageServer(html: uploadFixtureHTML)
+        try server.start()
+        defer { server.stop() }
+        let payload = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alohajet-e2e-upload-\(UUID().uuidString).txt")
+        try Data("hello!".utf8).write(to: payload)
+        defer { try? FileManager.default.removeItem(at: payload) }
+
+        let session = try await BrowserToolSession.launch(headless: true, port: nil)
+        defer { Task { await session.shutdown() } }
+
+        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+        #expect(opened.isError != true, "open failed: \(opened.output)")
+        let tabId = try #require(tabIdentifier(opened))
+        let betaId = try #require(alohaId(forLabel: "beta upload", in: opened.output),
+                                  "the second file input carried no aloha-id:\n\(opened.output)")
+
+        let uploaded = await session.run("page_upload", arguments: ["aloha_id": betaId, "paths": [payload.path]])
+        #expect(uploaded.isError != true, "upload failed: \(uploaded.output)")
+        #expect(uploaded.output.contains(betaId))
+
+        let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+        let log = try #require(after.output.split(separator: "\n").first { $0.contains("file1!") || $0.contains("file2!") }
+            .map(String.init), "no change event reached the page:\n\(after.output)")
+        #expect(log.contains("file2!\(payload.lastPathComponent):6"), "the file did not land on the named input: \(log)")
+        #expect(!log.contains("|"), "one upload produced more than one change event: \(log)")
+    }
+
+    @Test func uploadOnAWrapperLandsOnItsFileInputAndSaysSo() async throws {
+        try #require(browserIsAvailable)
+
+        let server = LocalPageServer(html: uploadFixtureHTML)
+        try server.start()
+        defer { server.stop() }
+        let payload = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alohajet-e2e-upload-\(UUID().uuidString).txt")
+        try Data("hello!".utf8).write(to: payload)
+        defer { try? FileManager.default.removeItem(at: payload) }
+
+        let session = try await BrowserToolSession.launch(headless: true, port: nil)
+        defer { Task { await session.shutdown() } }
+
+        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+        #expect(opened.isError != true, "open failed: \(opened.output)")
+        let tabId = try #require(tabIdentifier(opened))
+        let wrapId = try #require(alohaId(forLabel: "Choose a file", in: opened.output),
+                                  "the wrapper carried no aloha-id:\n\(opened.output)")
+
+        let uploaded = await session.run("page_upload", arguments: ["aloha_id": wrapId, "paths": [payload.path]])
+        #expect(uploaded.isError != true, "upload failed: \(uploaded.output)")
+        #expect(uploaded.output.contains("the file input") && uploaded.output.contains("inside element \"\(wrapId)\""),
+                "the receipt did not name the input the file landed on: \(uploaded.output)")
+
+        let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+        let log = try #require(after.output.split(separator: "\n").first { $0.contains("file3!") }.map(String.init),
+                               "the file did not land on the wrapper's own input:\n\(after.output)")
+        #expect(log.contains("file3!\(payload.lastPathComponent):6"), "the file did not land on the wrapper's input: \(log)")
+        #expect(!log.contains("|"), "one upload produced more than one change event: \(log)")
+    }
+
+    @Test func aContentEditableHostCarriesARefAndCanBeTypedInto() async throws {
+        try #require(browserIsAvailable)
+
+        let server = LocalPageServer(html: editableFixtureHTML)
+        try server.start()
+        defer { server.stop() }
+
+        let session = try await BrowserToolSession.launch(headless: true, port: nil)
+        defer { Task { await session.shutdown() } }
+
+        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+        #expect(opened.isError != true, "open failed: \(opened.output)")
+        let tabId = try #require(tabIdentifier(opened))
+
+        #expect(alohaId(forLabel: "plain editable", in: opened.output) != nil,
+                "a contenteditable=\"true\" host carried no aloha-id:\n\(opened.output)")
+        let bareId = try #require(alohaId(forLabel: "bare editable", in: opened.output),
+                                  "a bare contenteditable host carried no aloha-id:\n\(opened.output)")
+        let nestedId = alohaId(forLabel: "nested bolded", in: opened.output)
+        #expect(nestedId == nil || nestedId == bareId,
+                "an element INSIDE an editable host was given its own aloha-id:\n\(opened.output)")
+
+        let typed = await session.run("page_type", arguments: ["aloha_id": bareId, "text": "TYPED-OK"])
+        #expect(typed.isError != true, "page_type into a contenteditable host failed: \(typed.output)")
+
+        let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+        #expect(after.output.contains("TYPED-OK"), "the text did not land:\n\(after.output)")
     }
 
     // MARK: - Reading the tool's own output

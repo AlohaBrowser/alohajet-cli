@@ -356,6 +356,12 @@ final class MockCDP {
 
         case "Runtime.evaluate":
             let expression = params["expression"]?.stringValue ?? ""
+            if expression == "document.readyState" {
+                return .object([("result", .object([
+                    ("type", .string("string")),
+                    ("value", .string("complete"))
+                ]))])
+            }
             // The wake-path readyState probe expects an object back; report a
             // settled page so a real wake completes without polling its budget.
             if expression.contains("document.readyState") {

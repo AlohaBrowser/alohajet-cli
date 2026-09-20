@@ -48,8 +48,10 @@ import ToolABI
             // The BASENAMES, not the paths given: this is a receipt of what the page now
             // holds, and `File.name` is the only part of a path the page ever sees.
             let attached = paths.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
+            let landedOn = result.attachedTo.map { $0 == alohaId ? "element \"\(alohaId)\"" : "the file input \"\($0)\" inside element \"\(alohaId)\"" }
+                ?? "element \"\(alohaId)\""
             return resolved.tab.naming(RawToolResult(
-                output: "Attached \(paths.count == 1 ? "1 file" : "\(paths.count) files") to element \"\(alohaId)\": \(attached).",
+                output: "Attached \(paths.count == 1 ? "1 file" : "\(paths.count) files") to \(landedOn): \(attached).",
                 isError: nil))
         }
     }

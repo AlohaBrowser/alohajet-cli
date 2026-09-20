@@ -204,9 +204,11 @@ public nonisolated struct KeyStroke: Sendable {
 public nonisolated struct UploadResult: Equatable, Sendable {
     public var success: Bool
     public var error: String?
-    public init(success: Bool, error: String? = nil) {
+    public var attachedTo: String?
+    public init(success: Bool, error: String? = nil, attachedTo: String? = nil) {
         self.success = success
         self.error = error
+        self.attachedTo = attachedTo
     }
 }
 
@@ -1078,67 +1080,63 @@ public final class AgentDOMService {
             }
             let layer = tab.getLayer()
             let pageDebugger = debuggerInstance
-            // Resolve the target by aloha-id when it is in the current DOM cache. When the
-            // caller's aloha-id is stale or guessed — not in the cache, because the model
-            // reused an id from an earlier snapshot, or never snapshotted this page — do NOT
-            // bail: the intent is unambiguous, so fall back to resolving the page's file
-            // <input> directly (the selectors below already cover that).
             let node = try await findElementById(id, signal)
             try throwIfAborted(signal)
-            let alohaId = node?.element.attributes["aloha-id"] ?? ""
+            let alohaId = node?.element.attributes["aloha-id"] ?? id
             let tagName = (node?.element.tagName ?? "").lowercased()
             let inputType = (node?.element.attributes["type"] ?? "").lowercased()
             let escapedAlohaId = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
 
-            var matchedSelector: String?
+            let resolution = try await raceAbort(signal) {
+                try await layer.executeJavaScript("""
+
+                        (() => {
+                          const target = document.querySelector('[aloha-id="\(escapedAlohaId)"]');
+                          if (!target) return { status: 'missing' };
+                          const input = (target.matches && target.matches('input[type="file"]'))
+                            ? target
+                            : (target.querySelector ? target.querySelector('input[type="file"]') : null);
+                          if (!input) return { status: 'foreign', tag: (target.tagName || '').toLowerCase() };
+
+                          const stale = document.querySelectorAll('[data-aloha-upload-target]');
+                          for (const el of stale) el.removeAttribute('data-aloha-upload-target');
+
+                          input.setAttribute('data-aloha-upload-target', '1');
+                          const name = input === target
+                            ? ''
+                            : (input.getAttribute('aloha-id') || input.id || input.getAttribute('name') || 'input[type=file]');
+                          return { status: 'ok', name };
+                        })()
+
+                """)
+            }
+            switch resolution.string("status") {
+            case "ok":
+                break
+            case "foreign":
+                let tag = resolution.string("tag") ?? "element"
+                return UploadResult(
+                    success: false,
+                    error: "File upload failed at the element resolution stage: element \"\(id)\" is a <\(tag)>, "
+                        + "not a file input, and contains none. Re-read the page and pass the aloha-id of the "
+                        + "[uploadable] file input.")
+            default:
+                return UploadResult(
+                    success: false,
+                    error: "File upload failed at the element resolution stage: no element with aloha-id "
+                        + "\"\(id)\" is on this page. Re-read the page (manage_tabs action \"read\") and "
+                        + "upload to the id that read prints.")
+            }
+            let attachedTo = resolution.string("name").flatMap { $0.isEmpty ? nil : $0 }
+
             var cdpDispatched = false
             var cdpAttachCount: Int?
             do {
-                let markerSelector = try await raceAbort(signal) {
-                    try await layer.executeJavaScript("""
-
-                            (() => {
-                              const target = document.querySelector('[aloha-id="\(escapedAlohaId)"]');
-
-                              const findFileInput = () => {
-                                if (target) {
-                                  if (target.matches && target.matches('input[type="file"]')) return target;
-                                  const within = target.querySelector && target.querySelector('input[type="file"]');
-                                  if (within) return within;
-                                  let cursor = target.parentElement;
-                                  while (cursor && cursor !== document.body) {
-                                    const candidate = cursor.querySelector('input[type="file"]');
-                                    if (candidate) return candidate;
-                                    cursor = cursor.parentElement;
-                                  }
-                                }
-                                // No aloha-id target (stale/guessed id) — resolve the page's
-                                // file input directly; the upload's intent is unambiguous.
-                                const all = document.querySelectorAll('input[type="file"]');
-                                return all.length > 0 ? all[all.length - 1] : null;
-                              };
-
-                              const input = findFileInput();
-                              if (!input) return null;
-
-                              const stale = document.querySelectorAll('[data-aloha-upload-target]');
-                              for (const el of stale) el.removeAttribute('data-aloha-upload-target');
-
-                              input.setAttribute('data-aloha-upload-target', '1');
-                              return '[data-aloha-upload-target="1"]';
-                            })()
-
-                    """)
-                }
-                var candidateSelectors: [String] = []
-                if case let .string(markerValue) = markerSelector, !markerValue.isEmpty {
-                    candidateSelectors.append(markerValue)
-                }
+                var candidateSelectors: [String] = ["[data-aloha-upload-target=\"1\"]"]
                 if tagName == "input" && inputType == "file" {
                     candidateSelectors.append("[aloha-id=\"\(escapedAlohaId)\"]")
                 }
                 candidateSelectors.append("[aloha-id=\"\(escapedAlohaId)\"] input[type=\"file\"]")
-                candidateSelectors.append("input[type=\"file\"]")
 
                 let root = try await raceAbort(signal) {
                     try await pageDebugger.sendCommand("DOM", "getDocument", .object([
@@ -1161,7 +1159,6 @@ public final class AgentDOMService {
                             }
                             if let nodeId = queryResult.number("nodeId"), nodeId != 0 {
                                 resolvedNodeId = nodeId
-                                matchedSelector = selector
                                 break
                             }
                         } catch {}
@@ -1183,21 +1180,8 @@ public final class AgentDOMService {
                 }
             } catch {}
 
-            if let matchedSelector {
-                let escaped = matchedSelector.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
-                _ = try await raceAbort(signal) {
-                    try await layer.executeJavaScript("""
-
-                          (() => {
-                            const input = document.querySelector('\(escaped)');
-                            if (input) {
-                              input.dispatchEvent(new Event('input', { bubbles: true }));
-                              input.dispatchEvent(new Event('change', { bubbles: true }));
-                            }
-                          })()
-
-                    """)
-                }
+            if cdpDispatched, let landed = await attachedFileCount(escapedAlohaId, signal), landed > 0 {
+                return UploadResult(success: true, attachedTo: attachedTo)
             }
 
             let files = staged.files
@@ -1205,134 +1189,65 @@ public final class AgentDOMService {
                 let fileDataJson = JSValue.array(files.map { file -> JSValue in
                     .object([("name", .string(file.name)), ("mime", .string(file.mime)), ("b64", .string(file.base64))])
                 }).stringify()
-                if let matchedSelector {
-                    let escaped = matchedSelector.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
-                    _ = try await raceAbort(signal) {
-                        try await layer.executeJavaScript("""
+                _ = try await raceAbort(signal) {
+                    try await layer.executeJavaScript("""
 
-                              (() => {
-                                const input = document.querySelector('\(escaped)');
-                                if (!input) return;
-                                const filesData = \(fileDataJson);
-                                const dt = new DataTransfer();
-                                for (const f of filesData) {
-                                  const bytes = Uint8Array.from(atob(f.b64), c => c.charCodeAt(0));
-                                  dt.items.add(new File([bytes], f.name, { type: f.mime }));
-                                }
-                                input.files = dt.files;
-                                input.dispatchEvent(new Event('input', { bubbles: true }));
-                                input.dispatchEvent(new Event('change', { bubbles: true }));
-                              })()
+                          (() => {
+                            const input = document.querySelector('[data-aloha-upload-target="1"]');
+                            if (!input) return;
+                            const filesData = \(fileDataJson);
+                            const dt = new DataTransfer();
+                            for (const f of filesData) {
+                              const bytes = Uint8Array.from(atob(f.b64), c => c.charCodeAt(0));
+                              dt.items.add(new File([bytes], f.name, { type: f.mime }));
+                            }
+                            input.files = dt.files;
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                          })()
 
-                        """)
-                    }
-                } else {
-                    // No <input> anywhere on the page: the target is a dropzone, so the only
-                    // way in is the drag sequence a real drop produces. dragenter/dragover
-                    // must be preventDefault-ed for the drop to be accepted at all.
-                    _ = try await raceAbort(signal) {
-                        try await layer.executeJavaScript("""
-
-                              (async () => {
-                                const target = document.querySelector('[aloha-id="\(escapedAlohaId)"]') || document.body;
-                                const filesData = \(fileDataJson);
-
-                                const buildDataTransfer = () => {
-                                  const dt = new DataTransfer();
-                                  for (const f of filesData) {
-                                    const bytes = Uint8Array.from(atob(f.b64), c => c.charCodeAt(0));
-                                    dt.items.add(new File([bytes], f.name, { type: f.mime }));
-                                  }
-                                  try { dt.dropEffect = 'copy'; } catch {}
-                                  try { dt.effectAllowed = 'copyMove'; } catch {}
-                                  return dt;
-                                };
-
-                                const dispatchAt = (el, type, dt) => {
-                                  if (!el) return false;
-                                  const event = new DragEvent(type, {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    composed: true,
-                                    dataTransfer: dt
-                                  });
-                                  if (type === 'dragover' || type === 'dragenter') {
-                                    setTimeout(() => { try { event.preventDefault(); } catch {} }, 0);
-                                  }
-                                  return el.dispatchEvent(event);
-                                };
-
-                                const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-                                const targets = [target, document.documentElement, document.body].filter(Boolean);
-                                for (const t of targets) dispatchAt(t, 'dragenter', buildDataTransfer());
-                                await sleep(20);
-                                for (const t of targets) dispatchAt(t, 'dragover', buildDataTransfer());
-                                await sleep(20);
-                                for (const t of targets) dispatchAt(t, 'drop', buildDataTransfer());
-                              })()
-
-                        """)
-                    }
+                    """)
                 }
             }
 
             try throwIfAborted(signal)
 
-            // HONEST SUCCESS VIA POST-DISPATCH READ-BACK. Rather than trust the bare
-            // dispatch, read the input's ACTUAL FileList back out of the page (length +
-            // names). The SAME read-back covers BOTH the CDP attach and the JS
-            // DataTransfer / drag-drop fallback — locate the input by its aloha-id marker
-            // and report how many files really landed on it.
-            let readBack = try? await raceAbort(signal) {
-                try await layer.executeJavaScript("""
-
-                      (() => {
-                        const target = document.querySelector('[aloha-id="\(escapedAlohaId)"]');
-                        const findFileInput = () => {
-                          if (target && target.matches && target.matches('input[type="file"]')) return target;
-                          const within = target && target.querySelector && target.querySelector('input[type="file"]');
-                          if (within) return within;
-                          let cursor = target && target.parentElement;
-                          while (cursor && cursor !== document.body) {
-                            const candidate = cursor.querySelector('input[type="file"]');
-                            if (candidate) return candidate;
-                            cursor = cursor.parentElement;
-                          }
-                          const all = document.querySelectorAll('input[type="file"]');
-                          return all.length > 0 ? all[all.length - 1] : null;
-                        };
-                        const input = findFileInput();
-                        if (!input || !input.files) return { ok: false, count: 0, names: [] };
-                        const names = Array.from(input.files).map(f => f.name);
-                        return { ok: input.files.length > 0, count: input.files.length, names };
-                      })()
-
-                """)
-            }
-
-            let attachedCount = uploadedFileCount(readBack) ?? cdpAttachCount ?? 0
+            let attachedCount = await attachedFileCount(escapedAlohaId, signal) ?? cdpAttachCount ?? 0
             if attachedCount > 0 {
-                return UploadResult(success: true)
+                return UploadResult(success: true, attachedTo: attachedTo)
             }
 
             // The dispatch did not actually populate the input — name the stage that failed
             // rather than reporting a false success banner.
-            let stage: String
-            if cdpDispatched {
-                stage = "FileList assignment (the browser rejected the attached files)"
-            } else if matchedSelector != nil {
-                stage = "FileList assignment (the input's files list was not populated)"
-            } else if !files.isEmpty {
-                stage = "drop not accepted (the page's dropzone did not accept the files)"
-            } else {
-                stage = "element resolution (no file input was located for \"\(id)\")"
-            }
+            let stage = cdpDispatched
+                ? "FileList assignment (the browser rejected the attached files)"
+                : "FileList assignment (the input's files list was not populated)"
             return UploadResult(success: false, error: "File upload failed at the \(stage) stage.")
         } catch {
             if isAbortError(error) { throw error }
             return UploadResult(success: false, error: describeError(error))
         }
+    }
+
+    private func attachedFileCount(_ escapedAlohaId: String, _ signal: AbortSignal?) async -> Int? {
+        let layer = tab.getLayer()
+        let readBack = try? await raceAbort(signal) {
+            try await layer.executeJavaScript("""
+
+                  (() => {
+                    const marked = document.querySelector('[data-aloha-upload-target="1"]');
+                    const target = document.querySelector('[aloha-id="\(escapedAlohaId)"]');
+                    const input = marked
+                      || (target && target.matches && target.matches('input[type="file"]') ? target : null)
+                      || (target && target.querySelector ? target.querySelector('input[type="file"]') : null);
+                    if (!input || !input.files) return { ok: false, count: 0, names: [] };
+                    const names = Array.from(input.files).map(f => f.name);
+                    return { ok: input.files.length > 0, count: input.files.length, names };
+                  })()
+
+            """)
+        }
+        return uploadedFileCount(readBack)
     }
 
     /// Reads the file count out of a post-dispatch read-back result. Accepts either the

@@ -259,11 +259,11 @@ private let pageUploadDescription =
     "Attach files to a file input on the active tab by its aloha-id. This is how you upload: a plain "
     + "page_click on a [uploadable] element is refused, because it opens a native OS file dialog that is "
     + "invisible to you and cannot be driven. Paths are read from the machine running this tool, so they "
-    + "must be absolute. If the element has no file <input>, the files are dropped on it instead, which is "
-    + "what a dropzone expects."
+    + "must be absolute. The aloha_id must be the file input itself or the element holding it — an id that "
+    + "is not on the page, or one that holds no file <input>, is refused, so re-read the page first."
 
 private let pageUploadSchema = objectSchema([
-    ("aloha_id", schemaField(type: "string", description: "The aloha-id of the [uploadable] file input, or of the dropzone holding it.")),
+    ("aloha_id", schemaField(type: "string", description: "The aloha-id of the [uploadable] file input, or of the element holding it.")),
     ("paths", schemaField(
         type: "array",
         description: "Absolute paths of the files to attach, in order. They are read from this machine, not from the page.",
