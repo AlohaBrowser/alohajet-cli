@@ -151,6 +151,12 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     private let maxPollAttempts: Int
     private let terms: TermsResponder?
 
+    /// How many `/agent/result` polls in a row may fail on the transport before the wait
+    /// is abandoned. At the default 250 ms interval that is ~5 s of a browser answering
+    /// nothing — long enough to ride out one blocked main thread, short enough that a
+    /// browser which has genuinely gone away is reported rather than waited on.
+    public static let maxConsecutivePollFailures = 20
+
     /// - Parameters:
     ///   - endpoint: the agent endpoint's base URL.
     ///   - permissions: what the page may use; empty (the default) denies everything.
@@ -223,6 +229,9 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     /// between naming a conversation and running in it, and no separate grant write for
     /// another terminal's turn to overwrite.
     private func runProtocol2(prompt: String, lane: [String: Any]) async -> (result: CLIRunResult, sessionId: String?) {
+        // Outside the `do`: a throw from the poll is exactly when the id is needed, and
+        // declared inside it the catch could only ever report `nil`.
+        var ran: String?
         do {
             // `.fresh` names nothing and the server mints one; `.current` PINS the lane
             // read by the probe, so it stops meaning "wherever the app is when the POST
@@ -254,7 +263,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
             }
             // The conversation the server says it ran in. It is the answer that is
             // reported and resumed — the request only ASKED.
-            let ran = object["conversation"] as? String
+            ran = object["conversation"] as? String
 
             if let requested {
                 // The guard that was load-bearing under protocol 1 (where the binding was
@@ -284,7 +293,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
 
             return (try await pollToTerminal(taskId: taskId), ran)
         } catch {
-            return (Self.failed("automation transport error: \(error)"), nil)
+            return (Self.failed("automation transport error: \(error)"), ran)
         }
     }
 
@@ -425,8 +434,27 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         var asked: Set<String> = []
         var attempt = 0
         var termsPolls = 0
+        var failures = 0
         while attempt < maxPollAttempts {
-            let response = try await transport("GET", agentURL(path: "/agent/result", queryItems: [URLQueryItem(name: "taskId", value: taskId)]), nil)
+            let response: RemoteAutomationHTTPResponse
+            do {
+                response = try await transport("GET", agentURL(path: "/agent/result", queryItems: [URLQueryItem(name: "taskId", value: taskId)]), nil)
+            } catch {
+                // The poll is a liveness read against a server on the app's main thread,
+                // which AppKit can block for seconds at a time. One dropped poll is not
+                // the turn failing — the turn is running in the app either way — so it
+                // costs an attempt out of the budget, not the whole run.
+                failures += 1
+                guard failures < Self.maxConsecutivePollFailures else {
+                    return Self.failed(
+                        "the browser stopped answering: \(failures) polls in a row failed"
+                        + " (\((error as? URLError)?.localizedDescription ?? "\(error)"))")
+                }
+                attempt += 1
+                try await Task.sleep(for: pollInterval)
+                continue
+            }
+            failures = 0
             guard response.statusCode == 200 else {
                 return Self.failed("automation server /agent/result returned HTTP \(response.statusCode)")
             }
@@ -553,6 +581,10 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         if let token = AutomationToken.read(for: url) {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
+        // A poll is retried, so it must be noticed quickly: the default 60 s costs a
+        // minute of the user's turn for one blocked main thread. The turn-STARTING
+        // requests keep the default, since retrying one of those would start two turns.
+        if url.path.hasSuffix("/agent/result") { request.timeoutInterval = 10 }
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         return RemoteAutomationHTTPResponse(statusCode: status, body: data)

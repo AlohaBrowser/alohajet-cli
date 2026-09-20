@@ -139,14 +139,15 @@ public struct AlohaBrowser: Sendable {
     }
 
     /// `open(1)` — not NSWorkspace — so this stays a plain Foundation CLI with no AppKit
-    /// link. `-g` keeps the launch out of the foreground; LaunchServices hands the app to
-    /// the EXISTING instance when one is running, so this never starts a second copy.
+    /// link. `-g` keeps the launch out of the foreground.
     ///
-    /// The bundle identifiers are the only thing this package knows about the app, and
-    /// they are the public ones any tool needs to launch it. `ALOHA_BROWSER_APP` names a
-    /// path instead, for a build that is not registered.
+    /// WHICH copy is `appPath`'s decision, and getting it wrong starts a SECOND instance:
+    /// LaunchServices hands the app to the existing instance only when the bundle it
+    /// resolves IS the running one, and a bundle IDENTIFIER resolves to whichever
+    /// registered copy the machine prefers. The bundle identifiers are the last resort,
+    /// for a helper that ships inside no app at all.
     public static let liveOpen: Opener = {
-        let path = ProcessInfo.processInfo.environment[appPathEnvKey]
+        let path = appPath()
         var failures: [String] = []
         for arguments in openArguments(appPath: path) {
             do {
@@ -157,6 +158,29 @@ public struct AlohaBrowser: Sendable {
             }
         }
         throw AlohaBrowserError.launchFailed(failures.joined(separator: "; "))
+    }
+
+    /// The `.app` this run drives: `ALOHA_BROWSER_APP` when it names one, else the
+    /// bundle this executable ships inside (`<X>.app/Contents/{Helpers,MacOS}/alohajet`),
+    /// else `nil` — the signal to let LaunchServices pick by bundle identifier.
+    ///
+    /// The same rule as the agent lane's `AlohaAppLauncher.appBundlePath`, written out a
+    /// second time because `BrowserTools` does not link `AgentDriver`. `MacOS` is
+    /// accepted beside `Helpers` for builds made before the helper moved.
+    nonisolated static func appPath(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executable: String? = Bundle.main.executableURL?.resolvingSymlinksInPath().path
+    ) -> String? {
+        if let path = environment[appPathEnvKey], !path.isEmpty { return path }
+        guard let executable else { return nil }
+        let directory = (executable as NSString).deletingLastPathComponent
+        let name = (directory as NSString).lastPathComponent
+        guard name == "Helpers" || name == "MacOS" else { return nil }
+        let contents = (directory as NSString).deletingLastPathComponent
+        guard (contents as NSString).lastPathComponent == "Contents" else { return nil }
+        let bundle = (contents as NSString).deletingLastPathComponent
+        guard (bundle as NSString).pathExtension == "app" else { return nil }
+        return bundle
     }
 
     /// The `open(1)` argument lists to try, in order. With an explicit path there is

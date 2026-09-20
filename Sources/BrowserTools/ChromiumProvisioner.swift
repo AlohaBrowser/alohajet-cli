@@ -96,6 +96,7 @@ public enum ChromiumProvisionerError: Error, Equatable, Sendable, CustomStringCo
     case fetchFailed(String)
     case archiveExtractionFailed(String)
     case executableNotFoundAfterExtract(String)
+    case browserPathNotExecutable(String)
 
     public var description: String {
         switch self {
@@ -107,6 +108,8 @@ public enum ChromiumProvisionerError: Error, Equatable, Sendable, CustomStringCo
             return "Chrome-for-Testing archive extraction failed: \(detail)"
         case let .executableNotFoundAfterExtract(path):
             return "Chrome-for-Testing executable not found after extract at \(path)"
+        case let .browserPathNotExecutable(path):
+            return "ALOHAJET_BROWSER names \(path), which is not an executable file"
         }
     }
 }
@@ -114,7 +117,8 @@ public enum ChromiumProvisionerError: Error, Equatable, Sendable, CustomStringCo
 /// Downloads, extracts, and caches a Chrome-for-Testing build for the running platform.
 ///
 /// Resolution order on `resolveExecutablePath()`:
-///   1. explicit `browserPath` (from CLI config) — short-circuits everything;
+///   1. explicit `browserPath` (from CLI config) — short-circuits everything, and one
+///      that is not an executable file is refused by `init` rather than fallen through;
 ///   2. a previously-cached download under the Application-Support cache dir;
 ///   3. `ChromeLauncher.defaultExecutablePath` if a system Chrome is present;
 ///   4. trigger a download (fetch → extract → stage) and return the staged path.
@@ -153,6 +157,13 @@ public final class ChromiumProvisioner {
         self.download = download
         self.extract = extract
         self.executableExists = executableExists
+        // In `init`, which runs before the "downloading Chrome for Testing" announcement
+        // and before any lane is opened: naming a browser is a deliberate act, and
+        // quietly running a different one makes every observation of the run — the user
+        // agent, the profile, the extensions — a lie about which browser produced it.
+        if let browserPath, !browserPath.isEmpty, !executableExists(browserPath) {
+            throw ChromiumProvisionerError.browserPathNotExecutable(browserPath)
+        }
     }
 
     // MARK: Pure path / URL logic (no I/O)

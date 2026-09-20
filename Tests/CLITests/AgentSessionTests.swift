@@ -184,6 +184,20 @@ struct AgentSessionTests {
         }
     }
 
+    /// A turn that fails is the one that most needs its id printed: the work may still be
+    /// running in the app, and `--resume` is the only way back to it.
+    @Test("a failed turn prints the chat id and says the turn may still be running")
+    func aFailedTurnPrintsTheChatId() throws {
+        let ran = "99999999-9999-4999-8999-999999999999"
+        try withStub(protocolVersion: 2, ranOverride: ran) { stub in
+            let run = try runTurn(["-p", "and again", "--resume", Self.chatA], stub: stub)
+            #expect(run.status == 1, "exited \(run.status): \(run.combined)")
+            #expect(run.stderr.contains("chat \(ran)"), "\(run.combined)")
+            #expect(run.stderr.contains("--resume \(ran)"), "\(run.combined)")
+            #expect(run.stderr.contains("may still be running"), "\(run.combined)")
+        }
+    }
+
     // MARK: - Which stream the id lands on
 
     /// STDOUT IS THE ANSWER. The conversation id is prose ABOUT the run, so it goes to
@@ -245,7 +259,7 @@ struct AgentSessionTests {
     func nonLoopbackPlaintextIsRefused(_ endpoint: String) throws {
         let run = try runCLI(["-p", "hi", "--endpoint", endpoint])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
-        #expect(run.stderr.contains("must be loopback http or https"))
+        #expect(run.stderr.contains("must be http to a loopback address"))
         #expect(run.stderr.contains("provider API key"))
     }
 
@@ -257,7 +271,7 @@ struct AgentSessionTests {
     func allowedEndpointsReachTheTurn(_ endpoint: String) throws {
         let run = try runCLI(["-p", "hi", "--endpoint", endpoint, "--json"], timeout: 60)
         #expect(run.status == 1, "exited \(run.status): \(run.combined)")
-        #expect(!run.stderr.contains("must be loopback"))
+        #expect(!run.stderr.contains("must be http to a loopback address"))
     }
 
     static let declined = "The Terms of Service and the Privacy Policy were not accepted; the model was not asked.\n"

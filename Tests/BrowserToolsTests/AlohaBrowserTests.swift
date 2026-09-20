@@ -142,6 +142,27 @@ struct AlohaBrowserTests {
         #expect(byIdentifier.allSatisfy { $0.first == "-g" })
     }
 
+    @Test("the app launched is the one this executable ships inside, never another copy")
+    func appPathResolution() {
+        #expect(AlohaBrowser.appPath(
+            environment: ["ALOHA_BROWSER_APP": "/Volumes/dev/Aloha.app"],
+            executable: "/Applications/AlohaJet.app/Contents/Helpers/alohajet")
+            == "/Volumes/dev/Aloha.app")
+        #expect(AlohaBrowser.appPath(
+            environment: [:], executable: "/Volumes/dev/AlohaJet.app/Contents/Helpers/alohajet")
+            == "/Volumes/dev/AlohaJet.app")
+        #expect(AlohaBrowser.appPath(
+            environment: [:], executable: "/Volumes/dev/AlohaJet.app/Contents/MacOS/alohajet")
+            == "/Volumes/dev/AlohaJet.app")
+        // A `swift build` product ships inside nothing, and only then may LaunchServices
+        // pick a registered copy by bundle identifier.
+        #expect(AlohaBrowser.appPath(environment: [:], executable: "/usr/local/bin/alohajet") == nil)
+        #expect(AlohaBrowser.appPath(environment: [:], executable: nil) == nil)
+        #expect(AlohaBrowser.openArguments(appPath: AlohaBrowser.appPath(
+            environment: [:], executable: "/Volumes/dev/AlohaJet.app/Contents/Helpers/alohajet"))
+            == [["-g", "-a", "/Volumes/dev/AlohaJet.app"]])
+    }
+
     @Test("the child-process runner throws the exit code and stderr on failure")
     func runReportsExitCode() {
         #expect(throws: AlohaBrowserError.self) {

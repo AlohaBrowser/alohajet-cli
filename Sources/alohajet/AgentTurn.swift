@@ -17,6 +17,23 @@ import ToolABI
 // (`--endpoint` names another), and since this binary ships INSIDE that app, a turn
 // that finds it not running launches it and waits — see `AlohaAppLauncher`.
 
+/// Say, once, that an endpoint somewhere else is getting no credential.
+///
+/// The ambient token is the browser's own and never leaves this machine — see
+/// `AutomationToken.read(for:)`, which is the rule, not this. What a user meets without
+/// this line is a bare 401 from their own port forward, which reads as a broken token
+/// rather than as a deliberate confinement they can lift with one variable.
+///
+/// stderr only: on the relay lane stdout is the JSON-RPC channel.
+func noteEndpointWithoutToken(_ endpoint: URL) {
+    guard !AutomationToken.isLoopback(endpoint), AutomationToken.read(for: endpoint) == nil else { return }
+    writeToStandardError("""
+        alohajet: note: \(endpoint.host ?? endpoint.absoluteString) is not this machine, \
+        so the browser's own token file is not sent to it — set ALOHAJET_AGENT_TOKEN to \
+        the token that endpoint expects, or it will answer 401.\n
+        """)
+}
+
 enum AgentTurn {
 
     /// Run one turn and return the process exit code. Mirrors the exit contract every
@@ -37,6 +54,8 @@ enum AgentTurn {
             writeToStandardError("alohajet: \(error.message)\n")
             return error.code
         }
+
+        noteEndpointWithoutToken(endpointURL)
 
         let session: AgentSession
         switch resolveSession(args) {
@@ -85,14 +104,7 @@ enum AgentTurn {
         }
         if result.isSuccess, let finalText = result.finalText {
             writeToStandardOutput(finalText + "\n")
-            // The id goes to stderr, not stdout: piping the answer somewhere must not
-            // pick this up. It is only useful when there IS something to resume.
-            // Printed whenever the host named one — including under `--continue`, which
-            // against a protocol-2 host resolves to a concrete id that can be resumed by
-            // id from then on. A legacy `--continue` names nothing and prints nothing.
-            if let sessionId {
-                writeToStandardError("\nchat \(sessionId) — continue it with: --resume \(sessionId)\n")
-            }
+            reportChat(sessionId, failed: false)
             return exitOK
         }
         if result.failureReason == "terms_not_accepted" {
@@ -115,7 +127,23 @@ enum AgentTurn {
         case .endTurn:
             writeToStandardError("alohajet: the turn ended without any assistant text\n")
         }
+        reportChat(sessionId, failed: true)
         return exitToolError
+    }
+
+    /// The conversation the turn ran in, on stderr — piping the answer somewhere must not
+    /// pick this up, and it is only useful when the host named one (a legacy `--continue`
+    /// names nothing).
+    ///
+    /// Printed on the FAILURE arms too, and that is the point: the CLI giving up does not
+    /// stop the turn, so without the id the work is still happening somewhere nobody can
+    /// address.
+    private static func reportChat(_ sessionId: String?, failed: Bool) {
+        guard let sessionId else { return }
+        writeToStandardError(
+            "\nchat \(sessionId) — "
+            + (failed ? "the turn may still be running in the app; rejoin it with" : "continue it with")
+            + ": --resume \(sessionId)\n")
     }
 
     private static let stdinLines = MCPServer.stdinLines()
@@ -191,7 +219,7 @@ enum AgentTurn {
         // get is the ambient token off disk — see `AutomationToken.read(for:)`.
         guard scheme == "https" || AutomationToken.isLoopback(url) else {
             return .failure(CLIError(message: """
-                --endpoint must be loopback http or https — got \"\(raw)\".
+                --endpoint must be http to a loopback address, or https to anywhere — got \"\(raw)\".
                   The bearer token this sends grants full control of the browser and rewrites
                   the user's provider API key; it is not sent over plaintext to a remote host.
                 """, code: exitUsage))

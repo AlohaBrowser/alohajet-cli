@@ -166,7 +166,9 @@ let commandHelp: [String: String] = [
           options pick the browser, which starts on the first tool call.
           With --endpoint, serve nothing: relay stdio to the MCP server of a running
           Aloha browser at <url>/mcp, for clients that can only run a command, such
-          as Claude Desktop. <url> must be loopback http or https.
+          as Claude Desktop. <url> is http to this machine, or https to
+          anywhere — a port forward, a second machine. A non-loopback endpoint
+          is sent no token unless ALOHAJET_AGENT_TOKEN names one.
         """
 ]
 
@@ -183,7 +185,9 @@ AGENT
   --continue              continue the last -p chat (default: a new one)
   --headless              run the app with no window (refused if it has one)
   --endpoint <url>        agent server (default http://127.0.0.1:8765, the
-                          local app, launched if needed); http to loopback only
+                          local app, launched if needed); http to this machine,
+                          https anywhere, and no token leaves this machine
+                          unless ALOHAJET_AGENT_TOKEN names one
   --json                  print the whole result as one JSON object
   Until the Terms of Service and Privacy Policy are accepted, -p asks first.
 

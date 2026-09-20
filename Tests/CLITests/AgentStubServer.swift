@@ -41,6 +41,9 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     /// The final answer `/agent/result` reports.
     let finalText: String
     let termsAnswerableInApp: Bool?
+    /// Seconds to sit on a request before answering it — a browser taking its time over
+    /// one tool call, which must not be mistaken for a browser that has gone away.
+    let hold: TimeInterval
     private(set) var port: Int = 0
 
     var url: String { "http://127.0.0.1:\(port)" }
@@ -49,11 +52,12 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     var paths: [String] { requests.map(\.path) }
 
     init(protocolVersion: Int = 1, finalText: String = "Four.", ranOverride: String? = nil,
-         termsAnswerableInApp: Bool? = nil) {
+         termsAnswerableInApp: Bool? = nil, hold: TimeInterval = 0) {
         self.protocolVersion = protocolVersion
         self.finalText = finalText
         self.ranOverride = ranOverride
         self.termsAnswerableInApp = termsAnswerableInApp
+        self.hold = hold
     }
 
     func start() throws {
@@ -97,6 +101,7 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
             if client < 0 { return }              // the listener closed: we are done
             if let request = read(client) {
                 lock.withLock { recorded.append(request) }
+                if hold > 0 { Thread.sleep(forTimeInterval: hold) }
                 let (status, json) = answer(request)
                 write(client, status: status, json: json)
             }
@@ -159,6 +164,8 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
             return (200, #"{"ok":true}"#)
         case ("/agent/task", 1):
             return (200, #"{"ok":true,"taskId":"T-1"}"#)
+        case ("/mcp", _):
+            return (200, #"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#)
         case ("/agent/terms", _):
             return (200, #"{"ok":true}"#)
         case ("/agent/result", _):
