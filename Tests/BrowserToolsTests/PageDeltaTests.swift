@@ -34,13 +34,9 @@ struct PageDeltaTests {
 
     /// One wording, three tools. Three tools saying the same thing three slightly different ways is how a
     /// model learns to distrust all three.
-    @Test func everyActionToolUsesTheSharedHelper() {
+    @Test func everyActionToolUsesTheSharedHelper() throws {
         for file in ["PageClick", "PageType", "PageSelect"] {
-            let path = "Sources/BrowserTools/Tools/\(file).swift"
-            let source = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-            // Skipped rather than failed when the test runs from a different working directory: the
-            // assertion is about the repo, and a false failure on cwd would teach people to ignore it.
-            if source.isEmpty { continue }
+            let source = try packageSource("Sources/BrowserTools/Tools/\(file).swift")
             #expect(source.contains("PageDelta.describe("), "\(file) still ships a stateless receipt")
             #expect(source.contains("bridge.currentPageURL()"), "\(file) never reads the url")
         }

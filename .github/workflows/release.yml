@@ -98,9 +98,17 @@ jobs:
 
       - name: Stage, smoke test and pack
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME:-${{ inputs.version }}}"
+          # GITHUB_REF_NAME is always set — on a dispatch it names the BRANCH, so the
+          # event, not the emptiness of a variable, is what picks the version.
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="$GITHUB_REF_NAME"
+          fi
           # The tag names the tarball; Sources/alohajet/Version.swift is what the binary
           # reports through --version and MCP serverInfo. They are two statements of one
           # fact, so a mismatch ships a binary that lies about which release it is.
@@ -119,6 +127,9 @@ jobs:
           mkdir -p "$stage"
           cp "$binary" "$stage/alohajet"
           cp LICENSE THIRD-PARTY-NOTICES README.md "$stage/"
+          # `sudo xcode-select -s` in the picker step persists for the rest of the job,
+          # so this is the toolchain that was chosen and that built the binary above.
+          swift --version | head -n 1 > "$stage/BUILD-TOOLCHAIN"
           tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "alohajet-${version}-${{ matrix.name }}"
           rm -rf "$stage"
 
@@ -131,6 +142,13 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-24.04
+    # A job block REPLACES the workflow one rather than adding to it, so contents:write is
+    # restated here. Only this job gets the attestation scopes; the workflow block stays
+    # without them.
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -141,6 +159,15 @@ jobs:
       # a download can be verified with a stock tool and no jq.
       - name: Checksums
         run: cd dist && sha256sum *.tar.gz | tee SHA256SUMS
+
+      # Nothing here is signed or notarized, so provenance is the only thing a downloader
+      # can check: a Sigstore attestation, verifiable with `gh attestation verify`, that
+      # binds each asset to this workflow, this repository and this commit.
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
 
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

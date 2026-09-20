@@ -169,7 +169,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   // Refuse a name the framework minted this render. #ember1234, #mui-5 and #radix-:r1: are
   // renumbered on remount, so hashing one would make the id LESS stable than the position it
   // replaced — on exactly the pages this change exists for.
-  // ponytail: two regexes, not a framework list. Widen if real ids start churning between walks.
+  // KNOWN CEILING: two regexes, not a framework list. Widen if real ids start churning between walks.
   function looksGenerated(value) {
     return !/^[A-Za-z][\w-]*$/.test(value) || /\d{3,}$/.test(value) || /[-_]\d+$/.test(value);
   }

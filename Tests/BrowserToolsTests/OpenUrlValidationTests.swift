@@ -138,9 +138,6 @@ struct OpenUrlValidationTests {
     /// never called the validator, so `goto file:///…` followed by `get_text` was a
     /// working local-file read. A source-level assertion, because the alternative is a
     /// live browser and a real secret file in a unit test.
-    ///
-    /// Skipped rather than failed when the sources are not on disk (a test bundle run
-    /// from elsewhere): a false failure on cwd teaches people to ignore the test.
     @Test("no navigation entry point skips the validator", arguments: [
         // file, the symbol it must contain
         ("Sources/BrowserTools/Tools/PageNavigate.swift", "validateOpenUrl"),
@@ -148,18 +145,31 @@ struct OpenUrlValidationTests {
         ("Sources/BrowserTools/Tools/PageToolsSupport.swift", "validateTabUrl"),
         ("Sources/BrowserTools/Tabs/CDPTabsService.swift", "validateOpenUrl"),
     ])
-    func everyEntryPointValidates(_ path: String, _ symbol: String) {
-        guard let source = try? String(contentsOfFile: path, encoding: .utf8), !source.isEmpty else { return }
+    func everyEntryPointValidates(_ path: String, _ symbol: String) throws {
+        let source = try packageSource(path)
         #expect(source.contains("\(symbol)("), "\(path) reaches navigation without \(symbol)")
     }
 
     /// `page_navigate` must navigate to the NORMALIZED href the validator returns, not to
     /// the raw argument it was handed — otherwise the check and the navigation are
     /// looking at two different strings.
-    @Test func pageNavigateUsesTheNormalizedHref() {
-        let path = "Sources/BrowserTools/Tools/PageNavigate.swift"
-        guard let source = try? String(contentsOfFile: path, encoding: .utf8), !source.isEmpty else { return }
+    @Test func pageNavigateUsesTheNormalizedHref() throws {
+        let source = try packageSource("Sources/BrowserTools/Tools/PageNavigate.swift")
         #expect(source.contains("bridge.goto(normalized)"),
                 "page_navigate navigates to something other than the validated href")
     }
+}
+
+/// A package-relative source file, located from `#filePath` rather than from the working
+/// directory: read relatively, a source-level assertion reads nothing and silently passes
+/// whenever the suite is run from anywhere but the package root.
+func packageSource(_ path: String) throws -> String {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()   // BrowserToolsTests
+        .deletingLastPathComponent()   // Tests
+        .deletingLastPathComponent()   // package root
+        .appendingPathComponent(path)
+    let source = try String(contentsOf: url, encoding: .utf8)
+    try #require(!source.isEmpty, "\(path) is empty")
+    return source
 }

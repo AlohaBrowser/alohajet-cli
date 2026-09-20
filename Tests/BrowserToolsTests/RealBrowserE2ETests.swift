@@ -66,6 +66,26 @@ private let editableFixtureHTML = """
 </body></html>
 """
 
+/// Runs `body` against a freshly launched headless browser and shuts that browser down
+/// before returning, on the throwing path too.
+///
+/// `defer` cannot await, so `defer { Task { await session.shutdown() } }` only SCHEDULES
+/// the teardown: the test returns first and the run can end with the Chromium still alive
+/// and its ~150 MB profile still on disk. The shutdown has to be awaited, and both exits
+/// from the body have to reach it.
+@MainActor
+func withHeadlessBrowser<T>(_ body: (BrowserToolSession) async throws -> T) async throws -> T {
+    let session = try await BrowserToolSession.launch(headless: true, port: nil)
+    do {
+        let value = try await body(session)
+        await session.shutdown()
+        return value
+    } catch {
+        await session.shutdown()
+        throw error
+    }
+}
+
 @Suite("end to end, real browser", .serialized, .enabled(if: browserIsAvailable || browserIsRequired))
 struct RealBrowserE2ETests {
 
@@ -77,52 +97,50 @@ struct RealBrowserE2ETests {
         try server.start()
         defer { server.stop() }
 
-        let session = try await BrowserToolSession.launch(headless: true, port: nil)
-        // The browser must not outlive the test even when an assertion throws.
-        defer { Task { await session.shutdown() } }
+        try await withHeadlessBrowser { session in
+            // 1. OPEN — the page comes back as markdown, with the element refs the other
+            //    tools address.
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            #expect(opened.output.contains("not clicked"), "the page body is missing:\n\(opened.output)")
+            let tabId = try #require(tabIdentifier(opened), "open printed no tab id:\n\(opened.output)")
 
-        // 1. OPEN — the page comes back as markdown, with the element refs the other
-        //    tools address.
-        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
-        #expect(opened.isError != true, "open failed: \(opened.output)")
-        #expect(opened.output.contains("not clicked"), "the page body is missing:\n\(opened.output)")
-        let tabId = try #require(tabIdentifier(opened), "open printed no tab id:\n\(opened.output)")
+            // 2. READ — the same page through the read action, addressed by the id `open`
+            //    printed. This is the two-command sequence the tool's own receipt tells the
+            //    model to run, and it must work.
+            let read = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+            #expect(read.isError != true, "read failed: \(read.output)")
+            #expect(read.output.contains("not clicked"))
 
-        // 2. READ — the same page through the read action, addressed by the id `open`
-        //    printed. This is the two-command sequence the tool's own receipt tells the
-        //    model to run, and it must work.
-        let read = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
-        #expect(read.isError != true, "read failed: \(read.output)")
-        #expect(read.output.contains("not clicked"))
+            // 3. CLICK — by the ref the read printed, not by a selector we invented. The ref
+            //    derivation is the seam between what the model sees and what gets clicked; a
+            //    test that clicks `#b1` directly would not exercise it.
+            let ref = try #require(alohaId(forLabel: "Press me", in: read.output),
+                                   "the button carried no aloha-id:\n\(read.output)")
 
-        // 3. CLICK — by the ref the read printed, not by a selector we invented. The ref
-        //    derivation is the seam between what the model sees and what gets clicked; a
-        //    test that clicks `#b1` directly would not exercise it.
-        let ref = try #require(alohaId(forLabel: "Press me", in: read.output),
-                               "the button carried no aloha-id:\n\(read.output)")
+            // THE REF IS STABLE ACROSS WALKS. `open` and `read` each ran the walker over the
+            // same DOM; if the two walks derived different ids for the same button, every ref
+            // the model was shown by the previous read would be dead by the time it acted —
+            // which is the failure the whole content-derived id scheme exists to avoid.
+            #expect(alohaId(forLabel: "Press me", in: opened.output) == ref,
+                    "two walks over one unchanged page derived different refs")
+            let clicked = await session.run("page_click", arguments: ["aloha_id": ref])
+            #expect(clicked.isError != true, "click failed: \(clicked.output)")
+            #expect(clicked.output.contains(ref))
 
-        // THE REF IS STABLE ACROSS WALKS. `open` and `read` each ran the walker over the
-        // same DOM; if the two walks derived different ids for the same button, every ref
-        // the model was shown by the previous read would be dead by the time it acted —
-        // which is the failure the whole content-derived id scheme exists to avoid.
-        #expect(alohaId(forLabel: "Press me", in: opened.output) == ref,
-                "two walks over one unchanged page derived different refs")
-        let clicked = await session.run("page_click", arguments: ["aloha_id": ref])
-        #expect(clicked.isError != true, "click failed: \(clicked.output)")
-        #expect(clicked.output.contains(ref))
+            // 4. VERIFY — read the page again and see the DOM the click changed.
+            let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+            #expect(after.isError != true, "the re-read failed: \(after.output)")
+            #expect(after.output.contains("CLICKED-OK"), "the click did not take:\n\(after.output)")
+            #expect(!after.output.contains("not clicked"))
 
-        // 4. VERIFY — read the page again and see the DOM the click changed.
-        let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
-        #expect(after.isError != true, "the re-read failed: \(after.output)")
-        #expect(after.output.contains("CLICKED-OK"), "the click did not take:\n\(after.output)")
-        #expect(!after.output.contains("not clicked"))
-
-        // And stable across a RE-RENDER: the click mutated the DOM (the status paragraph's
-        // text changed), the walker ran again over the changed tree, and the button — which
-        // did not change — must still carry the same ref. A ref that moved here would
-        // invalidate every id in the model's context on every page update.
-        #expect(alohaId(forLabel: "Press me", in: after.output) == ref,
-                "the button's ref changed when an unrelated node re-rendered")
+            // And stable across a RE-RENDER: the click mutated the DOM (the status paragraph's
+            // text changed), the walker ran again over the changed tree, and the button — which
+            // did not change — must still carry the same ref. A ref that moved here would
+            // invalidate every id in the model's context on every page update.
+            #expect(alohaId(forLabel: "Press me", in: after.output) == ref,
+                    "the button's ref changed when an unrelated node re-rendered")
+        }
     }
 
     /// The other half of the security posture, proven against a live browser rather than
@@ -140,23 +158,22 @@ struct RealBrowserE2ETests {
         try server.start()
         defer { server.stop() }
 
-        let session = try await BrowserToolSession.launch(headless: true, port: nil)
-        defer { Task { await session.shutdown() } }
+        try await withHeadlessBrowser { session in
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
 
-        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
-        #expect(opened.isError != true, "open failed: \(opened.output)")
+            let navigated = await session.run(
+                "page_navigate",
+                arguments: ["action": "goto", "url": "file://\(secret.path)"])
+            #expect(navigated.isError == true, "page_navigate accepted a file:// URL")
+            #expect(navigated.output.contains("file://"))
+            #expect(!navigated.output.contains("SECRET-CANARY"))
 
-        let navigated = await session.run(
-            "page_navigate",
-            arguments: ["action": "goto", "url": "file://\(secret.path)"])
-        #expect(navigated.isError == true, "page_navigate accepted a file:// URL")
-        #expect(navigated.output.contains("file://"))
-        #expect(!navigated.output.contains("SECRET-CANARY"))
-
-        // And the tab is still on the page it was on, not on the file.
-        let after = await session.run("manage_tabs", arguments: ["action": "list"])
-        #expect(!after.output.contains(secret.path))
-        #expect(!after.output.contains("SECRET-CANARY"))
+            // And the tab is still on the page it was on, not on the file.
+            let after = await session.run("manage_tabs", arguments: ["action": "list"])
+            #expect(!after.output.contains(secret.path))
+            #expect(!after.output.contains("SECRET-CANARY"))
+        }
     }
 
 
@@ -171,26 +188,25 @@ struct RealBrowserE2ETests {
         try Data("hello!".utf8).write(to: payload)
         defer { try? FileManager.default.removeItem(at: payload) }
 
-        let session = try await BrowserToolSession.launch(headless: true, port: nil)
-        defer { Task { await session.shutdown() } }
+        try await withHeadlessBrowser { session in
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            let tabId = try #require(tabIdentifier(opened))
 
-        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
-        #expect(opened.isError != true, "open failed: \(opened.output)")
-        let tabId = try #require(tabIdentifier(opened))
+            let stale = await session.run("page_upload", arguments: ["aloha_id": "zzzz999", "paths": [payload.path]])
+            #expect(stale.isError == true, "a stale id was accepted: \(stale.output)")
+            #expect(stale.output.contains("zzzz999"))
+            #expect(stale.output.lowercased().contains("read"))
 
-        let stale = await session.run("page_upload", arguments: ["aloha_id": "zzzz999", "paths": [payload.path]])
-        #expect(stale.isError == true, "a stale id was accepted: \(stale.output)")
-        #expect(stale.output.contains("zzzz999"))
-        #expect(stale.output.lowercased().contains("read"))
+            let zoneId = try #require(alohaId(forLabel: "Drop files here", in: opened.output),
+                                      "the dropzone carried no aloha-id:\n\(opened.output)")
+            let onZone = await session.run("page_upload", arguments: ["aloha_id": zoneId, "paths": [payload.path]])
+            #expect(onZone.isError == true, "an element holding no file input was accepted: \(onZone.output)")
+            #expect(onZone.output.contains(zoneId))
 
-        let zoneId = try #require(alohaId(forLabel: "Drop files here", in: opened.output),
-                                  "the dropzone carried no aloha-id:\n\(opened.output)")
-        let onZone = await session.run("page_upload", arguments: ["aloha_id": zoneId, "paths": [payload.path]])
-        #expect(onZone.isError == true, "an element holding no file input was accepted: \(onZone.output)")
-        #expect(onZone.output.contains(zoneId))
-
-        let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
-        #expect(after.output.contains("no-change-yet"), "a refused upload still reached a file input:\n\(after.output)")
+            let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+            #expect(after.output.contains("no-change-yet"), "a refused upload still reached a file input:\n\(after.output)")
+        }
     }
 
     @Test func uploadAttachesToTheNamedInputAndFiresOneChange() async throws {
@@ -204,24 +220,23 @@ struct RealBrowserE2ETests {
         try Data("hello!".utf8).write(to: payload)
         defer { try? FileManager.default.removeItem(at: payload) }
 
-        let session = try await BrowserToolSession.launch(headless: true, port: nil)
-        defer { Task { await session.shutdown() } }
+        try await withHeadlessBrowser { session in
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            let tabId = try #require(tabIdentifier(opened))
+            let betaId = try #require(alohaId(forLabel: "beta upload", in: opened.output),
+                                      "the second file input carried no aloha-id:\n\(opened.output)")
 
-        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
-        #expect(opened.isError != true, "open failed: \(opened.output)")
-        let tabId = try #require(tabIdentifier(opened))
-        let betaId = try #require(alohaId(forLabel: "beta upload", in: opened.output),
-                                  "the second file input carried no aloha-id:\n\(opened.output)")
+            let uploaded = await session.run("page_upload", arguments: ["aloha_id": betaId, "paths": [payload.path]])
+            #expect(uploaded.isError != true, "upload failed: \(uploaded.output)")
+            #expect(uploaded.output.contains(betaId))
 
-        let uploaded = await session.run("page_upload", arguments: ["aloha_id": betaId, "paths": [payload.path]])
-        #expect(uploaded.isError != true, "upload failed: \(uploaded.output)")
-        #expect(uploaded.output.contains(betaId))
-
-        let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
-        let log = try #require(after.output.split(separator: "\n").first { $0.contains("file1!") || $0.contains("file2!") }
-            .map(String.init), "no change event reached the page:\n\(after.output)")
-        #expect(log.contains("file2!\(payload.lastPathComponent):6"), "the file did not land on the named input: \(log)")
-        #expect(!log.contains("|"), "one upload produced more than one change event: \(log)")
+            let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+            let log = try #require(after.output.split(separator: "\n").first { $0.contains("file1!") || $0.contains("file2!") }
+                .map(String.init), "no change event reached the page:\n\(after.output)")
+            #expect(log.contains("file2!\(payload.lastPathComponent):6"), "the file did not land on the named input: \(log)")
+            #expect(!log.contains("|"), "one upload produced more than one change event: \(log)")
+        }
     }
 
     @Test func uploadOnAWrapperLandsOnItsFileInputAndSaysSo() async throws {
@@ -235,25 +250,24 @@ struct RealBrowserE2ETests {
         try Data("hello!".utf8).write(to: payload)
         defer { try? FileManager.default.removeItem(at: payload) }
 
-        let session = try await BrowserToolSession.launch(headless: true, port: nil)
-        defer { Task { await session.shutdown() } }
+        try await withHeadlessBrowser { session in
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            let tabId = try #require(tabIdentifier(opened))
+            let wrapId = try #require(alohaId(forLabel: "Choose a file", in: opened.output),
+                                      "the wrapper carried no aloha-id:\n\(opened.output)")
 
-        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
-        #expect(opened.isError != true, "open failed: \(opened.output)")
-        let tabId = try #require(tabIdentifier(opened))
-        let wrapId = try #require(alohaId(forLabel: "Choose a file", in: opened.output),
-                                  "the wrapper carried no aloha-id:\n\(opened.output)")
+            let uploaded = await session.run("page_upload", arguments: ["aloha_id": wrapId, "paths": [payload.path]])
+            #expect(uploaded.isError != true, "upload failed: \(uploaded.output)")
+            #expect(uploaded.output.contains("the file input") && uploaded.output.contains("inside element \"\(wrapId)\""),
+                    "the receipt did not name the input the file landed on: \(uploaded.output)")
 
-        let uploaded = await session.run("page_upload", arguments: ["aloha_id": wrapId, "paths": [payload.path]])
-        #expect(uploaded.isError != true, "upload failed: \(uploaded.output)")
-        #expect(uploaded.output.contains("the file input") && uploaded.output.contains("inside element \"\(wrapId)\""),
-                "the receipt did not name the input the file landed on: \(uploaded.output)")
-
-        let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
-        let log = try #require(after.output.split(separator: "\n").first { $0.contains("file3!") }.map(String.init),
-                               "the file did not land on the wrapper's own input:\n\(after.output)")
-        #expect(log.contains("file3!\(payload.lastPathComponent):6"), "the file did not land on the wrapper's input: \(log)")
-        #expect(!log.contains("|"), "one upload produced more than one change event: \(log)")
+            let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+            let log = try #require(after.output.split(separator: "\n").first { $0.contains("file3!") }.map(String.init),
+                                   "the file did not land on the wrapper's own input:\n\(after.output)")
+            #expect(log.contains("file3!\(payload.lastPathComponent):6"), "the file did not land on the wrapper's input: \(log)")
+            #expect(!log.contains("|"), "one upload produced more than one change event: \(log)")
+        }
     }
 
     @Test func aContentEditableHostCarriesARefAndCanBeTypedInto() async throws {
@@ -263,26 +277,25 @@ struct RealBrowserE2ETests {
         try server.start()
         defer { server.stop() }
 
-        let session = try await BrowserToolSession.launch(headless: true, port: nil)
-        defer { Task { await session.shutdown() } }
+        try await withHeadlessBrowser { session in
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            let tabId = try #require(tabIdentifier(opened))
 
-        let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
-        #expect(opened.isError != true, "open failed: \(opened.output)")
-        let tabId = try #require(tabIdentifier(opened))
+            #expect(alohaId(forLabel: "plain editable", in: opened.output) != nil,
+                    "a contenteditable=\"true\" host carried no aloha-id:\n\(opened.output)")
+            let bareId = try #require(alohaId(forLabel: "bare editable", in: opened.output),
+                                      "a bare contenteditable host carried no aloha-id:\n\(opened.output)")
+            let nestedId = alohaId(forLabel: "nested bolded", in: opened.output)
+            #expect(nestedId == nil || nestedId == bareId,
+                    "an element INSIDE an editable host was given its own aloha-id:\n\(opened.output)")
 
-        #expect(alohaId(forLabel: "plain editable", in: opened.output) != nil,
-                "a contenteditable=\"true\" host carried no aloha-id:\n\(opened.output)")
-        let bareId = try #require(alohaId(forLabel: "bare editable", in: opened.output),
-                                  "a bare contenteditable host carried no aloha-id:\n\(opened.output)")
-        let nestedId = alohaId(forLabel: "nested bolded", in: opened.output)
-        #expect(nestedId == nil || nestedId == bareId,
-                "an element INSIDE an editable host was given its own aloha-id:\n\(opened.output)")
+            let typed = await session.run("page_type", arguments: ["aloha_id": bareId, "text": "TYPED-OK"])
+            #expect(typed.isError != true, "page_type into a contenteditable host failed: \(typed.output)")
 
-        let typed = await session.run("page_type", arguments: ["aloha_id": bareId, "text": "TYPED-OK"])
-        #expect(typed.isError != true, "page_type into a contenteditable host failed: \(typed.output)")
-
-        let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
-        #expect(after.output.contains("TYPED-OK"), "the text did not land:\n\(after.output)")
+            let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+            #expect(after.output.contains("TYPED-OK"), "the text did not land:\n\(after.output)")
+        }
     }
 
     // MARK: - Reading the tool's own output
