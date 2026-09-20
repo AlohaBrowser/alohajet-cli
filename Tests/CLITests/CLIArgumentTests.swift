@@ -175,6 +175,20 @@ struct CLIArgumentTests {
         #expect(!run.stderr.contains("--browser expects"))
     }
 
+    /// `ALOHAJET_BROWSER` naming something that is not an executable used to fall through
+    /// to whatever Chrome the machine happens to have — so a typo'd path ran a browser
+    /// with a different profile, different extensions and a different user agent, and
+    /// said nothing. It fails, and it names the variable and the path.
+    @Test func anUnusableBrowserPathFailsInsteadOfLaunchingAnotherBrowser() throws {
+        let run = try runCLI(
+            ["--launch", "tabs"],
+            environment: ["ALOHAJET_BROWSER": "/nonexistent/chrome"], timeout: 60)
+        #expect(run.status == 3, "exited \(run.status): \(run.combined)")
+        #expect(run.stderr.contains("ALOHAJET_BROWSER"), "\(run.combined)")
+        #expect(run.stderr.contains("/nonexistent/chrome"), "\(run.combined)")
+        #expect(!run.stderr.contains("downloading"), "\(run.combined)")
+    }
+
     // MARK: - The one command that never opens a browser
 
     /// `quit` goes to the recorded browser, not through `connect`. With a private TMPDIR

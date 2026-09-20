@@ -48,6 +48,8 @@ enum MCPRelay {
             return error.code
         }
 
+        noteEndpointWithoutToken(endpoint)
+
         // The server lane's rule holds here too: a host that closes the pipe must end
         // this at EOF, not kill us mid-write.
         signal(SIGPIPE, SIG_IGN)
@@ -77,8 +79,17 @@ enum MCPRelay {
     /// disconnected value rather than a main-actor-isolated one (this target's default
     /// isolation), which the compiler refuses to send across actors.
     static nonisolated func run(endpoint: URL) async throws {
+        // `URLSessionConfiguration.default`'s 60 s idle timer is a deadline nobody here
+        // chose, and the app holds the POST open for the WHOLE tool call without a
+        // keepalive — so a page that takes a minute to wake killed the session and threw
+        // away work that had already happened. This process is a PIPE: the honest
+        // deadline is the MCP host's own, and every host has one. A refused connection
+        // is not a timeout, so "the browser is not running" still fails instantly.
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 600
         let upstream = HTTPClientTransport(
             endpoint: endpoint.appendingPathComponent("mcp"),
+            configuration: configuration,
             // Request/response only: the browser-control tools never push
             // server-initiated messages, so the standing GET SSE stream the streaming
             // mode opens would be a connection held open for nothing.
@@ -145,7 +156,7 @@ enum MCPRelay {
         }
         guard scheme == "https" || AutomationToken.isLoopback(url) else {
             return .failure(CLIError(message: """
-                --endpoint must be loopback http or https — got \"\(raw)\".
+                --endpoint must be http to a loopback address, or https to anywhere — got \"\(raw)\".
                   Every frame this relays drives the browser, and the bearer token it sends
                   grants full control of it; neither goes over plaintext to a remote host.
                 """, code: exitUsage))

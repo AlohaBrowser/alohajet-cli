@@ -111,6 +111,49 @@ struct MCPRelayLaneTests {
         #expect(run.stderr.contains("http(s) URL"), "\(run.combined)")
     }
 
+    /// The counterpart to the refusals above, stated rather than assumed: https to a host
+    /// that is NOT this machine is ALLOWED — it is the port-forward and second-machine
+    /// case the flag exists for, and TLS covers the wire. `.invalid` is reserved by
+    /// RFC 2606, so this reaches DNS and nothing else: the endpoint is accepted (the run
+    /// gets as far as the transport and fails there, 3) rather than refused as usage (2).
+    @Test func aRemoteHttpsEndpointIsAllowed() throws {
+        let run = try runCLI(
+            ["mcp", "--endpoint", "https://alohajet-no-such-host.invalid:8765"],
+            stdin: Self.toolsCall, environment: Self.pinnedToken, timeout: 60)
+        #expect(run.status == 3, "exited \(run.status): \(run.combined)")
+        #expect(!run.stderr.contains("loopback"), "\(run.combined)")
+    }
+
+    /// The ambient token on disk is the browser's and never leaves this machine
+    /// (`AutomationTokenTests` pins the reader). An endpoint somewhere else therefore
+    /// gets no credential at all unless one was named, and a bare 401 reads as a broken
+    /// token rather than as the rule it is — so the rule is stated once, on stderr,
+    /// which is the only stream the JSON-RPC channel is not.
+    @Test func aRemoteEndpointWithNoNamedTokenSaysSo() throws {
+        let run = try runCLI(
+            ["mcp", "--endpoint", "https://alohajet-no-such-host.invalid:8765"],
+            stdin: Self.toolsCall, environment: ["ALOHAJET_AGENT_TOKEN": ""], timeout: 60)
+        #expect(run.stderr.contains("ALOHAJET_AGENT_TOKEN"), "\(run.combined)")
+        #expect(run.stdout.isEmpty, "a note reached the protocol channel: \(run.stdout)")
+    }
+
+    /// A tool call the browser takes minutes over is a normal tool call — a page that is
+    /// slow to wake, a navigation that hangs — and the client's own deadline is the one
+    /// that should end it. Under `URLSessionConfiguration.default`'s 60 s idle timer the
+    /// relay instead dropped the WHOLE session, discarding work that had completed.
+    @Test func aCallSlowerThanTheDefaultTimeoutDoesNotEndTheSession() throws {
+        let stub = AgentStubServer(hold: 62)
+        try stub.start()
+        defer { stub.stop() }
+
+        let run = try runCLI(
+            ["mcp", "--endpoint", stub.url],
+            stdin: Self.toolsCall, environment: Self.pinnedToken, timeout: 180)
+
+        #expect(run.status == 0, "exited \(run.status): \(run.combined)")
+        #expect(!run.stderr.contains("timed out"), "\(run.combined)")
+    }
+
     /// The relay is the only reason a Claude Desktop user has a working entry at all, so
     /// its shape has to be discoverable from the CLI itself.
     @Test func theHelpPageDocumentsBothLanes() throws {
@@ -118,5 +161,6 @@ struct MCPRelayLaneTests {
         #expect(run.status == 0)
         #expect(run.stdout.contains("--endpoint"))
         #expect(run.stdout.contains("Claude Desktop"))
+        #expect(run.stdout.contains("https"))
     }
 }

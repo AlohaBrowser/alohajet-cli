@@ -265,7 +265,10 @@ The bearer token is read per run, not pasted: `ALOHAJET_AGENT_TOKEN`, else the b
 own `~/Library/Application Support/Aloha/automation-token` — and that ambient file is sent
 to a loopback endpoint only, which is the same rule `-p` follows. Plaintext `http` to
 anywhere but this machine is refused outright (exit 2), since every frame on this pipe
-drives the browser. Both halves use the official MCP SDK's own transports, because the
+drives the browser. `https` to a host that is NOT this machine IS allowed — a port
+forward, a second machine — and TLS covers the wire; what such a host gets is no
+credential at all unless `ALOHAJET_AGENT_TOKEN` names one, and `alohajet` says so on
+stderr when it does not. Both halves use the official MCP SDK's own transports, because the
 server end validates `Accept: application/json, text/event-stream`, answers over SSE and
 issues a session id that has to be replayed as `Mcp-Session-Id`.
 
@@ -501,7 +504,7 @@ Every variable the sources actually read, checked with
 
 | variable | default | effect |
 |---|---|---|
-| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. Unset and with no system Chrome, **Chrome for Testing 126.0.6478.126 is downloaded on first use** — a 145 MB zip, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing`. There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
+| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. A path that is not an executable file is an error (exit 3), never a quiet fall-through to another browser. Unset and with no system Chrome, **Chrome for Testing 126.0.6478.126 is downloaded on first use** — a 145 MB zip, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing`. There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
 | `ALOHAJET_NETWORK_LOG` | off | a directory (or `1` for a temp dir) to record each agent-opened tab's requests as JSONL, `0600` in a `0700` directory. Read the limitation below before trusting it. |
 | `ALOHAJET_CREDENTIAL_GUARD` | off | `1` makes `page_type` refuse to type into a field it classifies as a credential field. Password-field *masking on read* is always on and is not controlled by this. |
 | `ALOHAJET_MARKDOWN_URLS` | off | `1` includes each link's `href`: `[Learn more](https://iana.org/domains/example) {aloha-id="719a97a0" a}` |
@@ -511,8 +514,8 @@ Every variable the sources actually read, checked with
 | `ALOHAJET_CHROME_USER_AGENT` | Chrome's own | override the user agent of a browser alohajet launches. See the HeadlessChrome limitation below. |
 | `ALOHAJET_DEBUG` | off | protocol chatter to stderr |
 | `ALOHA_CDP_PORT` | `9222` | where `--browser aloha` looks for the Aloha browser's CDP listener |
-| `ALOHA_BROWSER_APP` | registered install | path to the Aloha `.app` that `--browser aloha` launches |
-| `ALOHAJET_AGENT_TOKEN` | read from disk | the bearer token `-p` sends to `--endpoint`. Unset, it is read from `~/Library/Application Support/Aloha/automation-token`. Absent entirely, no `Authorization` header is sent and the endpoint answers 401 — never a silent unauthenticated retry. |
+| `ALOHA_BROWSER_APP` | the `.app` this binary ships inside | path to the Aloha `.app` that `--browser aloha` launches. Unset, the lane launches the bundle this executable sits in — never another registered copy, which would be a second instance on one profile. |
+| `ALOHAJET_AGENT_TOKEN` | read from disk | the bearer token `-p` sends to `--endpoint`. Unset, it is read from `~/Library/Application Support/Aloha/automation-token` — but that ambient file is sent to a loopback endpoint ONLY, so a remote `https` endpoint is reachable and gets a token only from this variable. Absent entirely, no `Authorization` header is sent and the endpoint answers 401 — never a silent unauthenticated retry. |
 
 ## Limitations
 

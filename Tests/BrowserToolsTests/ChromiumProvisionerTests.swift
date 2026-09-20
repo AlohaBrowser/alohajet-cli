@@ -150,25 +150,47 @@ struct ChromiumProvisionerTests {
     #expect(extractor.calls.isEmpty)
 }
 
-@Test func explicitButMissingBrowserPathFallsThroughToSystem() async throws {
+// Naming a browser is a deliberate act and the browser's identity is load-bearing — a
+// different profile, different extensions, a different user agent. Running another one
+// instead makes every observation of the run a lie about which browser produced it.
+@Test func explicitButMissingBrowserPathIsAnError() async throws {
     let downloader = CountingDownloader()
     let probe = ScriptedProbe()
     let system = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     // Explicit path NOT present; system path is.
     probe.add(system)
 
+    #expect(throws: ChromiumProvisionerError.browserPathNotExecutable("/does/not/exist/chrome")) {
+        _ = try ChromiumProvisioner(
+            browserPath: "/does/not/exist/chrome",
+            cacheRoot: "/cache",
+            platformKey: .macArm64,
+            systemDefaultPath: system,
+            download: downloader.make(),
+            extract: RecordingExtractor().make(),
+            executableExists: probe.make())
+    }
+    #expect(downloader.callCount == 0)
+    #expect(ChromiumProvisionerError.browserPathNotExecutable("/does/not/exist/chrome")
+        .description.contains("ALOHAJET_BROWSER"))
+}
+
+/// An empty value is not a choice of browser, so it stays the same as naming none.
+@Test func anEmptyBrowserPathIsNotAnError() async throws {
+    let probe = ScriptedProbe()
+    let system = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    probe.add(system)
+
     let p = try ChromiumProvisioner(
-        browserPath: "/does/not/exist/chrome",
+        browserPath: "",
         cacheRoot: "/cache",
         platformKey: .macArm64,
         systemDefaultPath: system,
-        download: downloader.make(),
+        download: CountingDownloader().make(),
         extract: RecordingExtractor().make(),
         executableExists: probe.make())
 
-    let resolved = try await p.resolveExecutablePath()
-    #expect(resolved == system)
-    #expect(downloader.callCount == 0)
+    #expect(try await p.resolveExecutablePath() == system)
 }
 
 // MARK: - (c) Cached binary short-circuits download
