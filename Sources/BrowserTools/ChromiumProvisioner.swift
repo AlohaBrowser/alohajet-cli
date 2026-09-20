@@ -74,12 +74,12 @@ public nonisolated struct ChromiumBuildTable: Sendable, Equatable {
     }
 
     public static let pinned = ChromiumBuildTable(
-        version: "126.0.6478.126",
+        version: "153.0.8010.52",
         downloads: [
-            .macArm64: "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/mac-arm64/chrome-mac-arm64.zip",
-            .macX64: "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/mac-x64/chrome-mac-x64.zip",
-            .linuxX64: "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/linux64/chrome-linux64.zip",
-            .windowsX64: "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/win64/chrome-win64.zip",
+            .macArm64: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-arm64/chrome-mac-arm64.zip",
+            .macX64: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-x64/chrome-mac-x64.zip",
+            .linuxX64: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/linux64/chrome-linux64.zip",
+            .windowsX64: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/win64/chrome-win64.zip",
         ]
     )
 

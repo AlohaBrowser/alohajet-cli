@@ -138,11 +138,11 @@ jobs:
           merge-multiple: true
 
       # ONE SHA256SUMS for the whole release, in the format `sha256sum -c` reads, so
-      # the install script can verify with a stock tool and no jq.
+      # a download can be verified with a stock tool and no jq.
       - name: Checksums
         run: cd dist && sha256sum *.tar.gz | tee SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dist/*.tar.gz

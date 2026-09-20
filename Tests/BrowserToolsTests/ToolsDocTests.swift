@@ -122,7 +122,7 @@ func renderToolsDoc() -> String {
              Source: Sources/BrowserTools/Tools/Schemas.swift
              Regenerate: ALOHAJET_REGEN_DOCS=1 swift test --filter ToolsDoc -->
 
-        The nine tools alohajet exposes, rendered from the package's own schema registry,
+        The tools alohajet exposes, rendered from the package's own schema registry,
         so this page cannot drift from what the MCP server actually advertises. Descriptions
         below are the exact text the model is given.
 
@@ -137,7 +137,7 @@ func renderToolsDoc() -> String {
     let schemas = getNativeAgentToolSchemas()
     for schema in schemas {
         let readOnly = nativeAgentToolReadOnlyHints[schema.name] ?? false
-        out += "| [`\(schema.name)`](#\(schema.name.replacingOccurrences(of: "_", with: ""))) | "
+        out += "| [`\(schema.name)`](#\(schema.name)) | "
             + (readOnly ? "read-only" : "drives the page") + " |\n"
     }
 

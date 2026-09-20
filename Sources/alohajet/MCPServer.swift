@@ -133,7 +133,7 @@ enum MCPServer {
 
     // MARK: - tools/list
 
-    /// The eight tools, with name, description and `inputSchema` taken verbatim from the
+    /// The tools, with name, description and `inputSchema` taken verbatim from the
     /// package's own registry — `Schemas.swift` is the single source of truth and nothing
     /// is re-authored here. Its `inputSchema` is already JSON Schema in `JSValue` form, so
     /// the adapter this was budgeted for turned out to be the identity function.

@@ -46,7 +46,7 @@ of those is expanded, with the reproduction, under [Limitations](#limitations).
 | Swift | 6.2 or newer |
 | OS | macOS 14+. Everything on this page was run on macOS 26.2 (arm64), Swift 6.2.3, Google Chrome 152.0.7977.77. |
 | Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. |
-| Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 145 MB Chrome for Testing 126 is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
+| Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 145 MB Chrome for Testing is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
 | Python 3 | only to serve the fixture pages in [The proof](#the-proof) and [docs/demo.md](docs/demo.md). |
 | Dependencies | none in the four library products (`BrowserTools`, `AgentDriver`, `CDP`, `ToolABI`) — Foundation only, no vendored tree. One in the `alohajet` executable: the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) (`from: "0.12.1"`), which `mcp --endpoint` relays over and nothing else uses. A consumer linking the libraries resolves it and compiles none of it. |
 
@@ -504,7 +504,7 @@ Every variable the sources actually read, checked with
 
 | variable | default | effect |
 |---|---|---|
-| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. A path that is not an executable file is an error (exit 3), never a quiet fall-through to another browser. Unset and with no system Chrome, **Chrome for Testing 126.0.6478.126 is downloaded on first use** — a 145 MB zip, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing`. There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
+| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. A path that is not an executable file is an error (exit 3), never a quiet fall-through to another browser. Unset and with no system Chrome, **Chrome for Testing 153.0.8010.52 is downloaded on first use** — a 145 MB zip, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing`. There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
 | `ALOHAJET_NETWORK_LOG` | off | a directory (or `1` for a temp dir) to record each agent-opened tab's requests as JSONL, `0600` in a `0700` directory. Read the limitation below before trusting it. |
 | `ALOHAJET_CREDENTIAL_GUARD` | off | `1` makes `page_type` refuse to type into a field it classifies as a credential field. Password-field *masking on read* is always on and is not controlled by this. |
 | `ALOHAJET_MARKDOWN_URLS` | off | `1` includes each link's `href`: `[Learn more](https://iana.org/domains/example) {aloha-id="719a97a0" a}` |

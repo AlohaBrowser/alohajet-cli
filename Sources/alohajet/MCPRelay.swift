@@ -147,7 +147,7 @@ enum MCPRelay {
                   With it, `alohajet mcp` relays stdio to the MCP server the Aloha browser
                   already runs at that URL (POST /mcp) — it serves no tools of its own and
                   launches no browser. Without it, `alohajet mcp` is this package's own MCP
-                  server over the nine tools.
+                  server over this package's own tools.
                 """, code: exitUsage))
         }
         guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(),

@@ -8,7 +8,7 @@ import Darwin
 import Glibc
 #endif
 
-// This file is the one place a browser, a CDP client, a tabs service, and the eight tools
+// This file is the one place a browser, a CDP client, a tabs service, and the tools
 // are wired into something that can execute a call. The CLI and the MCP server are front
 // ends over `BrowserToolSession.run`; neither builds any of this itself.
 
@@ -73,7 +73,7 @@ public struct AgentOwnedTabs: Sendable {
     }
 }
 
-/// A live browser plus the eight tools wired to drive it.
+/// A live browser plus the tools wired to drive it.
 ///
 /// Build one with ``launch(executablePath:headless:port:userDataDir:profileDirectory:sessionId:networkLogDirectory:webExtractionOptions:)``
 /// (this process owns the browser) or ``attach(webSocketURL:sessionId:networkLogDirectory:webExtractionOptions:)``
@@ -500,7 +500,7 @@ public struct AgentOwnedTabs: Sendable {
 
     // MARK: - ExecutorSession
     //
-    // Chat-transcript surface. None of the eight tools touches it (they never call
+    // Chat-transcript surface. None of the tools touches it (they never call
     // `context.updateToolResult`), and there is no transcript here to mutate, so every
     // member is inert by design rather than unimplemented.
 

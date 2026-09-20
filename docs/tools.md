@@ -4,7 +4,7 @@
      Source: Sources/BrowserTools/Tools/Schemas.swift
      Regenerate: ALOHAJET_REGEN_DOCS=1 swift test --filter ToolsDoc -->
 
-The nine tools alohajet exposes, rendered from the package's own schema registry,
+The tools alohajet exposes, rendered from the package's own schema registry,
 so this page cannot drift from what the MCP server actually advertises. Descriptions
 below are the exact text the model is given.
 
@@ -14,15 +14,15 @@ prints next to each actionable element; see [Stable element refs](../README.md#s
 
 | tool | reads or writes |
 | --- | --- |
-| [`manage_tabs`](#managetabs) | drives the page |
-| [`page_click`](#pageclick) | drives the page |
-| [`page_type`](#pagetype) | drives the page |
-| [`page_select`](#pageselect) | drives the page |
-| [`get_text`](#gettext) | read-only |
-| [`page_navigate`](#pagenavigate) | drives the page |
-| [`page_press_keys`](#pagepresskeys) | drives the page |
-| [`page_wait_for`](#pagewaitfor) | read-only |
-| [`page_upload`](#pageupload) | drives the page |
+| [`manage_tabs`](#manage_tabs) | drives the page |
+| [`page_click`](#page_click) | drives the page |
+| [`page_type`](#page_type) | drives the page |
+| [`page_select`](#page_select) | drives the page |
+| [`get_text`](#get_text) | read-only |
+| [`page_navigate`](#page_navigate) | drives the page |
+| [`page_press_keys`](#page_press_keys) | drives the page |
+| [`page_wait_for`](#page_wait_for) | read-only |
+| [`page_upload`](#page_upload) | drives the page |
 
 ---
 

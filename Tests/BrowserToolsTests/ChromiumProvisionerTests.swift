@@ -91,22 +91,22 @@ struct ChromiumProvisionerTests {
 
 @Test func resolvesDownloadURLForMacArm64() throws {
     let p = try ChromiumProvisioner(platformKey: .macArm64)
-    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/mac-arm64/chrome-mac-arm64.zip")
+    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-arm64/chrome-mac-arm64.zip")
 }
 
 @Test func resolvesDownloadURLForMacX64() throws {
     let p = try ChromiumProvisioner(platformKey: .macX64)
-    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/mac-x64/chrome-mac-x64.zip")
+    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-x64/chrome-mac-x64.zip")
 }
 
 @Test func resolvesDownloadURLForLinuxX64() throws {
     let p = try ChromiumProvisioner(platformKey: .linuxX64)
-    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/linux64/chrome-linux64.zip")
+    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/linux64/chrome-linux64.zip")
 }
 
 @Test func resolvesDownloadURLForWindowsX64() throws {
     let p = try ChromiumProvisioner(platformKey: .windowsX64)
-    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/win64/chrome-win64.zip")
+    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/win64/chrome-win64.zip")
 }
 
 // MARK: - (d) Extract / staged-path computation
@@ -115,15 +115,15 @@ struct ChromiumProvisionerTests {
     let root = "/cache"
 
     let mac = try ChromiumProvisioner(cacheRoot: root, platformKey: .macArm64)
-    #expect(mac.stagedRootDir() == "/cache/126.0.6478.126/mac-arm64")
+    #expect(mac.stagedRootDir() == "/cache/153.0.8010.52/mac-arm64")
     #expect(mac.stagedExecutablePath()
-        == "/cache/126.0.6478.126/mac-arm64/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+        == "/cache/153.0.8010.52/mac-arm64/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
 
     let linux = try ChromiumProvisioner(cacheRoot: root, platformKey: .linuxX64)
-    #expect(linux.stagedExecutablePath() == "/cache/126.0.6478.126/linux64/chrome-linux64/chrome")
+    #expect(linux.stagedExecutablePath() == "/cache/153.0.8010.52/linux64/chrome-linux64/chrome")
 
     let win = try ChromiumProvisioner(cacheRoot: root, platformKey: .windowsX64)
-    #expect(win.stagedExecutablePath() == "/cache/126.0.6478.126/win64/chrome-win64/chrome.exe")
+    #expect(win.stagedExecutablePath() == "/cache/153.0.8010.52/win64/chrome-win64/chrome.exe")
 }
 
 // MARK: - (b) Explicit browserPath short-circuits download
@@ -266,7 +266,7 @@ struct ChromiumProvisionerTests {
     #expect(resolved == p.stagedExecutablePath())
     #expect(downloader.callCount == 1)
     #expect(downloader.lastURL?.absoluteString
-        == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/linux64/chrome-linux64.zip")
+        == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/linux64/chrome-linux64.zip")
     #expect(extractor.calls.count == 1)
     // The archive must have been staged under (a child of) the cache root and
     // extracted into the staged root dir.
