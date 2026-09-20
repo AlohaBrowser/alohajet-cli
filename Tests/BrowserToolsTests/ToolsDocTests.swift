@@ -12,7 +12,7 @@ import ToolABI
 //
 //     ALOHAJET_REGEN_DOCS=1 swift test --filter ToolsDoc
 //
-// ponytail: a golden-file test, not a build plugin. It runs in the suite that already
+// KNOWN CEILING: a golden-file test, not a build plugin. It runs in the suite that already
 // has to pass, and it needs no new target.
 
 @Suite("ToolsDoc") struct ToolsDocTests {

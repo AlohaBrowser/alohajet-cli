@@ -94,7 +94,7 @@ a day old.
 As a library:
 
 ```swift
-.package(url: "https://github.com/AlohaBrowser/alohajet-cli.git", from: "0.4.3")
+.package(url: "https://github.com/AlohaBrowser/alohajet-cli.git", exact: "0.4.4")
 .product(name: "BrowserTools", package: "alohajet-cli")
 ```
 
@@ -232,7 +232,7 @@ that browser:
 }
 ```
 
-A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.4.3"}`, and
+A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.4.4"}`, and
 `tools/list` returns the tools below with `readOnlyHint=true` on exactly two,
 `get_text` and `page_wait_for`. The hint is per tool, not per call, so `manage_tabs` is
 false even though its `list` and `read` actions only observe. `manage_tabs` with

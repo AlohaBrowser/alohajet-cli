@@ -20,7 +20,7 @@ import Glibc
 // localhost debug interface answering a tiny GET, and one path exercised everywhere
 // beats two where each is only ever tested on one platform.
 
-public enum CDPJSONEndpointError: Error, CustomStringConvertible, Sendable {
+enum CDPJSONEndpointError: Error, CustomStringConvertible, Sendable {
     case invalidHost(String)
     case invalidPort(Int)
     case socketCreationFailed(errno: Int32)

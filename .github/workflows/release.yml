@@ -19,8 +19,10 @@ on:
         required: true
         type: string
 
+# The floor every job inherits: the build matrix only checks out and uploads artifacts.
+# Writing the release is the `publish` job's business, and it restates what it needs.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -112,7 +114,11 @@ jobs:
           # The tag names the tarball; Sources/alohajet/Version.swift is what the binary
           # reports through --version and MCP serverInfo. They are two statements of one
           # fact, so a mismatch ships a binary that lies about which release it is.
-          declared="$(sed -n 's/^public let alohajetVersion = "\(.*\)"$/\1/p' Sources/alohajet/Version.swift)"
+          declared="$(sed -n 's/^\(public \)*let alohajetVersion = "\(.*\)"$/\2/p' Sources/alohajet/Version.swift)"
+          if [ -z "$declared" ]; then
+            echo "could not read alohajetVersion out of Sources/alohajet/Version.swift" >&2
+            exit 1
+          fi
           if [ "${version#v}" != "$declared" ]; then
             echo "tag ${version} and Version.swift ${declared} disagree — bump the constant in the commit you tag" >&2
             exit 1
@@ -163,7 +169,10 @@ jobs:
       # Nothing here is signed or notarized, so provenance is the only thing a downloader
       # can check: a Sigstore attestation, verifiable with `gh attestation verify`, that
       # binds each asset to this workflow, this repository and this commit.
-      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+      # The SHA is the COMMIT the v3 tag points at, not the annotated tag object's own
+      # SHA — `uses:` resolves a commit, and a tag-object SHA fails the checkout with
+      # "unable to resolve action".
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: |
             dist/*.tar.gz

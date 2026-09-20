@@ -29,7 +29,7 @@ struct OpenUrlValidationTests {
         "file://localhost/etc/passwd",
     ])
     func fileIsRejected(_ url: String) {
-        #expect(validateOpenUrl(url) == .rejected(reason: URL_FILE_PROTOCOL_REASON))
+        #expect(validateOpenUrl(url) == .rejected(reason: urlFileProtocolReason))
     }
 
     @Test("no other scheme reaches the browser", arguments: [
@@ -52,7 +52,7 @@ struct OpenUrlValidationTests {
             return
         }
         // Either the bad-protocol message or the malformed one — never `.ok`.
-        #expect(reason != URL_FILE_PROTOCOL_REASON)
+        #expect(reason != urlFileProtocolReason)
     }
 
     @Test("http and https pass", arguments: [
@@ -72,7 +72,7 @@ struct OpenUrlValidationTests {
     /// The scheme is normalized to lower case before the comparison, so an upper-case
     /// `HTTP:` cannot slip past a case-sensitive equality check.
     @Test func schemeComparisonIsCaseInsensitive() {
-        #expect(validateOpenUrl("HtTpS://example.com/") != .rejected(reason: URL_MALFORMED_REASON))
+        #expect(validateOpenUrl("HtTpS://example.com/") != .rejected(reason: urlMalformedReason))
     }
 
     // MARK: - Shape
@@ -82,7 +82,7 @@ struct OpenUrlValidationTests {
         "https://exa\u{0}mple.com/", "https://example.com/\u{1}", "https://example.com/\u{7f}",
     ])
     func malformedIsRejected(_ url: String) {
-        #expect(validateOpenUrl(url) == .rejected(reason: URL_MALFORMED_REASON))
+        #expect(validateOpenUrl(url) == .rejected(reason: urlMalformedReason))
     }
 
     /// Surrounding whitespace is trimmed BEFORE the control-character scan, so a URL
@@ -96,16 +96,16 @@ struct OpenUrlValidationTests {
     }
 
     @Test func nilIsMalformedNotACrash() {
-        #expect(validateOpenUrl(nil) == .rejected(reason: URL_MALFORMED_REASON))
+        #expect(validateOpenUrl(nil) == .rejected(reason: urlMalformedReason))
     }
 
     @Test func oversizedIsRejectedAtTheBoundary() {
-        let padding = String(repeating: "a", count: MAX_URL_LENGTH)
-        #expect(validateOpenUrl("https://example.com/" + padding) == .rejected(reason: URL_MALFORMED_REASON))
+        let padding = String(repeating: "a", count: maxUrlLength)
+        #expect(validateOpenUrl("https://example.com/" + padding) == .rejected(reason: urlMalformedReason))
         // One character under the cap still passes, so the cap is a cap and not an
         // accidental rejection of every long URL.
         let head = "https://example.com/"
-        let justUnder = head + String(repeating: "a", count: MAX_URL_LENGTH - head.count - 1)
+        let justUnder = head + String(repeating: "a", count: maxUrlLength - head.count - 1)
         guard case .ok = validateOpenUrl(justUnder) else {
             Issue.record("a URL one byte under the cap was rejected")
             return
@@ -117,15 +117,15 @@ struct OpenUrlValidationTests {
         "http://admin:hunter2@127.0.0.1:8080/",
     ])
     func credentialsAreRejected(_ url: String) {
-        #expect(validateOpenUrl(url) == .rejected(reason: URL_CREDENTIALS_REASON))
+        #expect(validateOpenUrl(url) == .rejected(reason: urlCredentialsReason))
     }
 
     // MARK: - The tab wrapper
 
     @Test func tabValidationIsTheSameFunction() {
         #expect(validateTabUrl(TabUrlInput(url: "file:///etc/hosts"))
-                == .rejected(reason: URL_FILE_PROTOCOL_REASON))
-        #expect(validateTabUrl(TabUrlInput(url: nil)) == .rejected(reason: URL_MALFORMED_REASON))
+                == .rejected(reason: urlFileProtocolReason))
+        #expect(validateTabUrl(TabUrlInput(url: nil)) == .rejected(reason: urlMalformedReason))
         guard case .ok = validateTabUrl(TabUrlInput(url: "https://example.com/")) else {
             Issue.record("a https tab was rejected")
             return

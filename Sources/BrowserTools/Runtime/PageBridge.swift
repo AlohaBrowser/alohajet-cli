@@ -623,7 +623,7 @@ public final class AgentBrowserBridge {
         if !consoleOutput.isEmpty {
             output += "\n\n\(consoleOutput)"
         }
-        if actionCollector != nil, !backend.isAborted {
+        if !backend.isAborted {
             await emitPostExecSnapshot(startedAt: startedAt)
         }
         return AgentActionResult(
@@ -1282,7 +1282,7 @@ public final class AgentBrowserBridge {
               if (!el) return { found: false };
               var tag = el.tagName;
               var inputType = (el.getAttribute('type') || 'text').toLowerCase();
-              var nonText = ['button','submit','reset','checkbox','radio','file','image','range','color','hidden'];
+              var nonText = ['button','checkbox','color','file','hidden','image','radio','range','reset','submit'];
               var accepts = (tag === 'TEXTAREA'
                   || (tag === 'INPUT' && nonText.indexOf(inputType) === -1)
                   || el.isContentEditable === true)
@@ -1555,7 +1555,7 @@ public final class AgentBrowserBridge {
     private func emulateKeyChordViaCdp(_ chord: ParsedKeyChord) async throws {
         try throwIfAborted()
         let combinedModifiers = chord.modifiers.reduce(0) { $0 | modifierBit($1) }
-        let modifierWithoutShift = (combinedModifiers & ~8) != 0
+        let modifierWithoutShift = (combinedModifiers & ~modifierBit("shift")) != 0
 
         let isSpecial = Self.specialKeyChordDescriptors[chord.key] != nil
         let isSingleChar = !isSpecial && chord.key.count == 1

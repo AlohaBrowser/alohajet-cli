@@ -81,10 +81,9 @@ import Foundation
     @Test func theDescriptionTellsTheModelItCanFillAWholeForm() {
         // A capability nothing advertises does not fire; that failure was found five separate times in one day.
         //
-        // Asserted against the REGISTRY the agent is actually handed, not against the source text. The sibling
-        // `get_text` test once grepped a source file for its wording, which passes even if
-        // the constant it finds is never wired into a schema the model receives — the exact gap that let a
-        // registered-but-unadvertised lever fire zero times.
+        // Asserted against the REGISTRY the agent is actually handed, not against the source text: a constant
+        // that says the right thing still advertises nothing if it is never wired into a schema the model
+        // receives — the exact gap that let a registered-but-unadvertised lever fire zero times.
         let schema = getNativeAgentToolSchemas().first { $0.name == "page_type" }
         #expect(schema != nil)
         let text = schema?.description ?? ""

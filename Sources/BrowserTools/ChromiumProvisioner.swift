@@ -65,29 +65,57 @@ public nonisolated func currentChromiumPlatformKey() throws -> ChromiumPlatformK
 /// NO `npx`/CDN discovery — the URLs are baked in so the target machine needs nothing but
 /// network access to the published archive.
 public nonisolated struct ChromiumBuildTable: Sendable, Equatable {
-    public let version: String
-    public let downloads: [ChromiumPlatformKey: String]
+    /// URL and digest for one platform, in one value: a URL cannot be bumped and leave a
+    /// stale digest behind, because there is nowhere for the two to disagree.
+    public struct Build: Sendable, Equatable {
+        public let url: String
+        public let sha256: String
 
-    public init(version: String, downloads: [ChromiumPlatformKey: String]) {
-        self.version = version
-        self.downloads = downloads
+        public init(url: String, sha256: String) {
+            self.url = url
+            self.sha256 = sha256
+        }
     }
 
+    public let version: String
+    public let builds: [ChromiumPlatformKey: Build]
+
+    public init(version: String, builds: [ChromiumPlatformKey: Build]) {
+        self.version = version
+        self.builds = builds
+    }
+
+    // The digests were computed from the published archives themselves. Google serves no
+    // SHA-256 for these: `x-goog-hash` carries a CRC32C and a base64 MD5, and neither is
+    // an integrity story for a 145 MB executable this package then runs. Recompute and
+    // replace all four whenever `version` moves.
     public static let pinned = ChromiumBuildTable(
         version: "153.0.8010.52",
-        downloads: [
-            .macArm64: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-arm64/chrome-mac-arm64.zip",
-            .macX64: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-x64/chrome-mac-x64.zip",
-            .linuxX64: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/linux64/chrome-linux64.zip",
-            .windowsX64: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/win64/chrome-win64.zip",
+        builds: [
+            .macArm64: Build(
+                url: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-arm64/chrome-mac-arm64.zip",
+                sha256: "6f67faa4b34dd551b53abb6fee24edeae470ab695b0b100ddc4885ff0be6724a"),
+            .macX64: Build(
+                url: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-x64/chrome-mac-x64.zip",
+                sha256: "01130a136cb492ff32a7253b2b8db9577bd3f7543574e2d7ce1a83ed1cbed3fd"),
+            .linuxX64: Build(
+                url: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/linux64/chrome-linux64.zip",
+                sha256: "e66f66d4802a46d4a022667e668aa950e277cadbfbed4b3777915b47413a0ef9"),
+            .windowsX64: Build(
+                url: "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/win64/chrome-win64.zip",
+                sha256: "df4854428c509fcf2f790ac448bca3f994151bcff22008236fa7c4587294fbe1"),
         ]
     )
 
-    public func url(for key: ChromiumPlatformKey) throws -> String {
-        guard let url = downloads[key] else {
+    public func build(for key: ChromiumPlatformKey) throws -> Build {
+        guard let build = builds[key] else {
             throw ChromiumProvisionerError.noDownloadForPlatform(key.rawValue)
         }
-        return url
+        return build
+    }
+
+    public func url(for key: ChromiumPlatformKey) throws -> String {
+        try build(for: key).url
     }
 }
 
@@ -97,6 +125,7 @@ public enum ChromiumProvisionerError: Error, Equatable, Sendable, CustomStringCo
     case archiveExtractionFailed(String)
     case executableNotFoundAfterExtract(String)
     case browserPathNotExecutable(String)
+    case archiveDigestMismatch(platform: String, expected: String, actual: String)
 
     public var description: String {
         switch self {
@@ -104,6 +133,9 @@ public enum ChromiumProvisionerError: Error, Equatable, Sendable, CustomStringCo
             return "no Chrome-for-Testing download for platform \(key)"
         case let .fetchFailed(detail):
             return "Chrome-for-Testing fetch failed: \(detail)"
+        case let .archiveDigestMismatch(platform, expected, actual):
+            return "Chrome-for-Testing archive for \(platform) failed its SHA-256 check: "
+                + "expected \(expected), got \(actual)"
         case let .archiveExtractionFailed(detail):
             return "Chrome-for-Testing archive extraction failed: \(detail)"
         case let .executableNotFoundAfterExtract(path):
@@ -225,8 +257,9 @@ public final class ChromiumProvisioner {
     /// Forces a download/extract/stage and returns the staged executable path.
     @discardableResult
     public func provision() async throws -> String {
-        guard let url = URL(string: try downloadURL()) else {
-            throw ChromiumProvisionerError.fetchFailed("invalid url \(try downloadURL())")
+        let build = try buildTable.build(for: platformKey)
+        guard let url = URL(string: build.url) else {
+            throw ChromiumProvisionerError.fetchFailed("invalid url \(build.url)")
         }
         let payload: Data
         do {
@@ -235,6 +268,14 @@ public final class ChromiumProvisioner {
             throw error
         } catch {
             throw ChromiumProvisionerError.fetchFailed("\(url.absoluteString): \(error)")
+        }
+        // Before the archive reaches the filesystem, and long before anything inside it is
+        // run: TLS says the bytes came from Google's bucket, not that they are the bytes
+        // this release was pinned to.
+        let actual = sha256Hex(payload)
+        guard actual == build.sha256 else {
+            throw ChromiumProvisionerError.archiveDigestMismatch(
+                platform: platformKey.rawValue, expected: build.sha256, actual: actual)
         }
         try stageArchive(payload)
         let staged = stagedExecutablePath()
@@ -314,4 +355,68 @@ private nonisolated func runChromiumHelperProcess(executable: String, arguments:
     #else
     throw ChromiumProvisionerError.archiveExtractionFailed("child processes are unavailable on this platform")
     #endif
+}
+
+// SHA-256, in-package rather than from swift-crypto: `BrowserTools` is one of the four
+// library products this package promises a consumer links with no dependencies of their
+// own, and one digest is not worth spending that. CryptoKit would cover Apple only, and
+// the Linux release build needs the same answer from the same code.
+private nonisolated let sha256RoundConstants: [UInt32] = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]
+
+@inline(__always)
+private nonisolated func rotr32(_ x: UInt32, _ n: UInt32) -> UInt32 {
+    (x >> n) | (x << (32 - n))
+}
+
+nonisolated func sha256Hex(_ data: Data) -> String {
+    var h: [UInt32] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ]
+    var message = [UInt8](data)
+    let bitCount = UInt64(message.count) * 8
+    message.append(0x80)
+    while message.count % 64 != 56 { message.append(0) }
+    for shift in stride(from: 56, through: 0, by: -8) {
+        message.append(UInt8(truncatingIfNeeded: bitCount >> UInt64(shift)))
+    }
+
+    var w = [UInt32](repeating: 0, count: 64)
+    var offset = 0
+    while offset < message.count {
+        for i in 0..<16 {
+            let j = offset + i * 4
+            w[i] = UInt32(message[j]) << 24 | UInt32(message[j + 1]) << 16
+                | UInt32(message[j + 2]) << 8 | UInt32(message[j + 3])
+        }
+        for i in 16..<64 {
+            let s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >> 3)
+            let s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >> 10)
+            w[i] = w[i - 16] &+ s0 &+ w[i - 7] &+ s1
+        }
+        var (a, b, c, d) = (h[0], h[1], h[2], h[3])
+        var (e, f, g, hh) = (h[4], h[5], h[6], h[7])
+        for i in 0..<64 {
+            let s1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)
+            let ch = (e & f) ^ (~e & g)
+            let t1 = hh &+ s1 &+ ch &+ sha256RoundConstants[i] &+ w[i]
+            let s0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)
+            let maj = (a & b) ^ (a & c) ^ (b & c)
+            let t2 = s0 &+ maj
+            (hh, g, f, e) = (g, f, e, d &+ t1)
+            (d, c, b, a) = (c, b, a, t1 &+ t2)
+        }
+        for (i, value) in [a, b, c, d, e, f, g, hh].enumerated() { h[i] = h[i] &+ value }
+        offset += 64
+    }
+    return h.map { String(format: "%08x", $0) }.joined()
 }

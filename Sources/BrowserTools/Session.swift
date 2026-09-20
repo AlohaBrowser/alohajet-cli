@@ -431,12 +431,11 @@ public struct AgentOwnedTabs: Sendable {
     ///
     /// A `DispatchSource` rather than `signal(2)`: its handler runs on a queue, so it may
     /// allocate, spawn and touch the file system, none of which is legal inside a real
-    /// signal handler — and `Handle.terminate()` does all three. Same shape as the
-    /// shape a long-running CLI's SIGINT teardown needs. The kernel default must be ignored so the source,
-    /// and not the default, is what handles the signal.
+    /// signal handler — and `Handle.terminate()` does all three. The kernel default must
+    /// be ignored so the source, and not the default, is what handles the signal.
     ///
-    /// `{ @Sendable in }` IS LOAD-BEARING, and is the half of that CLI's handler that got
-    /// dropped the first time this was written. This module is main-actor-by-default
+    /// `{ @Sendable in }` IS LOAD-BEARING, and was the half that got dropped the first
+    /// time this was written. This module is main-actor-by-default
     /// (SE-0466, `Package.swift`), so a bare closure literal here is main-actor isolated —
     /// and Dispatch calls it on a global queue, where the isolation check traps BEFORE the
     /// first line of the body runs. Measured, with a breadcrumb on that first line that

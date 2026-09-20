@@ -435,7 +435,7 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
     // The shared lane. `ownsBrowser: true` is the whole difference between this and
     // `--cdp`: the tabs in there are ones alohajet opened, so `close` may close them,
     // where a tab in the user's own browser may not be touched.
-    // ponytail: last writer wins. Two commands starting from cold at the same instant
+    // KNOWN CEILING: last writer wins. Two commands starting from cold at the same instant
     // both launch, and one browser ends up unrecorded — the usual pid-file race. Take a
     // lock on the state file if that ever bites; a human typing commands cannot hit it.
     if let browser = readSharedState(), let port = browser.port {
@@ -506,7 +506,7 @@ func quitSharedBrowser() async -> Int32 {
 /// that landed there was a leak and a `goto`/`type` that landed there drove their tab;
 /// the caller is told to open one or name one with `--tab` instead.
 ///
-/// ponytail: scrapes the `ID:`/`URL:` lines out of `manage_tabs list`'s prose, because
+/// KNOWN CEILING: scrapes the `ID:`/`URL:` lines out of `manage_tabs list`'s prose, because
 /// the tab list is not exposed any other way. Swap it for a structured accessor if one
 /// ever lands on the session.
 func resolveTab(_ session: BrowserToolSession, _ explicit: String?) async -> String? {

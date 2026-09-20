@@ -94,7 +94,7 @@ struct PageNavigateExecutorToolTests {
         #expect(result.output.contains("127.0.0.1:8801"))
         #expect(fixture.cdp.received("Page.navigate"))
         #expect(fixture.cdp.commands(for: "Page.navigate").first?.params["url"]?.stringValue == "http://127.0.0.1:8801/")
-        // PORT NOTE: an earlier copy of this test asserted `elapsed < 5.0` here. This package builds
+        // `elapsed` is deliberately NOT asserted on. This package builds
         // its test targets with `defaultIsolation(MainActor.self)`, so every main-actor
         // test in the run serialises against every other one and wall-clock is contended
         // — this test measures 0.5s alone and 10s+ in a full run. The three assertions

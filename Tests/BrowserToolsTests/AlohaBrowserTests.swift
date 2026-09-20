@@ -3,9 +3,8 @@ import Foundation
 @testable import BrowserTools
 
 // The `--browser aloha` lane, on injected seams: no app is launched and no socket is
-// opened. Shaped like the app launcher's own tests — the cases
-// about `GET /state`, headless/visibleWindow and the one-shot launch token did not
-// travel, because none of that exists on the CDP wire (see AlohaBrowser.swift).
+// opened. There is deliberately nothing here about `GET /state`, headless/visibleWindow
+// or the one-shot launch token: none of that exists on the CDP wire (see AlohaBrowser.swift).
 
 @Suite("AlohaBrowser")
 struct AlohaBrowserTests {

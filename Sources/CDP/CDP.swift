@@ -51,7 +51,6 @@ public enum CDPError: Error, Sendable {
     case remote(code: Int, message: String)
     /// The socket closed before a pending request was answered.
     case connectionClosed
-    case malformedMessage(String)
     case missingField(String)
     /// A command went unanswered past the per-call backstop deadline. The client
     /// drops the orphaned pending continuation and fails the call so
@@ -293,7 +292,7 @@ public actor CDPClient: CDPTransport {
         if !params.isEmpty {
             message["params"] = .object(Array(params))
         }
-        let payload = try Self.encode(.object(Array(message)))
+        let payload = JSValue.object(Array(message)).stringify()
         return try await awaitResponse(id: id, method: method, channel: channel, payload: payload)
     }
 
@@ -318,7 +317,7 @@ public actor CDPClient: CDPTransport {
         if !params.isEmpty {
             message["params"] = .object(Array(params))
         }
-        let payload = try Self.encode(.object(Array(message)))
+        let payload = JSValue.object(Array(message)).stringify()
         return try await awaitResponse(id: id, method: method, channel: channel, payload: payload)
     }
 
@@ -331,12 +330,13 @@ public actor CDPClient: CDPTransport {
     /// command the browser never answers at all (e.g. an `awaitPromise: true`
     /// evaluate against a wedged page).
     ///
-    /// Resume-once safety: every resume path — the response in `handle(message:)`,
-    /// the cancel handler, the timeout task, the write-failure path, and
-    /// `close()`/`handleReceiveFailure` — funnels through ``removePending(_:)``,
-    /// which atomically removes and returns the continuation (or `nil` if it has
-    /// already been consumed). Whoever wins the race takes it; every loser sees
-    /// `nil` and resumes nothing, so it is resumed exactly once.
+    /// Resume-once safety: the per-id resume paths — the response in
+    /// `handle(message:)`, the cancel handler, the timeout task and the
+    /// write-failure path — funnel through ``removePending(_:)``, which atomically
+    /// removes and returns the continuation (or `nil` if it has already been
+    /// consumed). `close()` and `handleReceiveFailure` instead drain the whole
+    /// table and clear it without suspending, so on this actor no per-id path can
+    /// observe a continuation either of them took. Either way it resumes once.
     private func awaitResponse(
         id: Int,
         method: String,
@@ -498,23 +498,6 @@ public actor CDPClient: CDPTransport {
         return sessionId
     }
 
-    /// Navigate an attached page (identified by its flat-session `sessionId`) to
-    /// `url`, returning the resulting `frameId`.
-    @discardableResult
-    public func navigate(url: String, sessionId: String) async throws -> String {
-        let result = try await send(
-            method: "Page.navigate",
-            params: [
-                "url": .string(url),
-                "sessionId": .string(sessionId)
-            ]
-        )
-        guard let frameId = result["frameId"]?.stringValue else {
-            throw CDPError.missingField("Page.navigate.frameId")
-        }
-        return frameId
-    }
-
     // MARK: - Internals
 
     private func allocateID() -> Int {
@@ -612,12 +595,6 @@ public actor CDPClient: CDPTransport {
     }
 
     // MARK: Wire (de)serialization
-
-    /// Serialize a `JSValue` to a compact JSON string for the wire, preserving
-    /// object key order.
-    private static func encode(_ value: JSValue) throws -> String {
-        return value.stringify()
-    }
 
     private static func decode(_ data: Data) -> JSValue? {
         guard let text = String(data: data, encoding: .utf8) else { return nil }
@@ -847,7 +824,7 @@ public struct ChromeLauncher: Sendable {
     /// run's profile. A `pgrep` that cannot run reports nothing, and the profile is then
     /// removed anyway — that is the outcome that matters.
     ///
-    /// ponytail: `pgrep -f` takes a regex and the path is spliced in unescaped, so a
+    /// KNOWN CEILING: `pgrep -f` takes a regex and the path is spliced in unescaped, so a
     /// temp directory containing regex metacharacters matches nothing and leaves the
     /// browser. Swap for a `/proc` + `sysctl` scan if that ever shows up.
     private static func pidsHolding(profile path: String) -> [Int32] {

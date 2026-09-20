@@ -71,7 +71,7 @@ public nonisolated enum AutomationToken {
     /// `127.1` lacks the dotted-quad shape and IS loopback. `inet_pton` is the arbiter
     /// of both, and it also rejects a host that merely looks numeric.
     ///
-    /// ponytail: `localhost` is trusted by name, not resolved — rewriting it needs
+    /// KNOWN CEILING: `localhost` is trusted by name, not resolved — rewriting it needs
     /// root, and a root attacker owns the token file anyway. Resolve it if that ever
     /// stops being true.
     public static func isLoopback(_ url: URL) -> Bool {

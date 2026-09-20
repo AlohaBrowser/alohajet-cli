@@ -178,17 +178,12 @@ public nonisolated struct ScrollToElementOptions: Sendable {
 public nonisolated struct ScrollToElementResult: Sendable {
     public var message: String
     public var scrollDistance: Double
-    public var bounds: ElementBounds??
-    public init(message: String, scrollDistance: Double, bounds: ElementBounds?? = nil) {
+    public var bounds: ElementBounds?
+    public init(message: String, scrollDistance: Double, bounds: ElementBounds? = nil) {
         self.message = message
         self.scrollDistance = scrollDistance
         self.bounds = bounds
     }
-}
-
-public nonisolated struct ClickableXYDecision: Sendable {
-    public var shouldFallback: Bool
-    public init(shouldFallback: Bool) { self.shouldFallback = shouldFallback }
 }
 
 public nonisolated struct KeyStroke: Sendable {
@@ -464,51 +459,6 @@ public final class AgentDOMService {
         try await scrollIntoViewAndGetBounds(id, signal)
     }
 
-    // MARK: Clickability self-check
-
-    /// Asks the page whether a DOM-level click fallback should be preferred for
-    /// the element with `alohaId`.
-    public func checkElementClickableXY(_ alohaId: String) async throws -> ClickableXYDecision {
-        let script = """
-
-              (async () => {
-                async function shouldFallbackToDOMClick(element) {
-                  const checks = {
-                      boundingBoxAccuracy: false,
-                      cssTransformIssues: false,
-                      zoomIssues: false,
-                      viewportIssues: false,
-                      overlayDetection: false
-                  };
-
-                  const rect = element.getBoundingClientRect();
-                  const centerX = rect.left + rect.width / 2;
-                  const centerY = rect.top + rect.height / 2;
-
-                  const shouldFallback = Object.values(checks).some(check => check);
-
-                  return {
-                      shouldFallback,
-                      reasons: checks,
-                      coordinates: { x: centerX, y: centerY }
-                  };
-                }
-
-                const element = document.querySelector('[aloha-id="\(alohaId)"]')
-                if (element) {
-                  return await shouldFallbackToDOMClick(element)
-                }
-                return { shouldFallback: false, reasons: {}, coordinates: { x: 0, y: 0 } }
-              })()
-
-        """
-        let result = try await tab.layer.executeJavaScript(script)
-        if case .object = result {
-            return ClickableXYDecision(shouldFallback: result.bool("shouldFallback") ?? false)
-        }
-        return ClickableXYDecision(shouldFallback: false)
-    }
-
     // MARK: Clicking
 
     /// Clicks the element with `id`, animating the cursor and choosing between a
@@ -523,7 +473,7 @@ public final class AgentDOMService {
         }
         let scroll = try await scrollToElement(id, label ?? "Agent", ScrollToElementOptions(returnBounds: true, signal: signal))
         try throwIfAborted(signal)
-        guard let bounds = scroll.bounds ?? nil else {
+        guard let bounds = scroll.bounds else {
             return ClickResult(isOnTop: false, message: "Element \(id) not found", element: node)
         }
         let point = try await findClickablePoint(id, signal)
@@ -580,9 +530,8 @@ public final class AgentDOMService {
             return ClickResult(isOnTop: true, message: "Clicked element \(id) (DOM fallback via \(domResult.string("rootType") ?? "") root)", element: node)
         }
 
-        let decision = try await checkElementClickableXY(id)
         let isContentEditable = node.element.attributes["contenteditable"] == "true"
-        if decision.shouldFallback || isContentEditable {
+        if isContentEditable {
             let devLabel = isDevEnvironment ? "\(label ?? "") (fallback - this text is only in dev)" : "\(label ?? "")"
             await cursorAnimator.animateAgentCursorClick(tab, bounds, devLabel, scaleOnClick: true, cursorLabelKind: options.cursorLabelKind)
             try await abortableDelay(50, signal)
@@ -994,13 +943,9 @@ public final class AgentDOMService {
                     await animateCursorToBounds(ElementBounds(json: boundsValue), label ?? "")
                 }
                 let distance = result.number("scrollDistance") ?? 0
-                let bounds: ElementBounds??
-                if options.returnBounds {
-                    if let boundsValue = result["bounds"], case .object = boundsValue {
-                        bounds = .some(ElementBounds(json: boundsValue))
-                    } else {
-                        bounds = .some(nil)
-                    }
+                let bounds: ElementBounds?
+                if options.returnBounds, let boundsValue = result["bounds"], case .object = boundsValue {
+                    bounds = ElementBounds(json: boundsValue)
                 } else {
                     bounds = nil
                 }
@@ -1072,7 +1017,7 @@ public final class AgentDOMService {
                     success: false,
                     error: "File upload failed at the staging stage: no upload staging is available.")
             }
-            let staged = try await staging.stage(filePaths, maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: signal)
+            let staged = try await staging.stage(filePaths, maxTotalBytes: maxUploadTotalBytes, signal: signal)
             if !filePaths.isEmpty && staged.cdpPaths.isEmpty && staged.files.isEmpty {
                 return UploadResult(
                     success: false,
@@ -1954,16 +1899,6 @@ nonisolated struct SimpleError: Error, CustomStringConvertible {
     let message: String
     init(_ message: String) { self.message = message }
     var description: String { message }
-}
-
-/// A one-shot guard ensuring a continuation is resumed exactly once.
-final class ResolvedFlag {
-    private var resolved = false
-    func markResolved() -> Bool {
-        if resolved { return false }
-        resolved = true
-        return true
-    }
 }
 
 /// Suspends until its signal aborts (throwing) or it is cancelled. Resuming

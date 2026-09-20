@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.4] - 2026-09-20
 
 ### Added
 
@@ -100,11 +100,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a prompt and running a real turn.
 - The executable target no longer shares a build folder with the `AlohaJet` library on a
   case-insensitive disk, which broke linking for any package depending on both.
-
-## [0.4.1] - 2026-09-18
-
-### Fixed
-
 - `page_type` and `page_select` advertised `anyOf` at the top level of their `parameters`,
   which OpenAI rejects with HTTP 400 for the whole tool array — every turn of every session
   reaching that provider failed before a token was generated. The constraint is stated in
@@ -210,10 +205,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   6.2.4, whose frontend crashes compiling this package for a universal binary. No tag had
   produced a macOS asset before.
 
-[Unreleased]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.2...v0.4.3
-[0.4.2]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.0...v0.4.1
+[0.4.2]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.4.0...v0.4.2
 [0.4.0]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/AlohaBrowser/alohajet-cli/compare/v0.2.1...v0.3.0

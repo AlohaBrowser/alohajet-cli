@@ -21,8 +21,7 @@
 #      CoreFoundation does not exist off Apple. (Rewriting that also surfaced a real
 #      cross-platform bug: `{"index":0}` was arriving at the tools as `false`.)
 #   3. A test using `URLSession` without `import FoundationNetworking`.
-#   4. And the one that matters most, because it is the SAME CLASS as the crash the
-#      corelibs gate dies on elsewhere: the obvious fix for (1) —
+#   4. And the one that matters most: the obvious fix for (1) —
 #      `FileHandle.standardOutput.write` — compiles everywhere and TRAPS on Linux.
 #      corelibs-Foundation implements it as a `try!` (Foundation/FileHandle.swift:699)
 #      that turns an ordinary `EINTR` into a fatal error, and it killed the test process

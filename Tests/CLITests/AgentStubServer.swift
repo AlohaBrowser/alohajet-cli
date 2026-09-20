@@ -14,7 +14,7 @@ import Darwin
 // the conversation id on. Both are only observable from OUTSIDE the process, so the
 // process needs something real to talk to.
 //
-// ponytail: one connection at a time, `Connection: close`, no keep-alive, no
+// KNOWN CEILING: one connection at a time, `Connection: close`, no keep-alive, no
 // concurrency. `-p` is strictly serial — four requests, in order — which is all this
 // has to serve.
 nonisolated final class AgentStubServer: @unchecked Sendable {

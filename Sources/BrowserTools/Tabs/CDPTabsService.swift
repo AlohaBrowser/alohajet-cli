@@ -59,13 +59,10 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
 
     private var _title: String?
     private var _tabType: String
-    private var _faviconUrl: String?
-    private var _userTookOver: Bool = false
     private var _browserAgentControlledAgentId: String?
     private var _chatSessionId: String?
     private var _isAIControlledTab: Bool = false
     private var _isBrowserAgentControlled: Bool = false
-    private var _networkLogPath: String?
     private var _networkRecorder: NetworkRecorder?
     private var _viewportBounds: TabViewportBounds?
     /// Whether the user owns this tab (see ``TabHandle/openedByHuman``). Set once
@@ -83,7 +80,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         session: CDPTabSession,
         tabType: String,
         title: String?,
-        faviconUrl: String?,
         openedByHuman: Bool,
         pacer: NavigationPacer? = nil
     ) {
@@ -98,7 +94,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         self.snapshotting = CDPAgentDOMSnapshotting(service: domService)
         self._tabType = tabType
         self._title = title
-        self._faviconUrl = faviconUrl
         self.openedByHuman = openedByHuman
         self.pacer = pacer
     }
@@ -135,13 +130,9 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         return _tabType
     }
 
-    public var faviconUrl: String? {
-        return _faviconUrl
-    }
+    public var faviconUrl: String? { nil }
 
-    public var userTookOver: Bool {
-        return _userTookOver
-    }
+    public var userTookOver: Bool { false }
 
     public var agentDOM: AgentDOMSnapshotting? {
         tabType == "website" ? snapshotting : nil
@@ -564,7 +555,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
 
     public func startNetworkRecording(logPath: String) {
         if _networkRecorder != nil { return }
-        _networkLogPath = logPath
         // Directory first: the writer creates its file in it.
         let dir = (logPath as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(
@@ -681,7 +671,7 @@ public final class CDPTabsModel: TabsModel {
     }
 
     public func setActiveTabId(_ id: String?) {
-        _activeTabId = id;
+        _activeTabId = id
     }
 
     public var tabsById: [String: TabHandle] {
@@ -705,7 +695,6 @@ public final class CDPTabsModel: TabsModel {
             session: session,
             tabType: "website",
             title: nil,
-            faviconUrl: nil,
             openedByHuman: seededOwnership(id),
             pacer: navigationPacer)
         register(handle)
@@ -735,7 +724,6 @@ public final class CDPTabsModel: TabsModel {
             session: session,
             tabType: spec.tabType,
             title: nil,
-            faviconUrl: nil,
             openedByHuman: spec.openedByHuman,
             pacer: navigationPacer)
         // Registered — and so announced — BEFORE the control flags are written: a host
@@ -826,7 +814,6 @@ public final class CDPTabsModel: TabsModel {
                 session: session,
                 tabType: "website",
                 title: title,
-                    faviconUrl: nil,
                 openedByHuman: seededOwnership(targetId),
                 pacer: navigationPacer)
             register(handle)
@@ -892,7 +879,6 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
                 session: session,
                 tabType: "website",
                 title: title,
-                    faviconUrl: nil,
                 openedByHuman: false,
                 pacer: navigationPacer)
             // Announced before the control flags, for the reason `createTab` gives.
@@ -943,7 +929,6 @@ extension CDPTabsModel: LivePageTargetAdopting {
             session: session,
             tabType: "website",
             title: title,
-            faviconUrl: nil,
             openedByHuman: seededOwnership(id),
             pacer: navigationPacer)
         register(handle)
@@ -1295,7 +1280,7 @@ final class NetworkLogWriter {
         // The request body is where a login POSTs the password and an API POSTs the token.
         // The log keeps that a request HAD one, and how big, never what was in it.
         if let postData = record.postData {
-            members.append(("postData", .string("\(REDACTED_VALUE) (\(postData.count) chars)")))
+            members.append(("postData", .string("\(redactedValue) (\(postData.count) chars)")))
         }
         if let status = record.status { members.append(("status", .number(Double(status)))) }
         if let statusText = record.statusText { members.append(("statusText", .string(statusText))) }
@@ -1320,7 +1305,7 @@ final class NetworkLogWriter {
         "x-api-key", "x-auth-token", "x-csrf-token", "x-refresh-token", "x-session-token",
     ]
 
-    static let REDACTED_VALUE = "***"
+    static let redactedValue = "***"
 
     /// Header names whose value is a whole URL. Their value is not itself a credential —
     /// masking it outright would throw away the request shape a log gets opened for — but
@@ -1334,7 +1319,7 @@ final class NetworkLogWriter {
     /// Header names lowercased for the match, so `Set-Cookie` and `set-cookie` redact alike.
     static func redactHeaderValue(name: String, value: String) -> String {
         let lowered = name.lowercased()
-        if sensitiveHeaderNames.contains(lowered) { return REDACTED_VALUE }
+        if sensitiveHeaderNames.contains(lowered) { return redactedValue }
         if urlValuedHeaderNames.contains(lowered) { return redactSensitiveUrlParams(value) }
         return value
     }
