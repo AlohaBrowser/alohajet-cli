@@ -170,8 +170,8 @@ import ToolABI
                     filled.append(field.alohaId)
                 }
             }
-            let urlAfter = bridge.currentPageURL()
-            let delta = PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+            let delta = PageDelta.describe(urlBefore: urlBefore,
+                                           urlAfter: await bridge.settledPageURL(after: urlBefore))
 
             if !failures.isEmpty {
                 let filledNote = filled.isEmpty ? "No field was filled." : "Filled \(filled.count): \(filled.joined(separator: ", "))."
@@ -191,7 +191,7 @@ import ToolABI
                         + "but submitting Enter failed: \(submitResult.output)" + delta,
                     isError: true)
             }
-            let urlFinal = bridge.currentPageURL()
+            let urlFinal = await bridge.settledPageURL(after: urlBefore)
             return RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", ")) "
                                  + "and pressed Enter to submit."
                                  + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlFinal),

@@ -551,7 +551,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       const hasValidTabindex = tabindex !== null && !Number.isNaN(parseInt(tabindex, 10));
       return !!(cursorIsInteractive || hasValidTabindex);
     }
-    if (interactiveTags.has(tag) || (role && INTERACTIVE_ROLES.has(role)))
+    if (interactiveTags.has(tag) || (role && INTERACTIVE_ROLES.has(role)) || isContentEditableHost(element))
       return !(element.getAttribute("aria-disabled") === "true" || (style && style.cursor === "not-allowed"));
     if (
       element.getAttribute("draggable") === "true" ||
@@ -1295,6 +1295,13 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         return true;
     } catch {}
     return false;
+  }
+
+  function isContentEditableHost(element) {
+    if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
+    if (!element.isContentEditable) return false;
+    const parent = element.parentElement;
+    return !(parent && parent.isContentEditable);
   }
 
   function isFileInputLike(element) {
