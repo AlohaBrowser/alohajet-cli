@@ -107,7 +107,7 @@ final class URLSessionWebSocketChannel: CDPMessageChannel, Sendable {
     init(url: URL, session: URLSession) {
         self.task = session.webSocketTask(with: url)
         // CDP responses are unbounded — a Runtime.evaluate result (e.g. a full
-        // DOM-tree snapshot from `buildDomTree`), Page.captureScreenshot, or a
+        // DOM-tree snapshot from `collectDomTree`), Page.captureScreenshot, or a
         // network body easily exceeds Foundation's 1 MiB default
         // `maximumMessageSize`, which would throw EMSGSIZE ("Message too long")
         // on `receive()` and wedge the connection. 64 MiB so they reassemble.

@@ -112,7 +112,7 @@ final class MockCDP {
 
     /// A scripted DOM-tree reply for the agent-interactive-markdown walker
     /// (`buildAgentDomTreeScript`): when a `Runtime.evaluate` expression is that
-    /// walker script (recognized by its `buildDomTree(` call), the fake page
+    /// walker script (recognized by its `collectDomTree(` call), the fake page
     /// returns this array of raw DOM-node JSON objects — the same shape
     /// `parseDomNode` consumes — instead of falling through to the plain
     /// `bodyText` catch-all. `nil` (the default) keeps that catch-all behavior,
@@ -393,9 +393,9 @@ final class MockCDP {
                 return .object([("result", .object([("type", .string("object")), ("value", reply)]))])
             }
             // The interactive-markdown DOM walker script; recognized by its
-            // `buildDomTree(` entry point regardless of the highlight/focusInteractive
+            // `collectDomTree(` entry point regardless of the highlight/focusInteractive
             // args baked into it.
-            if expression.contains("buildDomTree("), let domTreeReply {
+            if expression.contains("collectDomTree("), let domTreeReply {
                 return .object([("result", .object([("type", .string("object")), ("value", .array(domTreeReply))]))])
             }
             // A raw (unwrapped) `window.__aloha.<verb>(...)` call — see
