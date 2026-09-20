@@ -1,6 +1,6 @@
 import Foundation
 
-public let UNTRUSTED_CONTENT_SECRET_KEY: String = "__reflectUntrustedContentSecret"
+public let untrustedContentSecretKey: String = "__reflectUntrustedContentSecret"
 
 /// A process-wide ambient scope holding values, keyed by name, that must outlive
 /// any single component.
@@ -75,14 +75,14 @@ public enum UntrustedContent {
     /// been established on the global scope.
     @MainActor
     public static func getSecret() -> String {
-        getGlobalScope()[UNTRUSTED_CONTENT_SECRET_KEY] as? String ?? ""
+        getGlobalScope()[untrustedContentSecretKey] as? String ?? ""
     }
 
     /// Sets the boundary secret directly; a fresh per-session secret is normally
     /// established via ``initSecret()``.
     @MainActor
     public static func setSecret(_ secret: String) {
-        getGlobalScope()[UNTRUSTED_CONTENT_SECRET_KEY] = secret
+        getGlobalScope()[untrustedContentSecretKey] = secret
     }
 
     /// Establishes a fresh boundary secret: the first eight characters of a random UUID.
