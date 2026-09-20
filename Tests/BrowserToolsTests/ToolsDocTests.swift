@@ -103,8 +103,8 @@ private func propertyRows(_ properties: [(String, JSValue)], required: Set<Strin
     for (name, schema) in properties {
         let notes = [schema.string("description") ?? "", constraints(schema)]
             .filter { !$0.isEmpty }.joined(separator: " ")
-        rows.append("| \(indent)`\(name)` | \(typeLabel(schema)) | "
-            + "\(required.contains(name) ? "yes" : "no") | \(cell(notes)) |")
+        let isRequired = required.contains(name) ? "yes" : "no"
+        rows.append("| \(indent)`\(name)` | \(typeLabel(schema)) | \(isRequired) | \(cell(notes)) |")
         // One level of nesting, which is all any of these schemas has: `page_type.fields`.
         if let items = schema["items"], let nested = items.object("properties") {
             let nestedRequired = Set(items.array("required")?.compactMap(\.stringValue) ?? [])
@@ -137,8 +137,7 @@ func renderToolsDoc() -> String {
     let schemas = getNativeAgentToolSchemas()
     for schema in schemas {
         let readOnly = nativeAgentToolReadOnlyHints[schema.name] ?? false
-        out += "| [`\(schema.name)`](#\(schema.name)) | "
-            + (readOnly ? "read-only" : "drives the page") + " |\n"
+        out += "| [`\(schema.name)`](#\(schema.name)) | \(readOnly ? "read-only" : "drives the page") |\n"
     }
 
     for schema in schemas {
@@ -146,7 +145,7 @@ func renderToolsDoc() -> String {
         out += "\n---\n\n## \(schema.name)\n\n"
         out += "`readOnlyHint: \(readOnly)` · `destructiveHint: \(!readOnly)` · `openWorldHint: true`\n\n"
         if let description = schema.description {
-            out += escaped(description) + "\n\n"
+            out += "\(escaped(description))\n\n"
         }
         guard let input = schema.inputSchema, let properties = input.object("properties"),
               !properties.isEmpty else {
@@ -155,7 +154,7 @@ func renderToolsDoc() -> String {
         }
         let required = Set(input.array("required")?.compactMap(\.stringValue) ?? [])
         out += "| parameter | type | required | notes |\n| --- | --- | --- | --- |\n"
-        out += propertyRows(properties, required: required).joined(separator: "\n") + "\n"
+        out += "\(propertyRows(properties, required: required).joined(separator: "\n"))\n"
     }
     return out
 }

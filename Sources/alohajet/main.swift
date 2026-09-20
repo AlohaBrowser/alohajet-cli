@@ -71,7 +71,7 @@ func parseArgs(_ argv: [String]) throws -> Args {
             break
         }
         if token.hasPrefix("-"), let equals = token.firstIndex(of: "=") {
-            args.flags[String(token[token.startIndex..<equals])] = String(token[token.index(after: equals)...])
+            args.flags[String(token[..<equals])] = String(token[token.index(after: equals)...])
         } else if valueFlags.contains(token) {
             index += 1
             guard index < argv.count else {
@@ -83,7 +83,7 @@ func parseArgs(_ argv: [String]) throws -> Args {
             } else {
                 args.flags[token] = argv[index]
             }
-        } else if token.hasPrefix("-") && token != "-" {
+        } else if token.hasPrefix("-"), token != "-" {
             args.flags[token] = ""
         } else {
             args.positional.append(token)
@@ -475,7 +475,7 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
 /// the browser it launched. A CDP connection to the recorded port IS that proof.
 func quitSharedBrowser() async -> Int32 {
     guard let state = readSharedState(), let port = state.port else {
-        writeToStandardOutput("No shared browser is running." + "\n")
+        writeToStandardOutput("No shared browser is running.\n")
         return exitOK
     }
     var closed = false
@@ -529,14 +529,15 @@ func resolveTab(_ session: BrowserToolSession, _ explicit: String?) async -> Str
             tabs[tabs.count - 1].url = String(trimmed.dropFirst(5))
         }
     }
-    let web = tabs.filter { $0.url.hasPrefix("http://") || $0.url.hasPrefix("https://") }
+    let web = Set(
+        tabs.lazy
+            .filter { $0.url.hasPrefix("http://") || $0.url.hasPrefix("https://") }
+            .map(\.id))
     guard !web.isEmpty else { return nil }
     // The remembered ids are checked against the live list, not trusted: a tab may have
     // been closed since, and a stale id would fail every later command with "not found".
-    if let remembered = lane.tab, web.contains(where: { $0.id == remembered }) {
-        return remembered
-    }
-    return (lane.openedTabs ?? []).last { id in web.contains { $0.id == id } }
+    if let remembered = lane.tab, web.contains(remembered) { return remembered }
+    return (lane.openedTabs ?? []).last(where: web.contains)
 }
 
 /// The tab id a `manage_tabs` result named, off the metadata channel the tool already
@@ -589,7 +590,10 @@ func toolCall(
 
     case "click":
         try await useTab(session, args.value("--tab"))
-        let clickType = args.has("--right") ? "right" : (args.has("--double") ? "double" : "single")
+        let clickType =
+            if args.has("--right") { "right" }
+            else if args.has("--double") { "double" }
+            else { "single" }
         return ("page_click", ["aloha_id": try args.required(1, "ref"), "click_type": clickType])
 
     case "type":
@@ -676,7 +680,11 @@ func rememberTab(_ command: String, _ args: Args, _ result: RawToolResult, ok: B
     }
     guard next != lane else { return }
     lane = next
-    updateSharedState { $0.lanes = ($0.lanes ?? [:]).merging([key: next]) { _, latest in latest } }
+    updateSharedState {
+        var lanes = $0.lanes ?? [:]
+        lanes[key] = next
+        $0.lanes = lanes
+    }
 }
 
 func report(_ error: CLIError, json: Bool) {
@@ -788,9 +796,9 @@ func main() async -> Int32 {
             code = exitToolError
         } else {
             let url = URLComponents(string: session.webSocketEndpoint)
-            let where_ = [url?.host, url?.port.map(String.init)].compactMap { $0 }.joined(separator: ":")
+            let host = [url?.host, url?.port.map(String.init)].compactMap { $0 }.joined(separator: ":")
             writeToStandardError(
-                "alohajet: the browser at \(where_.isEmpty ? session.webSocketEndpoint : where_) is gone\n")
+                "alohajet: the browser at \(host.isEmpty ? session.webSocketEndpoint : host) is gone\n")
             code = exitUnreachable
         }
         rememberTab(command, args, result, ok: code == exitOK)

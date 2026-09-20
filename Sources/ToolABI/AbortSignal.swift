@@ -52,19 +52,15 @@ public final class AbortSignal {
         _reason = reason
     }
 
-    public var aborted: Bool { return _aborted }
-    public var reason: String? { return _reason }
+    public var aborted: Bool { _aborted }
+    public var reason: String? { _reason }
 
     public func abort(_ reason: String?) {
-        let handlers: [() -> Void]? = {
-            if _aborted { return nil }
-            _aborted = true
-            _reason = reason
-            let snapshot = Array(listeners.values)
-            listeners.removeAll()
-            return snapshot
-        }()
-        guard let handlers else { return }
+        guard !_aborted else { return }
+        _aborted = true
+        _reason = reason
+        let handlers = Array(listeners.values)
+        listeners.removeAll()
         for handler in handlers { handler() }
     }
 
@@ -210,7 +206,7 @@ public func raceAbort<T: Sendable>(
     return try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask { try await operation() }
         group.addTask {
-            try await controller.signal.waitUntilAborted()
+            await controller.signal.waitUntilAborted()
             throw AbortSignalError("Aborted")
         }
         defer { group.cancelAll() }
@@ -221,7 +217,7 @@ public func raceAbort<T: Sendable>(
     }
 }
 
-nonisolated public func isAbortError(_ error: Error) -> Bool {
+public nonisolated func isAbortError(_ error: Error) -> Bool {
     error is AbortSignalError
 }
 

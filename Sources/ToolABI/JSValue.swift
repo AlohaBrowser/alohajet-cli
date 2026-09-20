@@ -99,45 +99,25 @@ public nonisolated extension JSValue {
     /// When duplicate keys exist, the LAST one wins.
     subscript(key: String) -> JSValue? {
         guard case let .object(members) = self else { return nil }
-        var found: JSValue?
-        for (k, v) in members where k == key {
-            found = v
-        }
-        return found
+        return members.last { $0.0 == key }?.1
     }
 
     /// Array element access. Returns `nil` for non-arrays and out-of-range
     /// (including negative) indices.
     subscript(index: Int) -> JSValue? {
-        guard case let .array(elements) = self else { return nil }
-        guard index >= 0 && index < elements.count else { return nil }
+        guard case let .array(elements) = self, elements.indices.contains(index) else { return nil }
         return elements[index]
     }
 
-    func string(_ key: String) -> String? {
-        if case let .string(s)? = self[key] { return s }
-        return nil
-    }
+    func string(_ key: String) -> String? { self[key]?.stringValue }
 
-    func number(_ key: String) -> Double? {
-        if case let .number(n)? = self[key] { return n }
-        return nil
-    }
+    func number(_ key: String) -> Double? { self[key]?.doubleValue }
 
-    func bool(_ key: String) -> Bool? {
-        if case let .bool(b)? = self[key] { return b }
-        return nil
-    }
+    func bool(_ key: String) -> Bool? { self[key]?.boolValue }
 
-    func object(_ key: String) -> [(String, JSValue)]? {
-        if case let .object(o)? = self[key] { return o }
-        return nil
-    }
+    func object(_ key: String) -> [(String, JSValue)]? { self[key]?.objectValue }
 
-    func array(_ key: String) -> [JSValue]? {
-        if case let .array(a)? = self[key] { return a }
-        return nil
-    }
+    func array(_ key: String) -> [JSValue]? { self[key]?.arrayValue }
 }
 
 // MARK: - Direct value accessors
@@ -262,10 +242,8 @@ public nonisolated extension JSValue {
     /// with no return value).
     static func parse(jsonString: String) -> JSValue {
         let trimmed = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty || trimmed == "undefined" {
-            return .null
-        }
-        return JSValue.parse(trimmed) ?? .null
+        guard !trimmed.isEmpty, trimmed != "undefined" else { return .null }
+        return parse(trimmed) ?? .null
     }
 }
 
@@ -359,10 +337,7 @@ public nonisolated extension JSValue {
         depth: Int,
         into out: inout String
     ) {
-        let kept = members.filter { member in
-            if case .undefined = member.1 { return false }
-            return true
-        }
+        let kept = members.filter { $0.1 != .undefined }
         if kept.isEmpty {
             out += "{}"
             return
@@ -485,28 +460,17 @@ nonisolated private func significandAndExponent(of magnitude: Double) -> (digits
     let combined = intPart + fracPart
     var pointPos = intPart.count + exp10
 
-    // Strip leading zeros (each removed leading zero shifts the point left).
-    var startIdx = combined.startIndex
-    while startIdx < combined.endIndex && combined[startIdx] == "0" {
-        startIdx = combined.index(after: startIdx)
-        pointPos -= 1
-    }
-    // Strip trailing zeros (they do not affect `pointPos`).
-    var endIdx = combined.endIndex
-    while endIdx > startIdx {
-        let prev = combined.index(before: endIdx)
-        if combined[prev] == "0" {
-            endIdx = prev
-        } else {
-            break
-        }
+    // Each removed LEADING zero shifts the point left; trailing zeros do not affect it.
+    var digits = combined.drop { $0 == "0" }
+    pointPos -= combined.count - digits.count
+    while digits.last == "0" {
+        digits = digits.dropLast()
     }
 
-    let digits = String(combined[startIdx..<endIdx])
     if digits.isEmpty {
         return ("0", 1)
     }
-    return (digits, pointPos)
+    return (String(digits), pointPos)
 }
 
 // MARK: - Order-preserving JSON parser
@@ -668,10 +632,9 @@ nonisolated private struct JSONParser {
 
     private mutating func matchLiteral(_ literal: String) -> Bool {
         let lit = Array(literal.unicodeScalars)
-        guard index + lit.count <= scalars.count else { return false }
-        for (offset, scalar) in lit.enumerated() where scalars[index + offset] != scalar {
-            return false
-        }
+        guard index + lit.count <= scalars.count,
+              scalars[index..<(index + lit.count)].elementsEqual(lit)
+        else { return false }
         index += lit.count
         return true
     }

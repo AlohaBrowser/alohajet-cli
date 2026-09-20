@@ -34,9 +34,9 @@ public enum AlohaBrowserError: Error, Equatable, CustomStringConvertible {
     public var description: String {
         switch self {
         case let .launchFailed(detail):
-            return "could not launch the Aloha browser: \(detail)"
+            "could not launch the Aloha browser: \(detail)"
         case let .notReachable(port, seconds):
-            return """
+            """
                 no CDP endpoint answered on 127.0.0.1:\(port) after \(seconds)s — if the \
                 browser is running, its CDP listener is off: it is disabled by \
                 ALOHA_CDP_DISABLED=1, or it relocated off a taken \(port) \

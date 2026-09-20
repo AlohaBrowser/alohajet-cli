@@ -86,6 +86,18 @@ func withHeadlessBrowser<T>(_ body: (BrowserToolSession) async throws -> T) asyn
     }
 }
 
+/// The tab id off the metadata channel the tool fills, falling back to the `Tab ID:` line
+/// it prints — the CLI reads it the same two ways.
+func tabIdentifier(_ result: RawToolResult) -> String? {
+    if case let .string(id)? = result.metadata?["tabId"], !id.isEmpty { return id }
+    for line in result.output.split(separator: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("Tab ID: ") { return String(trimmed.dropFirst("Tab ID: ".count)) }
+        if trimmed.hasPrefix("ID: ") { return String(trimmed.dropFirst("ID: ".count)) }
+    }
+    return nil
+}
+
 @Suite("end to end, real browser", .serialized, .enabled(if: browserIsAvailable || browserIsRequired))
 struct RealBrowserE2ETests {
 
@@ -300,18 +312,6 @@ struct RealBrowserE2ETests {
 
     // MARK: - Reading the tool's own output
 
-    /// The tab id off the metadata channel the tool fills, falling back to the `Tab ID:`
-    /// line it prints — the CLI reads it the same two ways.
-    private func tabIdentifier(_ result: RawToolResult) -> String? {
-        if case let .string(id)? = result.metadata?["tabId"], !id.isEmpty { return id }
-        for line in result.output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("Tab ID: ") { return String(trimmed.dropFirst("Tab ID: ".count)) }
-            if trimmed.hasPrefix("ID: ") { return String(trimmed.dropFirst("ID: ".count)) }
-        }
-        return nil
-    }
-
     /// Pulls the ref out of a rendered interactive line, e.g.
     /// `[Press me] {aloha-id="38ed76" button}`.
     private func alohaId(forLabel label: String, in markdown: String) -> String? {
@@ -319,7 +319,7 @@ struct RealBrowserE2ETests {
             guard let marker = line.range(of: "aloha-id=\"") else { continue }
             let rest = line[marker.upperBound...]
             guard let end = rest.firstIndex(of: "\"") else { continue }
-            return String(rest[rest.startIndex..<end])
+            return String(rest[..<end])
         }
         return nil
     }

@@ -36,30 +36,21 @@ public enum OpenUrlValidation: Equatable, Sendable {
 /// control-character-bearing, malformed, non-http(s), and credential-bearing
 /// URLs; returns the normalized href otherwise.
 public func validateOpenUrl(_ value: String?) -> OpenUrlValidation {
-    guard let value else {
-        return .rejected(reason: urlMalformedReason)
-    }
+    guard let value else { return .rejected(reason: urlMalformedReason) }
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
+    guard !trimmed.isEmpty,
+          trimmed.count <= maxUrlLength,
+          !urlRegexTest(trimmed, pattern: controlCharRe),
+          let parsed = ParsedWebUrl(trimmed)
+    else {
         return .rejected(reason: urlMalformedReason)
     }
-    if trimmed.count > maxUrlLength {
-        return .rejected(reason: urlMalformedReason)
+    switch parsed.protocolScheme {
+    case "http:", "https:": break
+    case "file:": return .rejected(reason: urlFileProtocolReason)
+    case let proto: return .rejected(reason: urlBadProtocolReason(proto))
     }
-    if urlRegexTest(trimmed, pattern: controlCharRe) {
-        return .rejected(reason: urlMalformedReason)
-    }
-    guard let parsed = ParsedWebUrl(trimmed) else {
-        return .rejected(reason: urlMalformedReason)
-    }
-    let proto = parsed.protocolScheme
-    if proto != "http:" && proto != "https:" {
-        if proto == "file:" {
-            return .rejected(reason: urlFileProtocolReason)
-        }
-        return .rejected(reason: urlBadProtocolReason(proto))
-    }
-    if !parsed.username.isEmpty || !parsed.password.isEmpty {
+    guard parsed.username.isEmpty, parsed.password.isEmpty else {
         return .rejected(reason: urlCredentialsReason)
     }
     return .ok(normalized: parsed.href)

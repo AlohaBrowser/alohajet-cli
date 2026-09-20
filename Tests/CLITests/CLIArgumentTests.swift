@@ -18,7 +18,8 @@ struct CLIArgumentTests {
         let run = try runCLI([])
         #expect(run.status == 2)
         #expect(run.stdout.contains("USAGE"))
-        #expect(run.stdout.contains("alohajet mcp") || run.stdout.contains("mcp"))
+        #expect(run.stdout.contains("alohajet [browser options] <command> [args]"))
+        #expect(run.stdout.contains("mcp"), "the usage block never names the mcp command")
     }
 
     static let commands = [

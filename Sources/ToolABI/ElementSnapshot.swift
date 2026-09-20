@@ -19,10 +19,8 @@ let sensitiveQueryParamPattern = "(token|auth|sess(ion)?|jwt|bearer|sig|signatur
 public func truncateLabel_2(_ value: String, _ maxLength: Int = defaultLabelMaxLength) -> String {
     let collapsed = collapseWhitespace(value).trimmingCharacters(in: .whitespacesAndNewlines)
     if collapsed.count <= maxLength { return collapsed }
-    let sliceCount = max(0, maxLength - 1)
-    let head = String(collapsed.prefix(sliceCount))
-    let trimmedHead = trimTrailingWhitespace(head)
-    return trimmedHead + "…"
+    let head = String(collapsed.prefix(max(0, maxLength - 1)))
+    return "\(trimTrailingWhitespace(head))…"
 }
 
 public struct ElementBBox: Sendable, Equatable {
@@ -103,33 +101,30 @@ public func buildElementSnapshotSummary(_ raw: ElementSnapshot) -> ElementSnapsh
         tagName: raw.tagName,
         bbox: raw.bbox
     )
-    if let v = raw.htmlId { summary.htmlId = truncateLabel_2(v, 60) }
-    if let v = raw.name { summary.name = truncateLabel_2(v, 60) }
-    if let v = raw.inViewport { summary.inViewport = v }
-    if let v = raw.ariaLabel { summary.ariaLabel = truncateLabel_2(v) }
-    if let v = raw.title { summary.title = truncateLabel_2(v) }
-    if let v = raw.innerText { summary.innerText = truncateLabel_2(v, 120) }
-    if let v = raw.altText { summary.altText = truncateLabel_2(v) }
-    if let v = raw.inputType { summary.inputType = v.lowercased() }
-    if let v = raw.autocomplete { summary.autocomplete = v.lowercased() }
-    if let v = raw.placeholder { summary.placeholder = truncateLabel_2(v) }
-    if let v = raw.disabled { summary.disabled = v }
-    if let v = raw.required { summary.required = v }
-    if let v = raw.checked { summary.checked = v }
-    if let v = raw.href { summary.href = redactSensitiveUrlParams(v) }
-    if let v = raw.pageUrl { summary.pageUrl = redactSensitiveUrlParams(v) }
-    if let v = raw.pageTitle { summary.pageTitle = truncateLabel_2(v, 120) }
-    if let v = raw.frameUrl { summary.frameUrl = redactSensitiveUrlParams(v) }
+    summary.htmlId = raw.htmlId.map { truncateLabel_2($0, 60) }
+    summary.name = raw.name.map { truncateLabel_2($0, 60) }
+    summary.inViewport = raw.inViewport
+    summary.ariaLabel = raw.ariaLabel.map { truncateLabel_2($0) }
+    summary.title = raw.title.map { truncateLabel_2($0) }
+    summary.innerText = raw.innerText.map { truncateLabel_2($0, 120) }
+    summary.altText = raw.altText.map { truncateLabel_2($0) }
+    summary.inputType = raw.inputType?.lowercased()
+    summary.autocomplete = raw.autocomplete?.lowercased()
+    summary.placeholder = raw.placeholder.map { truncateLabel_2($0) }
+    summary.disabled = raw.disabled
+    summary.required = raw.required
+    summary.checked = raw.checked
+    summary.href = raw.href.map(redactSensitiveUrlParams)
+    summary.pageUrl = raw.pageUrl.map(redactSensitiveUrlParams)
+    summary.pageTitle = raw.pageTitle.map { truncateLabel_2($0, 120) }
+    summary.frameUrl = raw.frameUrl.map(redactSensitiveUrlParams)
     return summary
 }
 
 public func isPasswordField(_ element: ElementSnapshot) -> Bool {
     if element.inputType == "password" { return true }
     let haystack = "\(element.label) \(element.placeholder ?? "") \(element.name ?? "") \(element.htmlId ?? "") \(element.ariaLabel ?? "") \(element.autocomplete ?? "")".lowercased()
-    for fragment in sensitiveFieldNames where haystack.contains(fragment) {
-        return true
-    }
-    return false
+    return sensitiveFieldNames.contains { haystack.contains($0) }
 }
 
 public enum AgentActionKind: String, Sendable, Equatable {
@@ -229,13 +224,12 @@ public func buildTypeAction(_ base: ActionBuilderBase, element: ElementSnapshot,
     let redacted = isPasswordField(summary)
     let preview = redacted ? "•••" : truncateLabel_2(text, typedTextPreviewMaxLength)
     let verb = replace == true ? "Replaced" : "Typed"
-    let label: String
-    if base.isError == true {
-        label = "Failed to type into \(summary.label)"
+    let label = if base.isError == true {
+        "Failed to type into \(summary.label)"
     } else if redacted {
-        label = "\(verb) password into \(summary.label)"
+        "\(verb) password into \(summary.label)"
     } else {
-        label = "\(verb) \"\(preview)\" into \(summary.label)"
+        "\(verb) \"\(preview)\" into \(summary.label)"
     }
     return buildBaseAction(base, "Keyboard", label, point, kind: .type, data: .type(element: summary, textPreview: preview, replace: replace, redacted: redacted))
 }
@@ -272,10 +266,8 @@ public func buildPressKeysAction(_ base: ActionBuilderBase, keys: String) -> Age
 public func buildNavigateAction(_ base: ActionBuilderBase, url: String, previousUrl: String?, pageTitle: String?) -> AgentAction {
     let redactedUrl = redactSensitiveUrlParams(url)
     let redactedPrevious = previousUrl.map { redactSensitiveUrlParams($0) }
-    var host = redactedUrl
-    if let components = URLComponents(string: redactedUrl), let h = components.host {
-        host = h.hasPrefix("www.") ? String(h.dropFirst(4)) : h
-    }
+    let host = URLComponents(string: redactedUrl)?.host
+        .map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 } ?? redactedUrl
     let label = base.isError == true ? "Failed to navigate to \(host)" : "Navigated to \(host)"
     return buildBaseAction(base, "Globe", label, nil, kind: .navigate, data: .navigate(url: redactedUrl, previousUrl: redactedPrevious, pageTitle: pageTitle.map { truncateLabel_2($0) }))
 }
@@ -391,9 +383,7 @@ private func elementSnapshotJSValue(_ element: ElementSnapshot) -> JSValue {
 
 /// Generates a random hex action id.
 public func generateActionId() -> String {
-    var bytes = [UInt8](repeating: 0, count: 6)
-    for index in bytes.indices { bytes[index] = UInt8.random(in: 0...255) }
-    return bytes.map { String(format: "%02x", $0) }.joined()
+    (0..<6).map { _ in String(format: "%02x", UInt8.random(in: 0...255)) }.joined()
 }
 
 // MARK: - Small string helpers

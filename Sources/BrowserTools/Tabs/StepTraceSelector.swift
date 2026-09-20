@@ -145,15 +145,13 @@ public enum StepTraceSelector {
     /// downstream consumers can tokenize a step line without quoting rules.
     public static func isSafeAttributeValue(_ value: String) -> Bool {
         guard !value.isEmpty, value.count <= maxValueLength else { return false }
-        for scalar in value.unicodeScalars {
-            if scalar.value < 0x20 || scalar.value == 0x7F { return false }
+        return value.unicodeScalars.allSatisfy { scalar in
+            guard scalar.value >= 0x20, scalar.value != 0x7F else { return false }
             switch scalar {
             case "\"", "'", "\\", "`": return false
-            default: break
+            default: return !Character(scalar).isWhitespace
             }
-            if Character(scalar).isWhitespace { return false }
         }
-        return true
     }
 
     // MARK: Classes
@@ -163,11 +161,8 @@ public enum StepTraceSelector {
     /// document order (deterministic across runs).
     public static func stableClassTokens(_ classAttribute: String?) -> [String] {
         guard let classAttribute else { return [] }
-        let tokens = classAttribute.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-        return tokens
-            .filter { isValidCSSIdentifier($0) && !looksHashed($0) }
-            .prefix(maxClassTokens)
-            .map { $0 }
+        let tokens = classAttribute.split(whereSeparator: \.isWhitespace).map(String.init)
+        return Array(tokens.filter { isValidCSSIdentifier($0) && !looksHashed($0) }.prefix(maxClassTokens))
     }
 
     /// Prefixes that mark a build-generated class: emotion / styled-components /
@@ -182,14 +177,12 @@ public enum StepTraceSelector {
     /// contain digits (`col-md-6`, `mt-4`, `h2-heading`), which are stable.
     public static func looksHashed(_ token: String) -> Bool {
         let lower = token.lowercased()
-        if hashedClassPrefixes.contains(where: { lower.hasPrefix($0) }) { return true }
-        let segments = token.split(whereSeparator: { $0 == "-" || $0 == "_" }).map(String.init)
-        for segment in segments {
-            let digits = segment.filter { $0.isNumber }.count
-            let letters = segment.filter { $0.isLetter }.count
-            if segment.count >= 5 && digits > 0 && letters > 0 { return true }
-            if segment.count >= 5 && letters == 0 && digits == segment.count { return true }
+        if hashedClassPrefixes.contains(where: lower.hasPrefix) { return true }
+        return token.split(whereSeparator: { $0 == "-" || $0 == "_" }).contains { segment in
+            guard segment.count >= 5 else { return false }
+            let digits = segment.count(where: \.isNumber)
+            let letters = segment.count(where: \.isLetter)
+            return (digits > 0 && letters > 0) || (letters == 0 && digits == segment.count)
         }
-        return false
     }
 }

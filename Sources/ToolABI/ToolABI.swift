@@ -232,14 +232,7 @@ public final class ToolExecutionContext {
 
     public func updateToolResult(output: String?, status: ToolResultStatus?, metadata: ToolMetadata?) {
         let existing = session.findToolResult(toolCallId)?.metadata
-        let merged: ToolMetadata?
-        if let metadata {
-            var combined = existing ?? [:]
-            for (key, value) in metadata { combined[key] = value }
-            merged = combined
-        } else {
-            merged = existing
-        }
+        let merged = metadata.map { (existing ?? [:]).merging($0) { _, incoming in incoming } } ?? existing
         let update = ToolResultUpdate(output: output, status: status, metadata: merged)
         session.updateToolCallResult(toolCallId, update)
         // Surface the mid-execution update to any observer BEFORE persistence/notify, so a

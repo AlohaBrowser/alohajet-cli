@@ -71,19 +71,13 @@ import Foundation
         let handle = try exitedHandle(stderr: Self.singletonRefusal)
         defer { handle.terminate() }
 
-        await #expect(throws: CDPError.self) {
+        let error = try await #require(throws: CDPError.self) {
             _ = try await self.launcher().discoverWebSocketURL(
                 port: Self.unservedPort, timeout: 10, handle: handle)
         }
 
         // The message must carry the diagnosis, not just the symptom.
-        var message = ""
-        do {
-            _ = try await launcher().discoverWebSocketURL(
-                port: Self.unservedPort, timeout: 10, handle: handle)
-        } catch {
-            message = "\(error)"
-        }
+        let message = "\(error)"
         #expect(message.contains("exited without serving"))
         #expect(message.contains("SingletonLock"))
         #expect(message.contains("Aborting now"))
@@ -97,15 +91,14 @@ import Foundation
         defer { handle.terminate() }
 
         let started = Date()
-        do {
+        await #expect(throws: (any Error).self,
+                      "discovery unexpectedly succeeded against an unserved port") {
             _ = try await launcher().discoverWebSocketURL(
                 port: Self.unservedPort, timeout: 30, handle: handle)
-            Issue.record("discovery unexpectedly succeeded against an unserved port")
-        } catch {
-            // Well inside the 30s budget: the point is that a decided failure is not
-            // deferred. Generous enough not to measure the machine's mood.
-            #expect(Date().timeIntervalSince(started) < 5)
         }
+        // Well inside the 30s budget: the point is that a decided failure is not
+        // deferred. Generous enough not to measure the machine's mood.
+        #expect(Date().timeIntervalSince(started) < 5)
     }
 
     @Test("a still-running browser is still polled to the timeout")
@@ -125,13 +118,11 @@ import Foundation
         let handle = try exitedHandle(stderr: nil)
         defer { handle.terminate() }
 
-        var message = ""
-        do {
-            _ = try await launcher().discoverWebSocketURL(
+        let error = try await #require(throws: CDPError.self) {
+            _ = try await self.launcher().discoverWebSocketURL(
                 port: Self.unservedPort, timeout: 10, handle: handle)
-        } catch {
-            message = "\(error)"
         }
+        let message = "\(error)"
         #expect(message.contains("exited without serving"))
         #expect(message.contains("exit status"))
         // No capture, so no stderr clause — and no crash reaching for one.

@@ -79,11 +79,9 @@ private func find(_ nodes: [DomNode], _ id: String) -> DomNode? { nodes.first { 
         #expect(surviving.contains("dataimg"))
     }
 
-    @Test func onStripsNoiseAttributesButKeepsMeaningfulOnes() {
+    @Test func onStripsNoiseAttributesButKeepsMeaningfulOnes() throws {
         let cleaned = cleanDomTree(sampleTree())
-        let link = find(cleaned, "link")
-        #expect(link != nil)
-        let attrs = link!.element.attributes
+        let attrs = try #require(find(cleaned, "link")).element.attributes
         // KEEP href / alt / aria-label.
         #expect(attrs["href"] == "/page")
         #expect(attrs["alt"] == "Go to page")
@@ -94,21 +92,19 @@ private func find(_ nodes: [DomNode], _ id: String) -> DomNode? { nodes.first { 
         #expect(attrs["style"] == nil)
     }
 
-    @Test func onNeverSerializesDataUris() {
+    @Test func onNeverSerializesDataUris() throws {
         let cleaned = cleanDomTree(sampleTree())
-        let img = find(cleaned, "dataimg")
-        #expect(img != nil)
+        let img = try #require(find(cleaned, "dataimg"))
         // The data: src is dropped; the real alt survives.
-        #expect(img!.element.attributes["src"] == nil)
-        #expect(img!.element.attributes["alt"] == "logo")
+        #expect(img.element.attributes["src"] == nil)
+        #expect(img.element.attributes["alt"] == "logo")
     }
 
-    @Test func onPrunesDroppedChildrenFromParentChildLists() {
+    @Test func onPrunesDroppedChildrenFromParentChildLists() throws {
         let cleaned = cleanDomTree(sampleTree())
-        let root = find(cleaned, "root")
-        #expect(root != nil)
+        let root = try #require(find(cleaned, "root"))
         // Only the surviving children remain referenced.
-        #expect(root!.children == ["link", "dataimg"])
+        #expect(root.children == ["link", "dataimg"])
     }
 
     @Test func onDropsInlineDisplayNoneElements() {

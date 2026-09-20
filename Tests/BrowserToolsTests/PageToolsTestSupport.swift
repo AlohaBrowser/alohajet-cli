@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 import ToolABI
 import CDP
 @testable import BrowserTools
@@ -227,7 +228,8 @@ func makePageToolsCDPFixture(url: String = "https://example.com") async throws -
     let client = CDPClient(channel: channel)
     try await client.connect()
     let tabsService = await makeCDPBrowserTabsService(client: client, seed: false)
-    let tab = tabsService.window!.tabs.createTab(TabCreateSpec(tabType: "website", url: url, openedByHuman: false))
-    tabsService.window!.tabs.setActiveTabId(tab.id)
+    let tabs = try #require(tabsService.window).tabs
+    let tab = tabs.createTab(TabCreateSpec(tabType: "website", url: url, openedByHuman: false))
+    tabs.setActiveTabId(tab.id)
     return PageToolsCDPFixture(cdp: cdp, client: client, tabsService: tabsService, tabId: tab.id)
 }

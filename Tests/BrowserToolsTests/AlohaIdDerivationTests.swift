@@ -18,101 +18,95 @@ import JavaScriptCore
             + "\nconst mockElement = (attrs) => ({ getAttribute: (n) => (n in attrs ? attrs[n] : null) });\n"
     }
 
-    private func evaluate(_ expression: String) -> String? {
-        guard let context = JSContext() else {
-            Issue.record("no JSContext")
-            return nil
-        }
+    private func evaluate(_ expression: String) throws -> String {
+        let context = try #require(JSContext())
         context.exceptionHandler = { _, exception in
             Issue.record("JS exception: \(exception?.toString() ?? "unknown")")
         }
         context.evaluateScript(derivationSource)
-        return context.evaluateScript(expression)?.toString()
+        return try #require(context.evaluateScript(expression)?.toString())
+    }
+
+    /// The `|`-joined results of one `evaluate`, split back apart. Every case below asks JS
+    /// for several ids in one context, because id derivation is stateful across a walk.
+    private func evaluateJoined(_ expression: String, count: Int) throws -> [String] {
+        let parts = try evaluate(expression)
+            .split(separator: "|", omittingEmptySubsequences: false)
+            .map(String.init)
+        try #require(parts.count == count)
+        return parts
     }
 
     /// The mechanism bcb8b75 describes, closed by construction: identical elements re-derive
     /// identical ids, so a re-walk cannot stamp one id onto a different element.
-    @Test func sameInputYieldsSameIdInAFreshContext() {
+    @Test func sameInputYieldsSameIdInAFreshContext() throws {
         let expression = """
         alohaIdFor({ xpath: "/body/div[2]/button", contextPath: [] }, null)
         """
-        let first = evaluate(expression)
-        let second = evaluate(expression)
-        #expect(first != nil && !(first ?? "").isEmpty)
-        #expect(first == second)
+        let first = try evaluate(expression)
+        #expect(!first.isEmpty)
+        #expect(try evaluate(expression) == first)
     }
 
-    @Test func frameScopeSaltsThePosition() {
-        let value = evaluate("""
+    @Test func frameScopeSaltsThePosition() throws {
+        let parts = try evaluateJoined("""
         [alohaIdFor({ xpath: "/body/div", contextPath: [] }, null),
          alohaIdFor({ xpath: "/body/div", contextPath: [{ type: "iframe", selector: "iframe#a" }] }, null)].join("|")
-        """)
-        let parts = (value ?? "").split(separator: "|").map(String.init)
-        #expect(parts.count == 2)
-        #expect(parts.first != parts.last)
+        """, count: 2)
+        #expect(parts[0] != parts[1])
     }
 
-    @Test func authoredNameBeatsPosition() {
-        let value = evaluate("""
+    @Test func authoredNameBeatsPosition() throws {
+        let parts = try evaluateJoined("""
         [alohaIdFor({ xpath: "/body/div/input", contextPath: [] }, mockElement({ id: "search-input" })),
          alohaIdFor({ xpath: "/body/div[2]/input", contextPath: [] }, mockElement({ id: "search-input" }))].join("|")
-        """)
-        let parts = (value ?? "").split(separator: "|").map(String.init)
-        #expect(parts.count == 2)
+        """, count: 2)
         // Same authored name, two positions: one identity, so the second is the dedupe of the first.
-        #expect(parts.last == (parts.first ?? "") + "-2")
+        #expect(parts[1] == parts[0] + "-2")
     }
 
-    @Test func generatedNamesFallThroughToPosition() {
-        for generated in ["ember1234", "mui-5", "radix-:r1:"] {
-            let value = evaluate("""
-            [alohaIdFor({ xpath: "/body/div/input", contextPath: [] }, mockElement({ id: "\(generated)" })),
-             hashString("|/body/div/input"),
-             hashString("#\(generated)")].join("|")
-            """)
-            let parts = (value ?? "").split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-            #expect(parts.count == 3, "\(generated)")
-            #expect(parts.first == parts.dropFirst().first, "\(generated) should use the position")
-            #expect(parts.first != parts.last, "\(generated) should not hash its authored name")
-        }
+    @Test("a framework-generated id is ignored in favour of the position",
+          arguments: ["ember1234", "mui-5", "radix-:r1:"])
+    func generatedNamesFallThroughToPosition(_ generated: String) throws {
+        let parts = try evaluateJoined("""
+        [alohaIdFor({ xpath: "/body/div/input", contextPath: [] }, mockElement({ id: "\(generated)" })),
+         hashString("|/body/div/input"),
+         hashString("#\(generated)")].join("|")
+        """, count: 3)
+        #expect(parts[0] == parts[1], "\(generated) should use the position")
+        #expect(parts[0] != parts[2], "\(generated) should not hash its authored name")
     }
 
-    @Test func identicalIdentitiesAreDisambiguated() {
-        let value = evaluate("""
+    @Test func identicalIdentitiesAreDisambiguated() throws {
+        let parts = try evaluateJoined("""
         [alohaIdFor({ xpath: "/body/div", contextPath: [] }, null),
          alohaIdFor({ xpath: "/body/div", contextPath: [] }, null)].join("|")
-        """)
-        let parts = (value ?? "").split(separator: "|").map(String.init)
-        #expect(parts.count == 2)
-        #expect(!(parts.first ?? "").isEmpty)
-        #expect(parts.first != parts.last)
-        #expect(parts.last == (parts.first ?? "") + "-2")
+        """, count: 2)
+        #expect(!parts[0].isEmpty)
+        #expect(parts[1] == parts[0] + "-2")
     }
 
-    @Test func theIdIsMemoisedOnTheDescriptor() {
-        let value = evaluate("""
+    @Test func theIdIsMemoisedOnTheDescriptor() throws {
+        let parts = try evaluateJoined("""
         (() => {
           const d = { xpath: "/body/div", contextPath: [] };
           const a = alohaIdFor(d, null);
           const b = alohaIdFor(d, null);
           return [a, b, String(takenAlohaIds.size)].join("|");
         })()
-        """)
-        let parts = (value ?? "").split(separator: "|").map(String.init)
-        #expect(parts.count == 3)
+        """, count: 3)
         #expect(parts[0] == parts[1])
         #expect(parts[2] == "1")
     }
 
     /// The cross-walk stale-attribute tail needs a real DOM to reproduce, so this is the only
     /// runnable check the clear can have: it exists, and it runs before the walk.
-    @Test func staleAlohaIdsAreClearedBeforeTheWalk() {
+    @Test func staleAlohaIdsAreClearedBeforeTheWalk() throws {
         let script = buildAgentDomTreeScript(highlight: false, focusInteractive: true)
-        let clear = #"querySelectorAll("[aloha-id]")"#
-        guard let clearAt = script.range(of: clear), let walkAt = script.range(of: "walkNode(document.body)") else {
-            Issue.record("the stale-id clear or the walk entry point is gone")
-            return
-        }
+        let clearAt = try #require(script.range(of: #"querySelectorAll("[aloha-id]")"#),
+                                   "the stale-id clear is gone")
+        let walkAt = try #require(script.range(of: "walkNode(document.body)"),
+                                  "the walk entry point is gone")
         #expect(script.contains(#"stale.removeAttribute("aloha-id")"#))
         #expect(clearAt.lowerBound < walkAt.lowerBound)
     }
@@ -120,8 +114,8 @@ import JavaScriptCore
     /// An authored `id="clickme"` hashes to a ref of nothing but decimal digits, which is a
     /// canonical array index — `for...in` would hand it back first and numerically ascending,
     /// ahead of every ref containing a letter, whatever the page says.
-    @Test func anAuthoredNameCanHashToAnAllDigitRef() {
-        let value = evaluate(#"alohaIdFor({ xpath: "/body/div", contextPath: [] }, mockElement({ id: "clickme" }))"#)
+    @Test func anAuthoredNameCanHashToAnAllDigitRef() throws {
+        let value = try evaluate(#"alohaIdFor({ xpath: "/body/div", contextPath: [] }, mockElement({ id: "clickme" }))"#)
         #expect(value == "38397819")
     }
 

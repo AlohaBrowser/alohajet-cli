@@ -205,9 +205,7 @@ let cleanDomDroppedTags: Set<String> = ["style", "script", "noscript", "svg"]
 /// — survive untouched.
 public func cleanDomDropsAttribute(_ name: String) -> Bool {
     let lowered = name.lowercased()
-    if lowered == "class" || lowered == "style" { return true }
-    if lowered.hasPrefix("data-") { return true }
-    return false
+    return lowered == "class" || lowered == "style" || lowered.hasPrefix("data-")
 }
 
 /// Whether a value would serialize an inline `data:` URI. Such values embed entire assets
@@ -218,8 +216,7 @@ public func cleanDomIsDataUri(_ value: String) -> Bool {
 }
 
 public func cleanDomIsHidden(_ node: DomNode) -> Bool {
-    if !node.positioning.isVisible { return true }
-    return cleanDomIsMarkedHidden(node)
+    !node.positioning.isVisible || cleanDomIsMarkedHidden(node)
 }
 
 /// The subset of ``cleanDomIsHidden`` that a subtree INHERITS: the author's explicit
@@ -237,11 +234,9 @@ func cleanDomIsMarkedHidden(_ node: DomNode) -> Bool {
     let attrs = node.element.attributes
     if attrs["hidden"] != nil { return true }
     if attrs["aria-hidden"]?.lowercased() == "true" { return true }
-    if let style = attrs["style"] {
-        let compact = style.lowercased().replacingOccurrences(of: " ", with: "")
-        if compact.contains("display:none") || compact.contains("visibility:hidden") { return true }
-    }
-    return false
+    guard let style = attrs["style"] else { return false }
+    let compact = style.lowercased().replacingOccurrences(of: " ", with: "")
+    return compact.contains("display:none") || compact.contains("visibility:hidden")
 }
 
 /// Pre-clean a parsed DOM forest before serialization. Surviving nodes keep their
@@ -255,16 +250,13 @@ public func cleanDomTree(_ nodes: [DomNode]) -> [DomNode] {
 
     /// Dropped along with everything beneath it — all three cases describe a whole region.
     func dropsSubtree(_ node: DomNode) -> Bool {
-        if node.nodeType == "COMMENT_NODE" { return true }
-        let tag = node.element.tagName.lowercased()
-        if cleanDomDroppedTags.contains(tag) { return true }
-        if cleanDomIsMarkedHidden(node) { return true }
-        return false
+        node.nodeType == "COMMENT_NODE"
+            || cleanDomDroppedTags.contains(node.element.tagName.lowercased())
+            || cleanDomIsMarkedHidden(node)
     }
 
-    var childIds = Set<String>()
-    for node in nodes { for child in node.children { childIds.insert(child) } }
-    let rootIds = nodes.filter { !childIds.contains($0.id) }.map { $0.id }
+    let childIds = Set(nodes.flatMap(\.children))
+    let rootIds = nodes.filter { !childIds.contains($0.id) }.map(\.id)
 
     var keep = Set<String>()
     var visited = Set<String>()
@@ -289,13 +281,9 @@ public func cleanDomTree(_ nodes: [DomNode]) -> [DomNode] {
     for node in nodes where keep.contains(node.id) {
         var cleaned = node
         cleaned.children = node.children.filter { keep.contains($0) }
-        var attrs = cleaned.element.attributes
-        for (name, value) in attrs {
-            if cleanDomDropsAttribute(name) || cleanDomIsDataUri(value) {
-                attrs.removeValue(forKey: name)
-            }
+        cleaned.element.attributes = node.element.attributes.filter { name, value in
+            !cleanDomDropsAttribute(name) && !cleanDomIsDataUri(value)
         }
-        cleaned.element.attributes = attrs
         result.append(cleaned)
     }
     return result
@@ -412,16 +400,11 @@ private func siteJsonCollect(_ value: Any, into out: inout [SiteJsonProduct]) {
     }
 
     let types = siteJsonTypes(node).map { $0.lowercased() }
-    if types.contains(where: { $0.hasSuffix("itemlist") }), let items = node["itemListElement"] {
+    if types.contains(where: { $0.hasSuffix("itemlist") }),
+       let items = node["itemListElement"] as? [Any] {
         // A ListItem wraps the real entity in `item`; a bare Product may also appear directly.
-        if let arr = items as? [Any] {
-            for element in arr {
-                if let li = element as? [String: Any], let item = li["item"] {
-                    siteJsonCollect(item, into: &out)
-                } else {
-                    siteJsonCollect(element, into: &out)
-                }
-            }
+        for element in items {
+            siteJsonCollect((element as? [String: Any])?["item"] ?? element, into: &out)
         }
     }
 
@@ -435,16 +418,14 @@ private func siteJsonCollect(_ value: Any, into out: inout [SiteJsonProduct]) {
 /// not name, so currency is left unset.
 private func siteJsonShopifyProducts(_ value: Any) -> [SiteJsonProduct] {
     guard let root = value as? [String: Any], let products = root["products"] as? [Any] else { return [] }
-    var out: [SiteJsonProduct] = []
-    for case let p as [String: Any] in products {
-        guard let title = siteJsonScalarString(p["title"]) else { continue }
-        var price: String?
-        if let variants = p["variants"] as? [Any], let first = variants.first as? [String: Any] {
-            price = siteJsonScalarString(first["price"])
-        }
-        out.append(SiteJsonProduct(name: title, price: price))
+    return products.compactMap { entry in
+        guard let product = entry as? [String: Any],
+              let title = siteJsonScalarString(product["title"]) else { return nil }
+        let price = (product["variants"] as? [Any])
+            .flatMap { $0.first as? [String: Any] }
+            .flatMap { siteJsonScalarString($0["price"]) }
+        return SiteJsonProduct(name: title, price: price)
     }
-    return out
 }
 
 /// One line per product, e.g. `- Acme Widget — 19.99 USD — InStock`, dropping any missing
@@ -452,11 +433,7 @@ private func siteJsonShopifyProducts(_ value: Any) -> [SiteJsonProduct] {
 private func siteJsonProductLine(_ product: SiteJsonProduct) -> String {
     var parts: [String] = [product.name]
     if let price = product.price {
-        if let currency = product.currency {
-            parts.append("\(price) \(currency)")
-        } else {
-            parts.append(price)
-        }
+        parts.append(product.currency.map { "\(price) \($0)" } ?? price)
     }
     if let availability = product.availability {
         parts.append(availability)
@@ -498,9 +475,7 @@ public func siteJsonStructuredBlock(
     }
     guard !unique.isEmpty else { return nil }
 
-    var lines = ["[site data]"]
-    lines.append(contentsOf: unique.map(siteJsonProductLine))
-    return lines.joined(separator: "\n")
+    return (["[site data]"] + unique.map(siteJsonProductLine)).joined(separator: "\n")
 }
 
 let inlineTextTags: Set<String> = ["legend", "h1", "h2", "h3", "h4", "h5", "h6", "figcaption", "caption", "dt", "p"]
@@ -515,27 +490,34 @@ public func normalizeWhitespace(_ raw: String?) -> String {
 public func collectDescendantText(_ node: DomNode, _ nodesById: [String: DomNode], _ visited: inout Set<String>) -> String {
     var collected: [String] = []
     for childId in node.children {
-        if visited.contains(childId) { continue }
-        visited.insert(childId)
-        guard let child = nodesById[childId] else { continue }
-        let tag = child.element.tagName.lowercased()
-        if child.nodeType == "TEXT_NODE" || inlineTextTags.contains(tag) || (child.interactivity.isHighlighted && child.interactivity.isTopElement) {
-            let text = normalizeWhitespace(child.content.comprehensiveText ?? child.element.textContent ?? "")
-            if !text.isEmpty { collected.append(text) }
-        } else {
-            let text = collectDescendantText(child, nodesById, &visited)
-            if !text.isEmpty { collected.append(text) }
-        }
+        guard visited.insert(childId).inserted, let child = nodesById[childId] else { continue }
+        let isTextCarrier = child.nodeType == "TEXT_NODE"
+            || inlineTextTags.contains(child.element.tagName.lowercased())
+            || (child.interactivity.isHighlighted && child.interactivity.isTopElement)
+        let text = isTextCarrier
+            ? normalizeWhitespace(child.content.comprehensiveText ?? child.element.textContent ?? "")
+            : collectDescendantText(child, nodesById, &visited)
+        if !text.isEmpty { collected.append(text) }
     }
     return collected.joined(separator: " ")
 }
 
 public func textDuplicatesDescendants(_ text: String, _ node: DomNode, _ nodesById: [String: DomNode]) -> Bool {
-    if node.children.isEmpty { return false }
+    guard !node.children.isEmpty else { return false }
     var visited = Set<String>()
     let descendantText = collectDescendantText(node, nodesById, &visited)
-    if descendantText.isEmpty { return false }
+    guard !descendantText.isEmpty else { return false }
     return normalizeWhitespace(text) == normalizeWhitespace(descendantText)
+}
+
+/// The node's comprehensive text when it holds more than whitespace, else the raw
+/// `textContent` the walker recorded.
+func elementText(_ node: DomNode) -> String {
+    if let comprehensive = node.content.comprehensiveText,
+       !comprehensive.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        return comprehensive
+    }
+    return node.element.textContent ?? ""
 }
 
 public func truncateText(_ raw: String?, _ maxLength: Int = 3000) -> String {
@@ -558,8 +540,8 @@ public func truncateText(_ raw: String?, _ maxLength: Int = 3000) -> String {
 }
 
 public func truncateLabel(_ raw: String, _ maxLength: Int = 20) -> String {
-    if raw.count <= maxLength { return raw }
-    return "\(String(raw.prefix(maxLength - 3)))..."
+    guard raw.count > maxLength else { return raw }
+    return "\(raw.prefix(maxLength - 3))..."
 }
 
 // MARK: - Structural-markdown read observation
@@ -579,7 +561,7 @@ let interactiveLabelCap = 120
 /// ` {aloha-id="1f3a9c2b" button}`. The literal `aloha-id="…"` token is a contract: id capture
 /// in `findAlohaIdsInMarkdown` reads it back.
 public func interactiveTrailer(_ node: DomNode, _ tag: String) -> String {
-    return " {aloha-id=\"\(node.id)\" \(tag)}"
+    " {aloha-id=\"\(node.id)\" \(tag)}"
 }
 
 let selectOptionsVisibleCap = 1000
@@ -587,122 +569,102 @@ let selectSelectedBeyondCap = 50
 
 public func renderSelectOptions(_ id: String, _ options: [DomSelectOption], _ multiple: Bool) -> String {
     if options.isEmpty { return "[options: empty]" }
-    let multiLabel = multiple ? " (multi)" : ""
-    let visibleCount = min(options.count, selectOptionsVisibleCap)
-    var selectedBeyondCap: [(idx: Int, opt: DomSelectOption)] = []
-    var y = selectOptionsVisibleCap
-    while y < options.count {
-        if options[y].selected {
-            selectedBeyondCap.append((idx: y, opt: options[y]))
-        }
-        y += 1
+    func label(_ option: DomSelectOption) -> String {
+        truncateLabel(normalizeWhitespace(option.text ?? option.value), 20)
     }
-    let selectedBeyondShown = min(selectedBeyondCap.count, selectSelectedBeyondCap)
-    var rendered: [String] = []
-    var v = 0
-    while v < visibleCount {
-        let option = options[v]
-        let normalized = normalizeWhitespace(option.text ?? option.value)
-        let label = truncateLabel(normalized, 20)
-        let marker = option.selected ? "*" : ""
-        rendered.append("[\(id).\(v)] \(marker)\(label)")
-        v += 1
+    let visible = options.prefix(selectOptionsVisibleCap)
+    let selectedBeyondCap = options.enumerated().dropFirst(selectOptionsVisibleCap).filter(\.element.selected)
+    let selectedBeyondShown = selectedBeyondCap.prefix(selectSelectedBeyondCap)
+
+    var rendered = visible.enumerated().map { index, option in
+        "[\(id).\(index)] \(option.selected ? "*" : "")\(label(option))"
     }
-    var w = 0
-    while w < selectedBeyondShown {
-        let entry = selectedBeyondCap[w]
-        let normalized = normalizeWhitespace(entry.opt.text ?? entry.opt.value)
-        let label = truncateLabel(normalized, 20)
-        rendered.append("[\(id).\(entry.idx)] *\(label)")
-        w += 1
-    }
-    let moreCount = options.count - visibleCount - selectedBeyondShown
-    let beyondOmitted = selectedBeyondCap.count - selectedBeyondShown
+    rendered += selectedBeyondShown.map { "[\(id).\($0.offset)] *\(label($0.element))" }
+
+    let moreCount = options.count - visible.count - selectedBeyondShown.count
+    let beyondOmitted = selectedBeyondCap.count - selectedBeyondShown.count
     if moreCount > 0 { rendered.append("... (+\(moreCount) more)") }
     if beyondOmitted > 0 { rendered.append("... (+\(beyondOmitted) selected beyond cap omitted)") }
+    let multiLabel = multiple ? " (multi)" : ""
     return "[options: \(rendered.joined(separator: ", "))\(multiLabel)]"
 }
 
 public func hasAccessibleNameAttribute(_ node: DomNode) -> Bool {
-    let ariaLabel = node.element.attributes["aria-label"]
-    let ariaPlaceholder = node.element.attributes["aria-placeholder"]
-    return (ariaLabel != nil && !ariaLabel!.isEmpty) || (ariaPlaceholder != nil && !ariaPlaceholder!.isEmpty)
+    let attributes = node.element.attributes
+    return attributes["aria-label"]?.isEmpty == false || attributes["aria-placeholder"]?.isEmpty == false
 }
 
 public func appendAnchorMetadata(_ rendered: String, _ node: DomNode, _ tag: String, _ includeUrls: Bool) -> String {
+    guard tag == "a" else { return rendered }
+    let attributes = node.element.attributes
     var result = rendered
-    if tag == "a" {
-        if includeUrls, let href = node.element.attributes["href"], !href.isEmpty {
-            result += " href=\"\(href)\""
-        }
-        if node.element.attributes["target"] == "_blank" {
-            result += " [new tab]"
-        }
-        if node.element.attributes["download"] != nil {
-            result += " [download]"
-        }
+    if includeUrls, let href = attributes["href"], !href.isEmpty {
+        result += " href=\"\(href)\""
     }
+    if attributes["target"] == "_blank" { result += " [new tab]" }
+    if attributes["download"] != nil { result += " [download]" }
     return result
 }
 
 public func isElementDisabled(_ node: DomNode) -> Bool {
     let attributes = node.element.attributes
-    let ariaDisabled = attributes["aria-disabled"]
-    let hasDisabledAttr = attributes.keys.contains("disabled")
-    return node.content.inputData?.disabled == true || hasDisabledAttr || ariaDisabled == "true"
+    return node.content.inputData?.disabled == true
+        || attributes.keys.contains("disabled")
+        || attributes["aria-disabled"] == "true"
 }
 
 private func appendAriaAttributes(_ rendered: String, _ node: DomNode, _ tag: String) -> String {
-    var c = rendered
     let attrs = node.element.attributes
-    var collected: [String] = []
-    if let role = attrs["role"], !role.isEmpty { collected.append("role=\"\(role)\"") }
-    if let v = attrs["aria-label"], !v.isEmpty { collected.append("aria-label=\"\(v)\"") }
-    if let v = attrs["aria-placeholder"], !v.isEmpty { collected.append("aria-placeholder=\"\(v)\"") }
-    if let v = attrs["aria-checked"], !v.isEmpty { collected.append("aria-checked=\"\(v)\"") }
-    if let v = attrs["aria-expanded"], !v.isEmpty { collected.append("aria-expanded=\"\(v)\"") }
-    if let v = attrs["aria-selected"], !v.isEmpty { collected.append("aria-selected=\"\(v)\"") }
-    if let v = attrs["aria-pressed"], !v.isEmpty { collected.append("aria-pressed=\"\(v)\"") }
-    if let v = attrs["aria-current"], !v.isEmpty { collected.append("aria-current=\"\(v)\"") }
-    if let v = attrs["aria-haspopup"], !v.isEmpty { collected.append("aria-haspopup=\"\(v)\"") }
+    func quoted(_ name: String) -> String? {
+        guard let value = attrs[name], !value.isEmpty else { return nil }
+        return "\(name)=\"\(value)\""
+    }
+    var collected = quotedAriaAttributeNames.compactMap(quoted)
     if attrs["contenteditable"] == "true" { collected.append("contenteditable") }
-    if let v = attrs["data-state"], !v.isEmpty { collected.append("data-state=\"\(v)\"") }
-    if tag == "label", let forAttr = attrs["for"], !forAttr.isEmpty { collected.append("for=\"\(forAttr)\"") }
-    if collected.count > 0 { c += " " + collected.joined(separator: " ") }
-    return c
+    if let dataState = quoted("data-state") { collected.append(dataState) }
+    if tag == "label", let forAttr = quoted("for") { collected.append(forAttr) }
+    guard !collected.isEmpty else { return rendered }
+    return rendered + " " + collected.joined(separator: " ")
 }
 
+/// Rendered as `name="value"` in this order, ahead of the flag-shaped attributes.
+private let quotedAriaAttributeNames = [
+    "role", "aria-label", "aria-placeholder", "aria-checked", "aria-expanded",
+    "aria-selected", "aria-pressed", "aria-current", "aria-haspopup"
+]
+
 private func appendAriaStateMarkers(_ rendered: String, _ node: DomNode) -> String {
-    var c = rendered
     let attrs = node.element.attributes
-    if attrs["aria-expanded"] == "true" {
-        c += " [aria: EXPANDED]"
-    } else if attrs["aria-expanded"] == "false" {
-        c += " [aria: COLLAPSED]"
+    var markers: [String] = []
+    switch attrs["aria-expanded"] {
+    case "true": markers.append(" [aria: EXPANDED]")
+    case "false": markers.append(" [aria: COLLAPSED]")
+    default: break
     }
-    if attrs["aria-selected"] == "true" { c += " [aria: SELECTED]" }
-    if attrs["aria-pressed"] == "true" { c += " [aria: PRESSED]" }
-    if attrs["aria-invalid"] == "true" { c += " [aria: INVALID]" }
-    if attrs["aria-busy"] == "true" { c += " [aria: LOADING]" }
-    return c
+    if attrs["aria-selected"] == "true" { markers.append(" [aria: SELECTED]") }
+    if attrs["aria-pressed"] == "true" { markers.append(" [aria: PRESSED]") }
+    if attrs["aria-invalid"] == "true" { markers.append(" [aria: INVALID]") }
+    if attrs["aria-busy"] == "true" { markers.append(" [aria: LOADING]") }
+    return rendered + markers.joined()
 }
 
 private func openInteractiveTag(_ node: DomNode, _ tag: String) -> String {
     var c = "<\(tag) aloha-id=\"\(node.id)\""
-    if tag == "input" {
-        if let inputData = node.content.inputData {
-            var attrs: [String] = []
-            if let placeholder = inputData.placeholder, !placeholder.isEmpty {
-                attrs.append("placeholder=\"\(placeholder)\"")
-            }
-            if inputData.required { attrs.append("required=true") }
-            c += " " + attrs.joined(separator: " ")
+    switch tag {
+    case "input":
+        guard let inputData = node.content.inputData else { break }
+        var attrs: [String] = []
+        if let placeholder = inputData.placeholder, !placeholder.isEmpty {
+            attrs.append("placeholder=\"\(placeholder)\"")
         }
-    } else if tag == "select", node.content.optionData != nil {
+        if inputData.required { attrs.append("required=true") }
+        c += " " + attrs.joined(separator: " ")
+    case "select" where node.content.optionData != nil:
         c += " name=\"\(node.element.attributes["name"] ?? "")\""
-    } else if tag == "option" {
-        let hasSelected = node.content.optionData?.options.contains { $0.selected } ?? false
-        c += hasSelected ? " selected" : ""
+    case "option" where node.content.optionData?.options.contains(where: \.selected) == true:
+        c += " selected"
+    default:
+        break
     }
     return c
 }
@@ -715,8 +677,7 @@ private func openInteractiveTag(_ node: DomNode, _ tag: String) -> String {
 /// the legend described the first and marked all of them. An overlay with no id is reported as
 /// covered and named by its text instead.
 func occlusionKey(_ occ: OccluderRef) -> String? {
-    guard let id = occ.alohaId, !id.isEmpty else { return nil }
-    return id
+    occ.alohaId.flatMap { $0.isEmpty ? nil : $0 }
 }
 
 func occlusionMarker(_ node: DomNode) -> String {
@@ -750,11 +711,10 @@ public func occlusionLegend(_ nodes: [DomNode]) -> [String] {
         d += key == nil
             ? " — no aloha-id to address it by; dismiss it to interact with [occluded]-marked elements below"
             : " — dismiss/close it to interact with \(marker)-marked elements below"
-        if seen.contains(d) { continue }
-        seen.insert(d)
+        guard seen.insert(d).inserted else { continue }
         lines.append(d)
     }
-    if lines.isEmpty { return [] }
+    guard !lines.isEmpty else { return [] }
     return ["--- overlays covering the page (dismiss to interact) ---"] + lines + ["---"]
 }
 
@@ -794,7 +754,7 @@ func scrollMarker(_ node: DomNode) -> String {
     if let h = s.horizontal {
         parts.append("\u{2194} \(fraction(h))% \u{00B7} \(scrollPositionPhraseH(h))")
     }
-    if parts.isEmpty { return "" }
+    guard !parts.isEmpty else { return "" }
     var out = " [scrollable " + parts.joined(separator: " ") + "]"
     if let centered = s.centeredChild?.trimmingCharacters(in: .whitespacesAndNewlines), !centered.isEmpty {
         // Neutralize characters that would break the marker's own delimiters when this
@@ -817,10 +777,8 @@ private func interactiveLabel(_ node: DomNode) -> String {
     if let ariaPlaceholder = node.element.attributes["aria-placeholder"], !ariaPlaceholder.isEmpty {
         return truncateText(normalizeWhitespace(ariaPlaceholder), interactiveLabelCap)
     }
-    let raw = (node.content.comprehensiveText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? node.content.comprehensiveText : nil) ?? node.element.textContent ?? ""
-    let text = normalizeWhitespace(raw)
-    if text.isEmpty { return "" }
-    return truncateText(text, interactiveLabelCap)
+    let text = normalizeWhitespace(elementText(node))
+    return text.isEmpty ? "" : truncateText(text, interactiveLabelCap)
 }
 
 private func renderInputControl(_ node: DomNode) -> String {
@@ -914,7 +872,7 @@ func emitOutOfViewElement(_ node: DomNode, _ depth: Int, _ nodesById: [String: D
         c += " " + renderSelectOptions(node.id, optionData.options, optionData.multiple)
     }
     if !hasAccessibleNameAttribute(node) {
-        let bodyText = (node.content.comprehensiveText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? node.content.comprehensiveText : nil) ?? node.element.textContent ?? ""
+        let bodyText = elementText(node)
         if !bodyText.isEmpty && !textDuplicatesDescendants(bodyText, node, nodesById) {
             let truncated = truncateText(bodyText, 50)
             if !truncated.isEmpty { c += " " + truncated }
@@ -937,7 +895,7 @@ func emitNearViewportElement(_ node: DomNode, _ depth: Int, _ nodesById: [String
         c += " " + renderSelectOptions(node.id, optionData.options, optionData.multiple)
     }
     if !hasAccessibleNameAttribute(node) {
-        let text = (node.content.comprehensiveText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? node.content.comprehensiveText : nil) ?? node.element.textContent ?? ""
+        let text = elementText(node)
         if !text.isEmpty && !textDuplicatesDescendants(text, node, nodesById) {
             let truncated = truncateText(text, 50)
             if !truncated.isEmpty { c += " " + truncated }
@@ -960,7 +918,7 @@ func emitFarViewportElement(_ node: DomNode, _ depth: Int, _ nodesById: [String:
         c += " " + renderSelectOptions(node.id, optionData.options, optionData.multiple)
     }
     if !hasAccessibleNameAttribute(node) {
-        let text = (node.content.comprehensiveText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? node.content.comprehensiveText : nil) ?? node.element.textContent ?? ""
+        let text = elementText(node)
         if !text.isEmpty && !textDuplicatesDescendants(text, node, nodesById) {
             let truncated = truncateText(text, 20)
             if !truncated.isEmpty { c += " " + truncated }
@@ -977,52 +935,47 @@ private let dedupWrapperTags: Set<String> = [
     "h1", "h2", "h3", "h4", "h5", "h6", "span", "li", "p", "strong", "em", "small", "label", "div"
 ]
 
+private let actionableTags: Set<String> = ["a", "button", "input", "select", "textarea", "summary"]
+
 /// The descendant that keeps the aloha-id when a pure text wrapper around it is deduped.
 private func hasInteractiveDescendant(_ node: DomNode, _ nodesById: [String: DomNode]) -> Bool {
     for childId in node.children {
         guard let child = nodesById[childId] else { continue }
-        let tag = child.element.tagName.lowercased()
-        if ["a", "button", "input", "select", "textarea", "summary"].contains(tag) { return true }
+        if actionableTags.contains(child.element.tagName.lowercased()) { return true }
         if hasInteractiveDescendant(child, nodesById) { return true }
     }
     return false
 }
 
 func renderInteractiveNode(_ node: DomNode, _ depth: Int, _ nodesById: [String: DomNode], _ options: DomSerializeOptions = DomSerializeOptions()) -> String {
+    let indent = String(repeating: " ", count: min(depth, 6))
+    let attributes = node.element.attributes
     if node.nodeType == "TEXT_NODE" {
         if node.positioning.distanceToViewportBorder > 0 || !node.positioning.isInViewport || !node.positioning.isVisible {
             return ""
         }
         let text = truncateText(node.element.textContent ?? node.element.childText ?? "", 200)
-        return text.isEmpty ? "" : String(repeating: " ", count: min(depth, 6)) + text
+        return text.isEmpty ? "" : indent + text
     }
     let tag = node.element.tagName.lowercased()
-    if structureTags.contains(tag) && node.children.count > 0 {
-        var c = "<\(tag) aloha-id=\"\(node.id)\""
-        if let role = node.element.attributes["role"], !role.isEmpty {
-            c += " role=\"\(role)\""
-        }
-        if let ariaLabel = node.element.attributes["aria-label"], !ariaLabel.isEmpty {
+    let role = attributes["role"].flatMap { $0.isEmpty ? nil : " role=\"\($0)\"" } ?? ""
+    if structureTags.contains(tag) && !node.children.isEmpty {
+        var c = "<\(tag) aloha-id=\"\(node.id)\"" + role
+        if let ariaLabel = attributes["aria-label"], !ariaLabel.isEmpty {
             c += " aria-label=\"\(ariaLabel)\""
         }
         if tag == "fieldset" {
-            if let name = node.element.attributes["name"], !name.isEmpty {
+            if let name = attributes["name"], !name.isEmpty {
                 c += " name=\"\(name)\""
             }
             if isElementDisabled(node) { c += " [DISABLED]" }
         }
-        c += " />"
-        return String(repeating: " ", count: min(depth, 6)) + c
+        return indent + c + " />"
     }
     if inlineTextTags.contains(tag) && node.positioning.isVisible {
         let text = truncateText(node.content.comprehensiveText ?? node.element.textContent ?? "", 200)
         if !text.isEmpty {
-            var c = "<\(tag) aloha-id=\"\(node.id)\""
-            if let role = node.element.attributes["role"], !role.isEmpty {
-                c += " role=\"\(role)\""
-            }
-            c += " /> " + text
-            return String(repeating: " ", count: min(depth, 6)) + c
+            return indent + "<\(tag) aloha-id=\"\(node.id)\"" + role + " /> " + text
         }
     }
     let isCheckOrRadio = tag == "input" && (node.content.inputData?.type == "checkbox" || node.content.inputData?.type == "radio")
@@ -1077,20 +1030,17 @@ private func renderTableRow(_ node: DomNode, _ nodesById: [String: DomNode]) -> 
     var cells: [String] = []
     var sawTh = false
     for childId in node.children {
-        guard let cell = nodesById[childId] else { continue }
+        guard let cell = nodesById[childId], cell.positioning.isVisible else { continue }
         let cellTag = cell.element.tagName.lowercased()
         guard cellTag == "th" || cellTag == "td" else { continue }
-        if !cell.positioning.isVisible { continue }
         if cellTag == "th" { sawTh = true }
         cells.append(contentText(cell))
     }
-    if cells.isEmpty { return "" }
+    guard !cells.isEmpty else { return "" }
     let row = "| " + cells.joined(separator: " | ") + " |"
-    if sawTh {
-        let sep = "| " + cells.map { _ in "---" }.joined(separator: " | ") + " |"
-        return row + "\n" + sep
-    }
-    return row
+    guard sawTh else { return row }
+    let separator = "| " + Array(repeating: "---", count: cells.count).joined(separator: " | ") + " |"
+    return row + "\n" + separator
 }
 
 /// Whether a node renders as a kept interactive element (gets an actionable `{aloha-id …}` trailer).
@@ -1116,7 +1066,7 @@ func nodeIsKeptInteractive(_ node: DomNode) -> Bool {
 /// Lowercased letters+digits only, so the same title text matches whether or not
 /// punctuation/whitespace differ.
 private func dedupKey(_ s: String) -> String {
-    return s.lowercased().unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map(String.init).joined()
+    String(String.UnicodeScalarView(s.lowercased().unicodeScalars.filter(CharacterSet.alphanumerics.contains)))
 }
 
 /// Value symbols that make a short string worth keeping even under the min-length gate — a "£5"
@@ -1140,9 +1090,7 @@ private func contentLeafLine(_ node: DomNode, _ listLevel: Int, _ nodesById: [St
     if structureTags.contains(tag) { return nil }
     // Leaf among kept nodes only: if any child resolves to a kept node, that child carries the text.
     if node.children.contains(where: { nodesById[$0] != nil }) { return nil }
-    let raw = (node.content.comprehensiveText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-               ? node.content.comprehensiveText : nil) ?? node.element.textContent ?? ""
-    let text = normalizeWhitespace(raw)
+    let text = normalizeWhitespace(elementText(node))
     guard text.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
     let hasValueSymbol = text.contains(where: { valueSymbols.contains($0) })
     guard text.count >= contentLeafMinChars || hasValueSymbol else { return nil }
@@ -1211,7 +1159,7 @@ private func proseLine(
     // ("… the community. It uses …", not "… the community . It …").
     var joined = ""
     for part in parts {
-        if !joined.isEmpty, !(part.first.map { clingingPunctuation.contains($0) } ?? false) { joined += " " }
+        if !joined.isEmpty, part.first.map(clingingPunctuation.contains) != true { joined += " " }
         joined += part
     }
     return truncateText(joined, fullContentTextCap)
@@ -1287,10 +1235,7 @@ func renderFullNode(
 public func serializeFullMarkdown(_ nodes: [DomNode], _ options: DomSerializeOptions = DomSerializeOptions()) -> String {
     var nodesById: [String: DomNode] = [:]
     for node in nodes { nodesById[node.id] = node }
-    var childIds = Set<String>()
-    for node in nodes {
-        for childId in node.children { childIds.insert(childId) }
-    }
+    let childIds = Set(nodes.flatMap(\.children))
     let roots = nodes.filter { !childIds.contains($0.id) }
     var output: [String] = []
     var visited = Set<String>()
@@ -1351,7 +1296,7 @@ public func serializeFullMarkdown(_ nodes: [DomNode], _ options: DomSerializeOpt
 }
 
 public func buildOutOfViewSummary(_ nodes: [DomNode], _ direction: String, _ nodesById: [String: DomNode], _ options: DomSerializeOptions = DomSerializeOptions()) -> [String] {
-    if nodes.isEmpty { return [] }
+    guard !nodes.isEmpty else { return [] }
     let priorityOrder = ["h1", "h2", "h3", "h4", "h5", "h6", "nav", "button", "input", "select", "textarea", "p", "a"]
     let priorityTags = Set(priorityOrder)
     let proseTags: Set<String> = ["p", "a"]
@@ -1369,18 +1314,13 @@ public func buildOutOfViewSummary(_ nodes: [DomNode], _ direction: String, _ nod
         return abs(a.positioning.distanceToViewportBorder) < abs(b.positioning.distanceToViewportBorder)
     }
     let maxElements = 15
-    var picked: [DomNode] = []
     let headingsAndControls = sorted.filter { node in
         let tag = node.element.tagName.lowercased()
         return priorityTags.contains(tag) && !proseTags.contains(tag)
     }
-    let paragraphsAndLinks = sorted.filter { node in
-        proseTags.contains(node.element.tagName.lowercased())
-    }
-    let others = sorted.filter { node in
-        !priorityTags.contains(node.element.tagName.lowercased())
-    }
-    picked.append(contentsOf: headingsAndControls.prefix(8))
+    let paragraphsAndLinks = sorted.filter { proseTags.contains($0.element.tagName.lowercased()) }
+    let others = sorted.filter { !priorityTags.contains($0.element.tagName.lowercased()) }
+    var picked = Array(headingsAndControls.prefix(8))
     if picked.count < maxElements {
         picked.append(contentsOf: paragraphsAndLinks.prefix(min(4, maxElements - picked.count)))
     }
@@ -1388,11 +1328,8 @@ public func buildOutOfViewSummary(_ nodes: [DomNode], _ direction: String, _ nod
         picked.append(contentsOf: others.prefix(maxElements - picked.count))
     }
     let rendered = picked.map { emitOutOfViewElement($0, 0, nodesById, options) }
-    let total = nodes.count
-    let shown = picked.count
-    if total - shown > 0 {
-        let suffix = "... and \(total - shown) more elements (\(direction == "above" ? "scroll up" : "scroll down") to see all)"
-        return rendered + [suffix]
-    }
-    return rendered
+    let omitted = nodes.count - picked.count
+    guard omitted > 0 else { return rendered }
+    let scrollHint = direction == "above" ? "scroll up" : "scroll down"
+    return rendered + ["... and \(omitted) more elements (\(scrollHint) to see all)"]
 }

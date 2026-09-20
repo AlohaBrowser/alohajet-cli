@@ -157,19 +157,19 @@ public final class NetworkRecorder {
     }
 
     public func isRecording() -> Bool {
-        return running
+        running
     }
 
     func setRunningForTesting(_ value: Bool) {
-        running = value;
+        running = value
     }
 
     func pendingRequestCountForTesting() -> Int {
-        return pendingRequests.count
+        pendingRequests.count
     }
 
     public func start() async {
-        if running { return }
+        guard !running else { return }
         do {
             _ = try await transport.send(method: "Network.enable", params: [
                 "maxTotalBufferSize": .number(Double(10 * 1024 * 1024)),
@@ -203,7 +203,7 @@ public final class NetworkRecorder {
     /// `Inspector.detached` event or the event stream ending while recording is
     /// still active. Issues no further CDP commands: the transport is dead.
     func handleDetached() {
-        if !running { return }
+        guard running else { return }
         running = false
         agentLog(.warn, "[NetworkRecorder] Debugger was detached externally, stopping recording")
         eventTask?.cancel()
@@ -212,11 +212,9 @@ public final class NetworkRecorder {
     }
 
     public func stop() async {
-        if !running { return }
+        guard running else { return }
         running = false
-        do {
-            _ = try await transport.send(method: "Network.disable")
-        } catch {}
+        _ = try? await transport.send(method: "Network.disable")
         eventTask?.cancel()
         eventTask = nil
         pendingRequests.removeAll()
@@ -267,9 +265,8 @@ public final class NetworkRecorder {
     }
 
     private func onLoadingFinished(_ params: JSValue) {
-        guard let requestId = params.string("requestId") else { return }
-        let pending = pendingRequests.removeValue(forKey: requestId)
-        guard let pending else { return }
+        guard let requestId = params.string("requestId"),
+              let pending = pendingRequests.removeValue(forKey: requestId) else { return }
         if shouldCaptureBody(pending) {
             Task { [weak self] in
                 guard let self else { return }
@@ -285,9 +282,8 @@ public final class NetworkRecorder {
     }
 
     private func onLoadingFailed(_ params: JSValue) {
-        guard let requestId = params.string("requestId") else { return }
-        let pending = pendingRequests.removeValue(forKey: requestId)
-        guard let pending else { return }
+        guard let requestId = params.string("requestId"),
+              let pending = pendingRequests.removeValue(forKey: requestId) else { return }
         emit(NetworkRecord(
             ts: isoTimestamp(),
             type: "failed",
@@ -323,7 +319,7 @@ public final class NetworkRecorder {
     }
 
     private func fetchResponseBodyAndEmit(_ requestId: String, _ pending: PendingNetworkRequest) async throws {
-        if !isRecording() {
+        guard isRecording() else {
             emitComplete(pending)
             return
         }
@@ -351,10 +347,14 @@ public final class NetworkRecorder {
 private func stringDictionary(_ value: JSValue?) -> [String: String]? {
     guard let members = value?.objectValue else { return nil }
     var result: [String: String] = [:]
-    for (key, val) in members {
-        if let s = val.stringValue { result[key] = s }
-        else if let n = val.doubleValue { result[key] = numberToString(n) }
-        else if let b = val.boolValue { result[key] = String(b) }
+    for (key, member) in members {
+        if let text = member.stringValue {
+            result[key] = text
+        } else if let number = member.doubleValue {
+            result[key] = numberToString(number)
+        } else if let flag = member.boolValue {
+            result[key] = String(flag)
+        }
     }
     return result
 }
@@ -405,7 +405,7 @@ public final class TypingSession {
             return false
         }
         let distance = levenshteinDistance(text, candidateText)
-        let shrinkRatio = text.count > 0 ? Double(text.count - candidateText.count) / Double(text.count) : 0
+        let shrinkRatio = text.isEmpty ? 0 : Double(text.count - candidateText.count) / Double(text.count)
         return !(shrinkRatio > typingSessionConfig.textChangeThreshold && distance > typingSessionConfig.minCharDistance)
     }
 

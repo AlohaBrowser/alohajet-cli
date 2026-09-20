@@ -140,6 +140,9 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
     /// What this run grants the page. A property of the RUN, not of the prompt, so
     /// it rides on `init` rather than on the shared `AlohaJetDriver.runTask` signature.
     public let permissions: [CLIPermission]
+    /// The conversation the turn ran in, reported so a caller can resume it. Filled by
+    /// `runTask(prompt:reportingSession:)`; `nil` when the host answered without one.
+    public let session: AgentSession
     private let transport: Transport
     /// Where a non-fatal notice goes — a legacy host, or a resumed id that named no
     /// existing conversation. The CLI sends these to stderr so a piped `--json` stdout
@@ -184,10 +187,6 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         self.maxPollAttempts = maxPollAttempts
         self.terms = terms
     }
-
-    /// The conversation the turn ran in, reported so a caller can resume it. Filled by
-    /// `runTask(prompt:reportingSession:)`; `nil` when the host answered without one.
-    public let session: AgentSession
 
     public func runTask(prompt: String) async throws -> CLIRunResult {
         await runTurn(prompt: prompt).result
@@ -337,11 +336,10 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
             case .current:
                 break
             case .fresh, .resume:
-                let body: Data?
-                if case let .resume(id) = session {
-                    body = Self.jsonBody(["sessionId": id])
+                let body: Data? = if case let .resume(id) = session {
+                    Self.jsonBody(["sessionId": id])
                 } else {
-                    body = nil
+                    nil
                 }
                 let newResponse = try await transport("POST", agentURL(path: "/agent/new"), body)
                 guard newResponse.statusCode == 200 else {

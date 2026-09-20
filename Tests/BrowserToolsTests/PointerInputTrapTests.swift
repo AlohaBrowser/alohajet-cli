@@ -16,34 +16,30 @@ import ToolABI
 @MainActor
 struct PointerInputTrapTests {
 
-    @Test("moveMouse survives coordinates no Int can hold")
-    func moveMouseDoesNotTrapOnHugeCoordinates() async throws {
-        for (label, x, y) in [("1e300", 1e300, 0.0), ("-1e300", -1e300, 0.0),
-                              ("+inf", Double.infinity, 0.0), ("NaN", Double.nan, 0.0)] {
-            let bridge = AgentBrowserBridge(backend: PointerStubBackend())
-            let result = await bridge.moveMouse(["x": .number(x), "y": .number(y)])
-            // The contract is that the process SURVIVES and answers. Whether it moves or
-            // declines is the implementation's business; trapping is not.
-            #expect(!result.output.isEmpty, "moveMouse \(label) produced no answer")
-        }
+    @Test("moveMouse survives coordinates no Int can hold",
+          arguments: [1e300, -1e300, .infinity, .nan] as [Double])
+    func moveMouseDoesNotTrapOnHugeCoordinates(_ x: Double) async throws {
+        let bridge = AgentBrowserBridge(backend: PointerStubBackend())
+        let result = await bridge.moveMouse(["x": .number(x), "y": .number(0)])
+        // The contract is that the process SURVIVES and answers. Whether it moves or
+        // declines is the implementation's business; trapping is not.
+        #expect(!result.output.isEmpty, "moveMouse produced no answer")
     }
 
-    @Test("drag survives a step count no Int can hold, and does not run forever")
-    func dragDoesNotTrapOnHugeStepCount() async throws {
-        for (label, steps) in [("1e300", 1e300), ("-1e300", -1e300),
-                               ("+inf", Double.infinity), ("NaN", Double.nan)] {
-            let backend = PointerStubBackend()
-            let bridge = AgentBrowserBridge(backend: backend)
-            let result = await bridge.drag([
-                "fromX": .number(0), "fromY": .number(0),
-                "toX": .number(10), "toY": .number(10),
-                "steps": .number(steps)
-            ])
-            #expect(!result.output.isEmpty, "drag steps=\(label) produced no answer")
-            // The cap, observed rather than asserted on the constant: press + release + at
-            // most 200 moves + the initial position.
-            #expect(backend.mouseEvents <= 203, "drag steps=\(label) dispatched \(backend.mouseEvents) events")
-        }
+    @Test("drag survives a step count no Int can hold, and does not run forever",
+          arguments: [1e300, -1e300, .infinity, .nan] as [Double])
+    func dragDoesNotTrapOnHugeStepCount(_ steps: Double) async throws {
+        let backend = PointerStubBackend()
+        let bridge = AgentBrowserBridge(backend: backend)
+        let result = await bridge.drag([
+            "fromX": .number(0), "fromY": .number(0),
+            "toX": .number(10), "toY": .number(10),
+            "steps": .number(steps)
+        ])
+        #expect(!result.output.isEmpty, "drag produced no answer")
+        // The cap, observed rather than asserted on the constant: press + release + at
+        // most 200 moves + the initial position.
+        #expect(backend.mouseEvents <= 203, "drag dispatched \(backend.mouseEvents) events")
     }
 
     @Test("drag survives coordinates no Int can hold")

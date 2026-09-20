@@ -32,29 +32,31 @@ struct OpenUrlValidationTests {
         #expect(validateOpenUrl(url) == .rejected(reason: urlFileProtocolReason))
     }
 
+    /// Each carries the reason the caller is actually handed: a scheme the parser can read an
+    /// authority out of is named in the bad-protocol message, while an opaque `scheme:payload`
+    /// never parses as an absolute browser URL and is refused as malformed before the scheme
+    /// is ever considered. The `data:` payload below falls in the first group because the
+    /// `http://evil` inside it is enough `://` for the parse — still refused, differently worded.
     @Test("no other scheme reaches the browser", arguments: [
-        "javascript:alert(1)",
-        "data:text/html,<script>fetch('http://evil')</script>",
-        "chrome://settings",
-        "devtools://devtools/bundled/inspector.html",
-        "view-source:https://example.com",
-        "ftp://example.com/x",
-        "blob:https://example.com/1234",
-        "about:blank",
-        "ws://127.0.0.1:9222/devtools/browser/x",
-        "vbscript:msgbox(1)",
-        "intent://scan/#Intent;scheme=zxing;end",
-        "myapp://settings",
+        ("javascript:alert(1)", urlMalformedReason),
+        ("data:text/html,<script>fetch('http://evil')</script>", urlBadProtocolReason("data:")),
+        ("chrome://settings", urlBadProtocolReason("chrome:")),
+        ("devtools://devtools/bundled/inspector.html", urlBadProtocolReason("devtools:")),
+        ("view-source:https://example.com", urlBadProtocolReason("view-source:")),
+        ("ftp://example.com/x", urlBadProtocolReason("ftp:")),
+        ("blob:https://example.com/1234", urlBadProtocolReason("blob:")),
+        ("about:blank", urlMalformedReason),
+        ("ws://127.0.0.1:9222/devtools/browser/x", urlBadProtocolReason("ws:")),
+        ("vbscript:msgbox(1)", urlMalformedReason),
+        ("intent://scan/#Intent;scheme=zxing;end", urlBadProtocolReason("intent:")),
+        ("myapp://settings", urlBadProtocolReason("myapp:")),
     ])
-    func otherSchemesAreRejected(_ url: String) {
-        guard case let .rejected(reason) = validateOpenUrl(url) else {
-            Issue.record("\(url) was accepted")
-            return
-        }
-        // Either the bad-protocol message or the malformed one — never `.ok`.
-        #expect(reason != urlFileProtocolReason)
+    func otherSchemesAreRejected(_ url: String, _ reason: String) {
+        #expect(validateOpenUrl(url) == .rejected(reason: reason))
     }
 
+    /// The normalized href a passing URL yields is the input itself — validation must not
+    /// quietly rewrite the address the caller asked for.
     @Test("http and https pass", arguments: [
         "http://example.com/",
         "https://example.com/",
@@ -63,16 +65,13 @@ struct OpenUrlValidationTests {
         "https://example.com:8443/a/b",
     ])
     func webSchemesPass(_ url: String) {
-        guard case .ok = validateOpenUrl(url) else {
-            Issue.record("\(url) was rejected")
-            return
-        }
+        #expect(validateOpenUrl(url) == .ok(normalized: url))
     }
 
     /// The scheme is normalized to lower case before the comparison, so an upper-case
     /// `HTTP:` cannot slip past a case-sensitive equality check.
     @Test func schemeComparisonIsCaseInsensitive() {
-        #expect(validateOpenUrl("HtTpS://example.com/") != .rejected(reason: urlMalformedReason))
+        #expect(validateOpenUrl("HtTpS://example.com/") == .ok(normalized: "HtTpS://example.com/"))
     }
 
     // MARK: - Shape
@@ -88,11 +87,7 @@ struct OpenUrlValidationTests {
     /// Surrounding whitespace is trimmed BEFORE the control-character scan, so a URL
     /// pasted with a trailing newline is accepted rather than reported as malformed.
     @Test func surroundingWhitespaceIsTrimmedNotRejected() {
-        guard case let .ok(normalized) = validateOpenUrl("  https://example.com/\n") else {
-            Issue.record("a trailing newline made a valid URL malformed")
-            return
-        }
-        #expect(!normalized.contains("\n"))
+        #expect(validateOpenUrl("  https://example.com/\n") == .ok(normalized: "https://example.com/"))
     }
 
     @Test func nilIsMalformedNotACrash() {
@@ -106,10 +101,7 @@ struct OpenUrlValidationTests {
         // accidental rejection of every long URL.
         let head = "https://example.com/"
         let justUnder = head + String(repeating: "a", count: maxUrlLength - head.count - 1)
-        guard case .ok = validateOpenUrl(justUnder) else {
-            Issue.record("a URL one byte under the cap was rejected")
-            return
-        }
+        #expect(validateOpenUrl(justUnder) == .ok(normalized: justUnder))
     }
 
     @Test("credentials in the authority are rejected", arguments: [
@@ -126,10 +118,8 @@ struct OpenUrlValidationTests {
         #expect(validateTabUrl(TabUrlInput(url: "file:///etc/hosts"))
                 == .rejected(reason: urlFileProtocolReason))
         #expect(validateTabUrl(TabUrlInput(url: nil)) == .rejected(reason: urlMalformedReason))
-        guard case .ok = validateTabUrl(TabUrlInput(url: "https://example.com/")) else {
-            Issue.record("a https tab was rejected")
-            return
-        }
+        #expect(validateTabUrl(TabUrlInput(url: "https://example.com/"))
+                == .ok(normalized: "https://example.com/"))
     }
 
     // MARK: - Every entry point calls it

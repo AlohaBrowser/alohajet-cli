@@ -73,6 +73,16 @@ private final class RecordSink {
 // MARK: - decodeBase64Body (successful gunzip round trip)
 
 #if canImport(zlib)
+/// Polls `condition` at a short interval until it holds or the attempt cap is reached, so
+/// event-loop subscription, body fetches and teardown can be awaited deterministically.
+private func waitFor(attempts: Int = 400, _ condition: @escaping () async -> Bool) async {
+    var tries = 0
+    while await !condition() && tries < attempts {
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        tries += 1
+    }
+}
+
 @Suite("decodeBase64Body gzip round trip")
 struct DecodeBase64BodyGzipTests {
     @Test func gzipMagicBytesAreGunzipped() {
@@ -259,13 +269,8 @@ struct NetworkRecorderEventTests {
         recorder.onCDPMessage("Network.loadingFinished", .object([("requestId", .string("r1"))]))
 
         // The body fetch is dispatched to a detached Task; poll briefly for it.
-        var records = sink.all
-        var attempts = 0
-        while records.isEmpty && attempts < 200 {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-            records = sink.all
-            attempts += 1
-        }
+        await waitFor(attempts: 200) { !sink.all.isEmpty }
+        let records = sink.all
         await recorder.stop()
 
         #expect(records.count == 1)
@@ -337,11 +342,7 @@ struct NetworkRecorderDetachTests {
 
         await transport.emit(CDPEvent(method: "Inspector.detached", params: .object([("reason", .string("target_closed"))])))
 
-        var attempts = 0
-        while recorder.isRecording() && attempts < 200 {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-            attempts += 1
-        }
+        await waitFor(attempts: 200) { !recorder.isRecording() }
         #expect(!recorder.isRecording())
         // An external detach must NOT try to disable Network over the dead
         // transport (only the start enable was sent).
@@ -372,16 +373,6 @@ struct NetworkRecorderDetachTests {
         #expect(!recorder.isRecording())
     }
 
-    /// Polls `condition` at a short interval until it holds or the attempt cap is
-    /// reached, so event-loop subscription/teardown can be awaited deterministically.
-    private func waitFor(_ condition: @escaping () async -> Bool, attempts: Int = 400) async {
-        var tries = 0
-        while await !condition() && tries < attempts {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-            tries += 1
-        }
-    }
-
     @Test func eventStreamFinishingWhileRecordingStopsRecording() async {
         let sink = RecordSink()
         let transport = StubCDPTransport()
@@ -392,11 +383,7 @@ struct NetworkRecorderDetachTests {
 
         await transport.finishEvents()
 
-        var attempts = 0
-        while recorder.isRecording() && attempts < 200 {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-            attempts += 1
-        }
+        await waitFor(attempts: 200) { !recorder.isRecording() }
         #expect(!recorder.isRecording())
     }
 }

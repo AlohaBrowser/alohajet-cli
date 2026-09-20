@@ -22,9 +22,7 @@ public typealias NavigationPacer = @MainActor @Sendable (String, String?, AbortS
 /// empty parameter set.
 func cdpParams(_ value: JSValue) -> [String: JSValue] {
     guard case let .object(members) = value else { return [:] }
-    var dict: [String: JSValue] = [:]
-    for (key, member) in members { dict[key] = member }
-    return dict
+    return Dictionary(members, uniquingKeysWith: { _, last in last })
 }
 
 /// Tracks a single page target attached over a flat CDP session. The session is
@@ -38,76 +36,52 @@ final class CDPTabSession {
     /// the agent it is a provisional id until ``ensureAttached()`` creates the
     /// real target.
     let targetId: String
-    private var _effectiveTargetId: String?
-    private var _sessionId: String?
-    private var _url: String
-    private var _title: String?
-    private var _destroyed = false
-    private var _networkEnabled = false
-    private var _pageEnabled = false
+    private(set) var sessionId: String?
+    /// The real Chrome target id once known (created or seeded).
+    private(set) var effectiveTargetId: String?
+    var url: String
+    var title: String?
+    private(set) var isDestroyed = false
+    private var networkEnabled = false
+    private var pageEnabled = false
     /// The single in-flight first-attach task. Concurrent ``ensureAttached()``
     /// callers share this so the real target is created exactly once.
-    private var _attachTask: Task<String, Error>?
+    private var attachTask: Task<String, Error>?
     private let createOnAttach: Bool
 
     init(client: CDPClient, targetId: String, sessionId: String?, url: String, title: String? = nil, createOnAttach: Bool = false) {
         self.client = client
         self.targetId = targetId
-        self._effectiveTargetId = createOnAttach ? nil : targetId
-        self._sessionId = sessionId
-        self._url = url
-        self._title = title
+        self.effectiveTargetId = createOnAttach ? nil : targetId
+        self.sessionId = sessionId
+        self.url = url
+        self.title = title
         self.createOnAttach = createOnAttach
     }
 
-    var sessionId: String? {
-        return _sessionId
-    }
-
-    /// The real Chrome target id once known (created or seeded).
-    var effectiveTargetId: String? {
-        return _effectiveTargetId
-    }
-
-    var url: String {
-        get { return _url }
-        set { _url = newValue; }
-    }
-
-    var title: String? {
-        get { return _title }
-        set { _title = newValue; }
-    }
-
-    var isDestroyed: Bool {
-        return _destroyed
-    }
-
     func markDestroyed() {
-        _destroyed = true;
+        isDestroyed = true
     }
 
     /// Ensures the underlying Chrome target exists (creating it for an
     /// agent-opened tab) and is attached over a flat session, returning the
     /// session id.
     func ensureAttached() async throws -> String {
-        if let existing = _sessionId, !_destroyed {
-            return existing
+        if let sessionId, !isDestroyed {
+            return sessionId
         }
-        if _destroyed {
-            throw CDPError.notConnected
-        }
+        guard !isDestroyed else { throw CDPError.notConnected }
         // Coalesce concurrent first-attach callers onto ONE in-flight task. Without
         // this, two callers (e.g. the network-recording enable and the focus/load
-        // read) both pass the `_sessionId == nil` check, both release the lock
+        // read) both pass the `sessionId == nil` check, both release the lock
         // across the `await`, and each issues `Target.createTarget` — opening the
         // tab twice. Sharing one task creates the target exactly once.
-        if let inFlight = _attachTask {
-            return try await inFlight.value
+        if let attachTask {
+            return try await attachTask.value
         }
         let task = Task { try await self.performAttach() }
-        _attachTask = task
-        defer { if _attachTask == task { _attachTask = nil }; }
+        attachTask = task
+        defer { if attachTask == task { attachTask = nil } }
         return try await task.value
     }
 
@@ -115,28 +89,22 @@ final class CDPTabSession {
     /// yet and attaches a flat session. Runs inside the single in-flight task held
     /// by ``ensureAttached()`` so the create happens once under concurrent callers.
     private func performAttach() async throws -> String {
-        let destroyed = _destroyed
-        var effective = _effectiveTargetId
-        let url = _url
-        if destroyed { throw CDPError.notConnected }
-        if effective == nil {
-            let created = try await client.openTab(url: url)
-            _effectiveTargetId = created;
-            effective = created
+        guard !isDestroyed else { throw CDPError.notConnected }
+        if effectiveTargetId == nil {
+            effectiveTargetId = try await client.openTab(url: url)
         }
-        guard let resolved = effective else { throw CDPError.notConnected }
+        guard let resolved = effectiveTargetId else { throw CDPError.notConnected }
         let session = try await client.attachToTarget(targetId: resolved)
-        _sessionId = session;
+        sessionId = session
         return session
     }
 
     /// Enables the `Page` domain once for screenshots / lifecycle reads.
     func ensurePageEnabled() async throws {
         let session = try await ensureAttached()
-        let already = _pageEnabled
-        if already { return }
+        guard !pageEnabled else { return }
         _ = try? await client.send(method: "Page.enable", params: [:], sessionId: session)
-        _pageEnabled = true;
+        pageEnabled = true
     }
 
     /// Enables the `Network` domain once for traffic recording. Returns whether
@@ -144,10 +112,9 @@ final class CDPTabSession {
     @discardableResult
     func ensureNetworkEnabled() async throws -> Bool {
         let session = try await ensureAttached()
-        let already = _networkEnabled
-        if already { return false }
+        guard !networkEnabled else { return false }
         _ = try? await client.send(method: "Network.enable", params: [:], sessionId: session)
-        _networkEnabled = true;
+        networkEnabled = true
         return true
     }
 }
@@ -174,8 +141,8 @@ final class SessionScopedCDPTransport: CDPTransport {
         return AsyncStream { continuation in
             let task = Task {
                 for await event in session.client.events() {
-                    let sid = await session.sessionId
-                    if event.sessionId == nil || event.sessionId == sid {
+                    let scoped = await session.sessionId
+                    if event.sessionId == nil || event.sessionId == scoped {
                         continuation.yield(event)
                     }
                 }
@@ -252,18 +219,17 @@ final class ConsoleCaptureSession {
     }
 
     private func record(_ params: JSValue) {
-        let level = Self.mapConsoleLevel(params["type"]?.stringValue)
-        let message = Self.renderArgs(params["args"])
-        if entries.count < Self.maxEntries {
-            entries.append(ConsoleCapture(level: level, msg: message))
-        }
+        guard entries.count < Self.maxEntries else { return }
+        entries.append(ConsoleCapture(
+            level: Self.mapConsoleLevel(params["type"]?.stringValue),
+            msg: Self.renderArgs(params["args"])))
     }
 
     private static func mapConsoleLevel(_ type: String?) -> String {
         switch type {
-        case "warning": return "warn"
-        case "error", "assert": return "error"
-        default: return "log"
+        case "warning": "warn"
+        case "error", "assert": "error"
+        default: "log"
         }
     }
 
@@ -272,11 +238,11 @@ final class ConsoleCaptureSession {
         let pieces: [String] = array.map { arg in
             if let value = arg["value"] {
                 switch value {
-                case .string(let s): return s
-                case .number(let n):
-                    if n == n.rounded() && abs(n) < 1e15 { return String(Int64(n)) }
-                    return String(n)
-                case .bool(let b): return b ? "true" : "false"
+                case let .string(text): return text
+                case let .number(number):
+                    if number == number.rounded() && abs(number) < 1e15 { return String(Int64(number)) }
+                    return String(number)
+                case let .bool(flag): return flag ? "true" : "false"
                 case .null: return "null"
                 case .undefined: return "undefined"
                 case .array, .object:
@@ -350,11 +316,10 @@ final class CDPTabDebugger: TabDebugger {
     nonisolated func simulateMouseClick(_ x: Int, _ y: Int, _ button: String, _ count: Int, _ signal: AbortSignal?) async throws {
         if (await signal?.aborted) == true { throw SimpleBrowserError("Operation aborted") }
         let sessionId = try await session.ensureAttached()
-        let buttonsMask: Int
-        switch button {
-        case "right": buttonsMask = 2
-        case "middle": buttonsMask = 4
-        default: buttonsMask = 1
+        let buttonsMask: Int = switch button {
+        case "right": 2
+        case "middle": 4
+        default: 1
         }
         let pressed: [String: JSValue] = [
             "type": .string("mousePressed"),
@@ -508,8 +473,7 @@ final class CDPBrowserTab: BrowserTab {
         // hang until the deadline. Short first attempt, then `Page.bringToFront`
         // and one retry — measured >20s hang became 163ms once the tab was
         // composited. Markdown is still returned if both attempts fail.
-        let captureParams = params
-        let result = try await captureWakingSurfaceIfNeeded(params: captureParams, sessionId: sessionId)
+        let result = try await captureWakingSurfaceIfNeeded(params: params, sessionId: sessionId)
         guard let data = result["data"]?.stringValue, !data.isEmpty else { return nil }
         let mime = imageFormat == "png" ? "image/png" : "image/jpeg"
         let dataUrl = "data:\(mime);base64,\(data)"
@@ -617,11 +581,10 @@ public final class CDPAgentBridgeBackend: AgentBridgeBackend {
                 ("returnByValue", .bool(true)),
                 ("userGesture", .bool(true))
             ]))
-            if case .object = result["exceptionDetails"] {
-                let details = result["exceptionDetails"]
-                let message = details?["exception"]?["description"]?.stringValue
-                    ?? details?["text"]?.stringValue
-                    ?? details?["exception"]?["value"]?.stringValue
+            if let details = result["exceptionDetails"], case .object = details {
+                let message = details["exception"]?["description"]?.stringValue
+                    ?? details["text"]?.stringValue
+                    ?? details["exception"]?["value"]?.stringValue
                     ?? "CDP evaluation error"
                 throw SimpleBrowserError(message)
             }

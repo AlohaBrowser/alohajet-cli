@@ -98,15 +98,4 @@ struct BrowserLaneParityTests {
             await chromium.shutdown()
         }
     }
-
-    /// The tab id off the metadata channel, falling back to the printed `Tab ID:` line.
-    private func tabIdentifier(_ result: RawToolResult) -> String? {
-        if case let .string(id)? = result.metadata?["tabId"], !id.isEmpty { return id }
-        for line in result.output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("Tab ID: ") { return String(trimmed.dropFirst("Tab ID: ".count)) }
-            if trimmed.hasPrefix("ID: ") { return String(trimmed.dropFirst("ID: ".count)) }
-        }
-        return nil
-    }
 }

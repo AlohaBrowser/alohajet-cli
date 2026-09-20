@@ -10,18 +10,19 @@ nonisolated func hslToHex(_ hue: Double, _ saturation: Double, _ lightness: Doub
     let chroma = (1 - abs(2 * l - 1)) * s
     let x = chroma * (1 - abs((hue / 60).truncatingRemainder(dividingBy: 2) - 1))
     let m = l - chroma / 2
-    var r = 0.0, g = 0.0, b = 0.0
-    if hue >= 0 && hue < 60 { r = chroma; g = x; b = 0 }
-    else if hue >= 60 && hue < 120 { r = x; g = chroma; b = 0 }
-    else if hue >= 120 && hue < 180 { r = 0; g = chroma; b = x }
-    else if hue >= 180 && hue < 240 { r = 0; g = x; b = chroma }
-    else if hue >= 240 && hue < 300 { r = x; g = 0; b = chroma }
-    else if hue >= 300 && hue < 360 { r = chroma; g = 0; b = x }
-    let ri = Int(((r + m) * 255).rounded())
-    let gi = Int(((g + m) * 255).rounded())
-    let bi = Int(((b + m) * 255).rounded())
-    func hex(_ value: Int) -> String { String(format: "%02x", max(0, min(255, value))) }
-    return "#\(hex(ri))\(hex(gi))\(hex(bi))"
+    let (r, g, b): (Double, Double, Double) = switch hue {
+    case 0..<60: (chroma, x, 0)
+    case 60..<120: (x, chroma, 0)
+    case 120..<180: (0, chroma, x)
+    case 180..<240: (0, x, chroma)
+    case 240..<300: (x, 0, chroma)
+    case 300..<360: (chroma, 0, x)
+    default: (0, 0, 0)
+    }
+    func hex(_ component: Double) -> String {
+        String(format: "%02x", max(0, min(255, Int(((component + m) * 255).rounded()))))
+    }
+    return "#\(hex(r))\(hex(g))\(hex(b))"
 }
 
 /// Maps an arbitrary seed string to a deterministic hex color. `variant`
@@ -30,15 +31,7 @@ nonisolated func stringToHexColor(_ seed: String, _ variant: String = "dark") ->
     let normalized = (seed == "default" || seed.isEmpty ? "default" : seed)
         .replacingOccurrences(of: "\\s+", with: "", options: .regularExpression)
         .lowercased()
-    let scalars = Array(normalized.unicodeScalars)
-    var basis = ""
-    if scalars.count >= 6 {
-        basis = String(String.UnicodeScalarView(scalars.prefix(6)))
-    } else if !scalars.isEmpty {
-        for i in 0..<min(6, scalars.count) {
-            basis.unicodeScalars.append(scalars[i % scalars.count])
-        }
-    }
+    let basis = String(String.UnicodeScalarView(normalized.unicodeScalars.prefix(6)))
     var hash = 0
     for scalar in basis.unicodeScalars {
         hash = (hash << 5) &- hash &+ Int(scalar.value)
@@ -84,7 +77,7 @@ public enum AgentCursorAppearance {
     /// than silently hiding the agent's work.
     nonisolated static func parseHighlights(_ raw: String?) -> Bool {
         let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return !(value == "0" || value == "false" || value == "no" || value == "off")
+        return !["0", "false", "no", "off"].contains(value)
     }
 }
 

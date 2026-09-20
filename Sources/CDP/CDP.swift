@@ -280,20 +280,7 @@ public actor CDPClient: CDPTransport {
     }
 
     public func send(method: String, params: [String: JSValue]) async throws -> JSValue {
-        guard let channel, !isClosed else {
-            throw CDPError.notConnected
-        }
-
-        let id = allocateID()
-        var message: [String: JSValue] = [
-            "id": .number(id),
-            "method": .string(method)
-        ]
-        if !params.isEmpty {
-            message["params"] = .object(Array(params))
-        }
-        let payload = JSValue.object(Array(message)).stringify()
-        return try await awaitResponse(id: id, method: method, channel: channel, payload: payload)
+        try await dispatch(method: method, params: params, sessionId: nil)
     }
 
     /// Send a CDP command addressed to an attached target's flat session.
@@ -304,6 +291,10 @@ public actor CDPClient: CDPTransport {
     /// not nested inside `params`. This routes such a command to the given
     /// `sessionId` and awaits its result.
     public func send(method: String, params: [String: JSValue], sessionId: String) async throws -> JSValue {
+        try await dispatch(method: method, params: params, sessionId: sessionId)
+    }
+
+    private func dispatch(method: String, params: [String: JSValue], sessionId: String?) async throws -> JSValue {
         guard let channel, !isClosed else {
             throw CDPError.notConnected
         }
@@ -311,9 +302,11 @@ public actor CDPClient: CDPTransport {
         let id = allocateID()
         var message: [String: JSValue] = [
             "id": .number(id),
-            "method": .string(method),
-            "sessionId": .string(sessionId)
+            "method": .string(method)
         ]
+        if let sessionId {
+            message["sessionId"] = .string(sessionId)
+        }
         if !params.isEmpty {
             message["params"] = .object(Array(params))
         }
@@ -370,9 +363,7 @@ public actor CDPClient: CDPTransport {
                         do {
                             try await channel.send(payload)
                         } catch {
-                            if let waiter = self.removePending(id) {
-                                waiter.resume(throwing: error)
-                            }
+                            self.removePending(id)?.resume(throwing: error)
                         }
                     }
 
@@ -399,15 +390,11 @@ public actor CDPClient: CDPTransport {
     }
 
     private func failPendingWithTimeout(id: Int, method: String) {
-        if let waiter = removePending(id) {
-            waiter.resume(throwing: CDPError.timeout(method: method))
-        }
+        removePending(id)?.resume(throwing: CDPError.timeout(method: method))
     }
 
     private func failPendingWithCancellation(id: Int) {
-        if let waiter = removePending(id) {
-            waiter.resume(throwing: CancellationError())
-        }
+        removePending(id)?.resume(throwing: CancellationError())
     }
 
     public nonisolated func events() -> AsyncStream<CDPEvent> {
@@ -431,13 +418,12 @@ public actor CDPClient: CDPTransport {
     /// ``subscribeEvents()`` under a caller-chosen id, so the subscriber can end it
     /// with ``endEventSubscription(_:)``.
     public func subscribeEvents(id: UUID) -> AsyncStream<CDPEvent> {
-        let stream = AsyncStream<CDPEvent> { continuation in
+        AsyncStream<CDPEvent> { continuation in
             registerEventStream(id: id, continuation: continuation)
             continuation.onTermination = { _ in
                 Task { await self.removeEventStream(id: id) }
             }
         }
-        return stream
     }
 
     /// Ends the subscription registered under `id`. Finishing the stream from this
@@ -456,14 +442,7 @@ public actor CDPClient: CDPTransport {
         receiveLoop = nil
         if let channel { await channel.close() }
         channel = nil
-        for (_, continuation) in pending {
-            continuation.resume(throwing: CDPError.connectionClosed)
-        }
-        pending.removeAll()
-        for (_, continuation) in eventContinuations {
-            continuation.finish()
-        }
-        eventContinuations.removeAll()
+        failAllWaiters()
     }
 
     // MARK: High-level helpers
@@ -556,28 +535,25 @@ public actor CDPClient: CDPTransport {
         guard !isClosed else { return }
         isClosed = true
         channel = nil
-        // `connectionClosed`, not the transport's own error: a dead browser surfaced as
-        // `NSPOSIXErrorDomain Code=57` carrying the internal devtools URL in its userInfo,
-        // which is neither a sentence for the operator nor a case a caller can match on.
-        for (_, continuation) in pending {
+        failAllWaiters()
+    }
+
+    /// `connectionClosed`, not the transport's own error: a dead browser surfaced as
+    /// `NSPOSIXErrorDomain Code=57` carrying the internal devtools URL in its userInfo,
+    /// which is neither a sentence for the operator nor a case a caller can match on.
+    private func failAllWaiters() {
+        for continuation in pending.values {
             continuation.resume(throwing: CDPError.connectionClosed)
         }
         pending.removeAll()
-        for (_, continuation) in eventContinuations {
+        for continuation in eventContinuations.values {
             continuation.finish()
         }
         eventContinuations.removeAll()
     }
 
     private func handle(message: String) {
-        let data = Data(message.utf8)
-
-        guard
-            let object = Self.decode(data),
-            case .object = object
-        else {
-            return
-        }
+        guard let object = JSValue.parse(message), case .object = object else { return }
 
         if let id = object["id"]?.intValue {
             guard let continuation = removePending(id) else { return }
@@ -595,17 +571,10 @@ public actor CDPClient: CDPTransport {
             let params = object["params"] ?? .object([])
             let sessionId = object["sessionId"]?.stringValue
             let event = CDPEvent(method: method, params: params, sessionId: sessionId)
-            for (_, continuation) in eventContinuations {
+            for continuation in eventContinuations.values {
                 continuation.yield(event)
             }
         }
-    }
-
-    // MARK: Wire (de)serialization
-
-    private static func decode(_ data: Data) -> JSValue? {
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        return JSValue.parse(text)
     }
 }
 

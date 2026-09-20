@@ -47,12 +47,12 @@ import Foundation
         let baseline = "## Page\n[1] Buy now"
         // OFF: no block -> the read path leaves the markdown exactly as serialized.
         let off = siteJsonStructuredBlock(jsonLdScripts: [])
-        let offMarkdown = off.map { $0 + "\n\n" + baseline } ?? baseline
+        let offMarkdown = off.map { "\($0)\n\n\(baseline)" } ?? baseline
         #expect(offMarkdown == baseline)
         // ON: a product block is prepended ahead of the same baseline markdown.
         let on = siteJsonStructuredBlock(jsonLdScripts: [productJsonLd])
-        let onMarkdown = on.map { $0 + "\n\n" + baseline } ?? baseline
-        #expect(onMarkdown == "[site data]\n- Acme Widget — 19.99 USD — InStock\n\n" + baseline)
+        let onMarkdown = on.map { "\($0)\n\n\(baseline)" } ?? baseline
+        #expect(onMarkdown == "[site data]\n- Acme Widget — 19.99 USD — InStock\n\n\(baseline)")
         #expect(onMarkdown != offMarkdown)
     }
 

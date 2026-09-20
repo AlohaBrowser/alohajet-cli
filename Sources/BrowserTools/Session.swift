@@ -47,14 +47,14 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
 
     public var description: String {
         switch self {
-        case .browserUnavailable(let path):
-            return "No browser executable at \(path). Pass executablePath: (or install Chrome/Chromium)."
-        case .launchFailed(let detail):
-            return "Could not launch the browser: \(detail)"
-        case .connectFailed(let detail):
-            return "Could not reach the CDP endpoint: \(detail)"
-        case .noFreePort(let detail):
-            return "Could not reserve a debug port: \(detail)"
+        case let .browserUnavailable(path):
+            "No browser executable at \(path). Pass executablePath: (or install Chrome/Chromium)."
+        case let .launchFailed(detail):
+            "Could not launch the browser: \(detail)"
+        case let .connectFailed(detail):
+            "Could not reach the CDP endpoint: \(detail)"
+        case let .noFreePort(detail):
+            "Could not reserve a debug port: \(detail)"
         }
     }
 }

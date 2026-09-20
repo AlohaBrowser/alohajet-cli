@@ -639,10 +639,9 @@ public func buildAgentCodeRunnerScript(_ source: String,
     // Keeping the dynamic branch as dead code would still ship the construct into the page, where a
     // policy-analysis tool (or the next reader) cannot tell live code from dead, and a test asserting
     // "this script cannot ask the page to compile a string" could not be written honestly.
-    let executionBlock: String
-    switch compile {
+    let executionBlock = switch compile {
     case .inline:
-        executionBlock = """
+        """
                 // The call is INLINE, built in Swift from typed parameters. Nothing is compiled from a
                 // string, so a page whose CSP omits 'unsafe-eval' has nothing to refuse.
                 __rawResult = await (async () => (
@@ -650,7 +649,7 @@ public func buildAgentCodeRunnerScript(_ source: String,
                 ))();
         """
     case .dynamic:
-        executionBlock = """
+        """
                 var __agentFn;
                 try {
                   __agentFn = new Function('aloha', '__aloha', 'return (async () => (\\n' + __agentSrc + '\\n))()');
@@ -705,8 +704,7 @@ public func buildAgentCodeRunnerScript(_ source: String,
 /// Encodes a string as a JSON string literal for safe embedding in generated
 /// script source.
 func jsonStringLiteral(_ value: String) -> String {
-    if let data = try? JSONEncoder().encode(value), let encoded = String(data: data, encoding: .utf8) {
-        return encoded
-    }
-    return "\"\""
+    guard let data = try? JSONEncoder().encode(value),
+          let encoded = String(data: data, encoding: .utf8) else { return "\"\"" }
+    return encoded
 }

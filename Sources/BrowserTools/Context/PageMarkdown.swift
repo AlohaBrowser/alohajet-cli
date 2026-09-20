@@ -16,12 +16,7 @@ final class GlobalScope {
         set { storage[key] = newValue }
     }
 
-    fileprivate static let shared = GlobalScope()
-}
-
-@MainActor
-func getGlobalScope() -> GlobalScope {
-    GlobalScope.shared
+    static let shared = GlobalScope()
 }
 
 public enum UntrustedContentError: Error, Equatable, Sendable, LocalizedError, CustomStringConvertible {
@@ -75,14 +70,14 @@ public enum UntrustedContent {
     /// been established on the global scope.
     @MainActor
     public static func getSecret() -> String {
-        getGlobalScope()[untrustedContentSecretKey] as? String ?? ""
+        GlobalScope.shared[untrustedContentSecretKey] as? String ?? ""
     }
 
     /// Sets the boundary secret directly; a fresh per-session secret is normally
     /// established via ``initSecret()``.
     @MainActor
     public static func setSecret(_ secret: String) {
-        getGlobalScope()[untrustedContentSecretKey] = secret
+        GlobalScope.shared[untrustedContentSecretKey] = secret
     }
 
     /// Establishes a fresh boundary secret: the first eight characters of a random UUID.

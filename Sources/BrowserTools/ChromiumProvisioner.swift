@@ -39,11 +39,13 @@ public struct UnsupportedChromiumPlatformError: Error, Equatable, Sendable, Loca
 /// `platform`/`arch` use the Node-style identifiers `darwin`/`win32`/`linux` and
 /// `arm64`/`x64`.
 public nonisolated func resolveChromiumPlatformKey(_ platform: String, _ arch: String) throws -> ChromiumPlatformKey {
-    if platform == "darwin" && arch == "arm64" { return .macArm64 }
-    if platform == "darwin" && arch == "x64" { return .macX64 }
-    if platform == "linux" && arch == "x64" { return .linuxX64 }
-    if platform == "win32" && arch == "x64" { return .windowsX64 }
-    throw UnsupportedChromiumPlatformError(platform: platform, arch: arch)
+    switch (platform, arch) {
+    case ("darwin", "arm64"): return .macArm64
+    case ("darwin", "x64"): return .macX64
+    case ("linux", "x64"): return .linuxX64
+    case ("win32", "x64"): return .windowsX64
+    default: throw UnsupportedChromiumPlatformError(platform: platform, arch: arch)
+    }
 }
 
 public nonisolated func currentChromiumPlatformKey() throws -> ChromiumPlatformKey {
@@ -130,18 +132,18 @@ public enum ChromiumProvisionerError: Error, Equatable, Sendable, CustomStringCo
     public var description: String {
         switch self {
         case let .noDownloadForPlatform(key):
-            return "no Chrome-for-Testing download for platform \(key)"
+            "no Chrome-for-Testing download for platform \(key)"
         case let .fetchFailed(detail):
-            return "Chrome-for-Testing fetch failed: \(detail)"
+            "Chrome-for-Testing fetch failed: \(detail)"
         case let .archiveDigestMismatch(platform, expected, actual):
-            return "Chrome-for-Testing archive for \(platform) failed its SHA-256 check: "
+            "Chrome-for-Testing archive for \(platform) failed its SHA-256 check: "
                 + "expected \(expected), got \(actual)"
         case let .archiveExtractionFailed(detail):
-            return "Chrome-for-Testing archive extraction failed: \(detail)"
+            "Chrome-for-Testing archive extraction failed: \(detail)"
         case let .executableNotFoundAfterExtract(path):
-            return "Chrome-for-Testing executable not found after extract at \(path)"
+            "Chrome-for-Testing executable not found after extract at \(path)"
         case let .browserPathNotExecutable(path):
-            return "ALOHAJET_BROWSER names \(path), which is not an executable file"
+            "ALOHAJET_BROWSER names \(path), which is not an executable file"
         }
     }
 }
@@ -221,13 +223,13 @@ public final class ChromiumProvisioner {
     public func executableRelativePath() -> String {
         switch platformKey {
         case .macArm64:
-            return "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+            "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
         case .macX64:
-            return "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+            "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
         case .linuxX64:
-            return "chrome-linux64/chrome"
+            "chrome-linux64/chrome"
         case .windowsX64:
-            return "chrome-win64/chrome.exe"
+            "chrome-win64/chrome.exe"
         }
     }
 
@@ -287,19 +289,18 @@ public final class ChromiumProvisioner {
 
     /// Chrome-for-Testing ships `.zip` for all OSes.
     func stageArchive(_ payload: Data) throws {
-        let root = stagedRootDir()
+        let root = URL(fileURLWithPath: stagedRootDir())
         let pid = ProcessInfo.processInfo.processIdentifier
         let stamp = Int(Date().timeIntervalSince1970 * 1000)
-        let parent = URL(fileURLWithPath: root).deletingLastPathComponent().path
-        try FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)
-        let archivePath = URL(fileURLWithPath: parent)
-            .appendingPathComponent(".tmp-chromium-\(pid)-\(stamp).zip").path
-        try payload.write(to: URL(fileURLWithPath: archivePath))
-        defer { try? FileManager.default.removeItem(atPath: archivePath) }
+        let parent = root.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let archive = parent.appendingPathComponent(".tmp-chromium-\(pid)-\(stamp).zip")
+        try payload.write(to: archive)
+        defer { try? FileManager.default.removeItem(at: archive) }
         // Fresh staging dir so a partial prior extract never shadows this one.
-        try? FileManager.default.removeItem(atPath: root)
-        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
-        try extract(archivePath, root)
+        try? FileManager.default.removeItem(at: root)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try extract(archive.path, root.path)
     }
 
     public static let defaultDownloader: Downloader = { @MainActor url in

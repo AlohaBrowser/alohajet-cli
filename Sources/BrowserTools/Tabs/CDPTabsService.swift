@@ -12,21 +12,21 @@ final class CDPAgentDOMSnapshotting: AgentDOMSnapshotting {
         self.service = service
     }
 
-    func getInteractMarkdown(_ includeScreenshot: Bool, _ b: Bool, includeUrls: Bool) async throws -> ToolABI.InteractMarkdownResult {
-        try await getInteractMarkdown(includeScreenshot, b, includeUrls: includeUrls, signal: nil)
+    func getInteractMarkdown(_ includeScreenshot: Bool, _ highlight: Bool, includeUrls: Bool) async throws -> ToolABI.InteractMarkdownResult {
+        try await getInteractMarkdown(includeScreenshot, highlight, includeUrls: includeUrls, signal: nil)
     }
 
-    func getInteractMarkdown(_ includeScreenshot: Bool, _ b: Bool, includeUrls: Bool, signal: AbortSignal?) async throws -> ToolABI.InteractMarkdownResult {
+    func getInteractMarkdown(_ includeScreenshot: Bool, _ highlight: Bool, includeUrls: Bool, signal: AbortSignal?) async throws -> ToolABI.InteractMarkdownResult {
         try await getInteractMarkdown(
-            includeScreenshot, b,
+            includeScreenshot, highlight,
             serializeOptions: DomSerializeOptions(includeUrls: includeUrls),
             signal: signal)
     }
 
-    func getInteractMarkdown(_ includeScreenshot: Bool, _ b: Bool, serializeOptions: DomSerializeOptions, signal: AbortSignal?) async throws -> ToolABI.InteractMarkdownResult {
+    func getInteractMarkdown(_ includeScreenshot: Bool, _ highlight: Bool, serializeOptions: DomSerializeOptions, signal: AbortSignal?) async throws -> ToolABI.InteractMarkdownResult {
         let result = try await service.getInteractMarkdown(
             includeScreenshot: includeScreenshot,
-            highlight: b,
+            highlight: highlight,
             serializeOptions: serializeOptions,
             signal: signal
         )
@@ -57,14 +57,14 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     private let snapshotting: CDPAgentDOMSnapshotting
     private let pacer: NavigationPacer?
 
-    private var _title: String?
-    private var _tabType: String
-    private var _browserAgentControlledAgentId: String?
-    private var _chatSessionId: String?
-    private var _isAIControlledTab: Bool = false
-    private var _isBrowserAgentControlled: Bool = false
-    private var _networkRecorder: NetworkRecorder?
-    private var _viewportBounds: TabViewportBounds?
+    private var constructedTitle: String?
+    public let tabType: String
+    public private(set) var browserAgentControlledAgentId: String?
+    public var chatSessionId: String?
+    public private(set) var isAIControlledTab = false
+    public private(set) var isBrowserAgentControlled = false
+    private var networkRecorder: NetworkRecorder?
+    private var cachedViewportBounds: TabViewportBounds?
     /// Whether the user owns this tab (see ``TabHandle/openedByHuman``). Set once
     /// at construction: `true` for a target seeded from the browser, restored, or
     /// adopted live; `false` for one this session opened or a click spawned.
@@ -92,8 +92,8 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
             domScriptProvider: CDPDomTreeScriptProvider()
         )
         self.snapshotting = CDPAgentDOMSnapshotting(service: domService)
-        self._tabType = tabType
-        self._title = title
+        self.tabType = tabType
+        self.constructedTitle = title
         self.openedByHuman = openedByHuman
         self.pacer = pacer
     }
@@ -120,15 +120,9 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// Drops the title this handle was constructed with, so ``title`` reads the session's
     /// live one. The constructor value is a snapshot of the moment the tab was seeded and
     /// shadows every refresh after it.
-    func clearCachedTitle() { _title = nil }
+    func clearCachedTitle() { constructedTitle = nil }
 
-    public var title: String? {
-        return _title ?? session.title
-    }
-
-    public var tabType: String {
-        return _tabType
-    }
+    public var title: String? { constructedTitle ?? session.title }
 
     public var faviconUrl: String? { nil }
 
@@ -194,8 +188,8 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     // MARK: TabHandle lifecycle
 
     public func wake(_ signal: AbortSignal?) async throws -> WakeResult {
-        if tabType != "website" { return WakeResult(ok: true) }
-        if session.isDestroyed {
+        guard tabType == "website" else { return WakeResult(ok: true) }
+        guard !session.isDestroyed else {
             return WakeResult(ok: false, message: "Tab \"\(id)\" is unavailable because it has no live WebContents.")
         }
         do {
@@ -419,8 +413,8 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     }
 
     public func viewportBounds() -> TabViewportBounds? {
-        guard !session.isDestroyed else { return nil }
-        guard let bounds = _viewportBounds, bounds.width > 0, bounds.height > 0 else { return nil }
+        guard !session.isDestroyed,
+              let bounds = cachedViewportBounds, bounds.width > 0, bounds.height > 0 else { return nil }
         return bounds
     }
 
@@ -550,11 +544,11 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         let viewport = metrics["cssLayoutViewport"]
         let width = viewport?["clientWidth"]?.doubleValue ?? 0
         let height = viewport?["clientHeight"]?.doubleValue ?? 0
-        _viewportBounds = TabViewportBounds(width: Int(width), height: Int(height))
+        cachedViewportBounds = TabViewportBounds(width: Int(width), height: Int(height))
     }
 
     public func startNetworkRecording(logPath: String) {
-        if _networkRecorder != nil { return }
+        guard networkRecorder == nil else { return }
         // Directory first: the writer creates its file in it.
         let dir = (logPath as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(
@@ -564,7 +558,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         let recorder = NetworkRecorder(transport: SessionScopedCDPTransport(session: session)) { record in
             writer.append(record)
         }
-        _networkRecorder = recorder
+        networkRecorder = recorder
         Task { [session, recorder] in
             _ = try? await session.ensureAttached()
             await recorder.start()
@@ -573,37 +567,13 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
 
     // MARK: AgentControllableTab
 
-    public var browserAgentControlledAgentId: String? {
-        return _browserAgentControlledAgentId
-    }
-
-    public var chatSessionId: String? {
-        get { return _chatSessionId }
-        set { _chatSessionId = newValue; }
-    }
-
-    public var isAIControlledTab: Bool {
-        return _isAIControlledTab
-    }
-
-    public var isBrowserAgentControlled: Bool {
-        return _isBrowserAgentControlled
-    }
-
     public func setAIControlledTab(_ controlled: Bool, agentId: String?) {
-        _isAIControlledTab = controlled
-        if controlled {
-            _isBrowserAgentControlled = false
-            _browserAgentControlledAgentId = nil
-        } else {
-            _isBrowserAgentControlled = true
-            _browserAgentControlledAgentId = agentId
-        }
-        onControlStateChange?(_isAIControlledTab, _isBrowserAgentControlled)
+        isAIControlledTab = controlled
+        isBrowserAgentControlled = !controlled
+        browserAgentControlledAgentId = controlled ? nil : agentId
+        onControlStateChange?(isAIControlledTab, isBrowserAgentControlled)
     }
-
 }
-
 
 
 /// A ``TabsModel`` over a CDP browser. It seeds the open page targets from
@@ -666,23 +636,15 @@ public final class CDPTabsModel: TabsModel {
         seededTabsAreHuman && !agentOwnedTabIds.contains(targetId)
     }
 
-    public var activeTabId: String? {
-        return _activeTabId
-    }
+    public var activeTabId: String? { _activeTabId }
 
     public func setActiveTabId(_ id: String?) {
         _activeTabId = id
     }
 
-    public var tabsById: [String: TabHandle] {
-        var result: [String: TabHandle] = [:]
-        for (key, value) in tabs { result[key] = value }
-        return result
-    }
+    public var tabsById: [String: TabHandle] { tabs.mapValues { $0 } }
 
-    public var orderedTabs: [TabHandle] {
-        return order.compactMap { tabs[$0] }
-    }
+    public var orderedTabs: [TabHandle] { order.compactMap { tabs[$0] } }
 
     public func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle? {
         if let existing = resolveLocked(id) { return existing }
@@ -702,7 +664,7 @@ public final class CDPTabsModel: TabsModel {
     }
 
     public func tab(_ id: String) -> TabHandle? {
-        return resolveLocked(id)
+        resolveLocked(id)
     }
 
     /// Resolves a handle by its registered (external) id or by the real Chrome
@@ -800,12 +762,10 @@ public final class CDPTabsModel: TabsModel {
     /// Seeds the model from the browser's currently-open page targets. Safe to
     /// call repeatedly; it only seeds once.
     public func seedFromBrowser() async {
-        if seeded { return }
+        guard !seeded else { return }
         seeded = true
-        guard let result = try? await client.send(method: "Target.getTargets", params: [:]) else { return }
-        guard let infos = result["targetInfos"]?.arrayValue else { return }
+        guard let infos = await pageTargetInfos() else { return }
         for info in infos {
-            guard info["type"]?.stringValue == "page" else { continue }
             guard let targetId = info["targetId"]?.stringValue else { continue }
             let url = info["url"]?.stringValue ?? ""
             let title = info["title"]?.stringValue
@@ -892,12 +852,7 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
 
     private func pageTargetIds() async -> Set<String> {
         guard let infos = await pageTargetInfos() else { return [] }
-        var ids: Set<String> = []
-        for info in infos {
-            guard let targetId = info["targetId"]?.stringValue else { continue }
-            ids.insert(targetId)
-        }
-        return ids
+        return Set(infos.compactMap { $0["targetId"]?.stringValue })
     }
 
     /// Reads `Target.getTargets` and returns the `page`-type target info entries,
@@ -970,17 +925,17 @@ final class PageReadinessNetworkTracker {
     }
 
     func inFlightCount() -> Int {
-        return inFlight.count
+        inFlight.count
     }
 
     func networkIdleForMs(threshold: Int, now: Date) -> Int {
-        if inFlight.count <= threshold {
-            if idleSince == nil { idleSince = now }
-            return Int(now.timeIntervalSince(idleSince!) * 1000)
-        } else {
+        guard inFlight.count <= threshold else {
             idleSince = nil
             return 0
         }
+        let since = idleSince ?? now
+        idleSince = since
+        return Int(now.timeIntervalSince(since) * 1000)
     }
 }
 
@@ -988,7 +943,7 @@ final class DomStableTimestamp {
     private var stableAt: Date?
 
     func markStable() {
-        if stableAt == nil { stableAt = Date() };
+        if stableAt == nil { stableAt = Date() }
     }
 
     func stableForMs(now: Date) -> Int {
@@ -1012,9 +967,9 @@ final class DomStableTimestamp {
 /// `expectsRealURL` is the tab's intended target: when it is empty / `about:blank`
 /// the tab is *legitimately* a blank tab, so a load of `about:blank` does count.
 final class MainFrameLoadFlag {
-    private var _mainFrameId: String?
-    private var _didLoad = false
-    private var _committedURL: String?
+    private var mainFrameId: String?
+    private(set) var didLoad = false
+    private(set) var committedURL: String?
     private let expectsRealURL: Bool
 
     init(expectedURL: String) {
@@ -1023,33 +978,27 @@ final class MainFrameLoadFlag {
     }
 
     func setMainFrameId(_ id: String) {
-        if _mainFrameId == nil { _mainFrameId = id };
+        if mainFrameId == nil { mainFrameId = id }
     }
-
-    var didLoad: Bool { return _didLoad }
-    var committedURL: String? { return _committedURL }
 
     /// Records an OBSERVED committed URL (the live document's `location.href`),
     /// without the navigation reset `Page.frameNavigated` performs — this is not a
     /// navigation, it is a reading of the document that is already there.
     func noteCommittedURL(_ url: String) {
-        if !url.isEmpty { _committedURL = url }
+        if !url.isEmpty { committedURL = url }
     }
 
     func handle(_ event: CDPEvent) {
         switch event.method {
         case "Page.frameNavigated":
-            guard let frame = event.params["frame"] else { return }
             // A top-level navigation has no parentId.
-            let isTopLevel = frame["parentId"]?.stringValue == nil
-            guard isTopLevel else { return }
-            let frameId = frame["id"]?.stringValue
+            guard let frame = event.params["frame"], frame["parentId"]?.stringValue == nil else { return }
             let url = frame["url"]?.stringValue ?? ""
-            if _mainFrameId == nil { _mainFrameId = frameId }
-            if !url.isEmpty { _committedURL = url }
+            if mainFrameId == nil { mainFrameId = frame["id"]?.stringValue }
+            if !url.isEmpty { committedURL = url }
             // A new top-level navigation supersedes any earlier (e.g. about:blank)
             // load, so the load flag resets on navigation start.
-            _didLoad = false
+            didLoad = false
         case "Page.lifecycleEvent":
             guard event.params["name"]?.stringValue == "load" else { return }
             markIfMainFrame(event.params["frameId"]?.stringValue)
@@ -1063,13 +1012,13 @@ final class MainFrameLoadFlag {
     private func markIfMainFrame(_ frameId: String?) {
         // Count the event only when it targets the resolved main frame, so an
         // SPA's subframe/iframe loads never falsely satisfy the gate.
-        guard let main = _mainFrameId, frameId == main else { return }
+        guard let main = mainFrameId, frameId == main else { return }
         // Gate on the committed URL being the real target: ignore a load of the
         // freshly-created tab's initial about:blank when a real URL is expected.
         if expectsRealURL {
-            guard let url = _committedURL, isRealURL(url) else { return }
+            guard let url = committedURL, isRealURL(url) else { return }
         }
-        _didLoad = true
+        didLoad = true
     }
 
     private func isRealURL(_ url: String) -> Bool {
@@ -1078,11 +1027,7 @@ final class MainFrameLoadFlag {
 }
 
 final class TimeoutFlag {
-    private var _value = false
-    var value: Bool {
-        get { return _value }
-        set { _value = newValue; }
-    }
+    var value = false
 }
 
 /// Races a tab-context `extraction` against a `timeoutMs` deadline: a fresh
@@ -1119,8 +1064,7 @@ func raceContextTimeout<T: Sendable>(
             try await runRaceTimeout(timeoutMs: timeoutMs, controller: controller, timedOut: timedOut, tabId: tabId)
         }
         defer { group.cancelAll() }
-        let result = try await group.next() ?? nil
-        return result
+        return try await group.next() ?? nil
     }
 }
 
