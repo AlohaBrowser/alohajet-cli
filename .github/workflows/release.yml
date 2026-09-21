@@ -189,7 +189,14 @@ jobs:
       # The SHA is the COMMIT the v3 tag points at, not the annotated tag object's own
       # SHA — `uses:` resolves a commit, and a tag-object SHA fails the checkout with
       # "unable to resolve action".
+      #
+      # Non-blocking: the attestation API answers "Feature not available for the
+      # organization ... or make this repository public" on a private repository
+      # without the paid plan, and a release that cannot ship because its provenance
+      # is unavailable is worse than a release without provenance. It starts working
+      # by itself the moment the repository is public.
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        continue-on-error: true
         with:
           subject-path: |
             dist/*.tar.gz
