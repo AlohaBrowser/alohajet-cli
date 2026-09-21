@@ -1,15 +1,8 @@
 # The agent endpoint
 
-`alohajet -p "<prompt>"` runs no agent loop. It POSTs one turn to an HTTP server and
-reports what comes back. The default is `http://127.0.0.1:8765`, the Aloha browser's own
-automation server; `--endpoint <url>` names any other. This page is the contract that
-server has to speak, transcribed from
-[`Sources/AgentDriver/RemoteAutomationDriver.swift`](../Sources/AgentDriver/RemoteAutomationDriver.swift)
-and [`AutomationToken.swift`](../Sources/AgentDriver/AutomationToken.swift) — implement it
-and `-p` works against your own agent with no Aloha software anywhere.
-
-The browser tools (`open`, `read`, `click`, …) have nothing to do with this: `BrowserTools`
-does not link `AgentDriver`, so nothing on that path can reach an agent endpoint.
+`alohajet -p "<prompt>"` runs no agent loop. It POSTs one turn to an HTTP server and  
+reports what comes back. The default is `http://127.0.0.1:8765`, the Aloha browser's own  
+automation server; `--endpoint <url>` names any other.
 
 ## Ground rules
 
@@ -28,8 +21,7 @@ variable or not at all, and `alohajet` says so on stderr. With no token there is
 `Authorization` header and no unauthenticated retry: answer `401` and the user sees it.
 
 **Content-Type.** `application/json` is sent on `POST /agent/run` and `POST /agent/terms`
-only. `POST /agent/task` (legacy) carries the raw prompt as the body and is deliberately
-unlabelled.
+only. `POST /agent/task` carries the raw prompt as the body and is deliberately unlabelled.
 
 **Failures are values.** Transport errors, non-200s and undecodable bodies all become a
 `failed` run result on this side; `-p` exits 1 and prints the reason. Nothing throws.
@@ -38,10 +30,12 @@ unlabelled.
 
 The first request of every turn, and the only one made before anything is decided.
 
-| answer | meaning |
-|---|---|
-| `200` with `{"protocol": 2, "conversation": "<id>"}` | protocol 2 (below) |
-| anything else, including `404` | protocol 1 (legacy, [below](#legacy-protocol-1)) |
+
+| answer                                               | meaning                                          |
+| ---------------------------------------------------- | ------------------------------------------------ |
+| `200` with `{"protocol": 2, "conversation": "<id>"}` | protocol 2 (below)                               |
+| anything else, including `404`                       | protocol 1 (legacy, [below](#legacy-protocol-1)) |
+
 
 A new server should answer protocol 2. `conversation` is the chat the server is currently
 on; it is what `--continue` pins, and its absence makes `--continue` fail by name.
@@ -69,14 +63,18 @@ carries on rather than making a printed id dead forever. A `200` without `taskId
 
 Refusals, each reported in the user's words:
 
-| status | `error` | what `-p` prints |
-|---|---|---|
-| `409` | `permissions_conflict` | the server's own `message` |
-| `409` | anything else | that conversation already has a turn running |
-| `400` | `empty_prompt` | `-p` needs a non-empty prompt |
-| `400` | `bad_conversation_id` | the server's own `message` |
-| `415` | — | body rejected; this browser is too old |
-| other | — | the raw status and body, unsmoothed |
+
+| status | `error`                | what `-p` prints                             |
+| ------ | ---------------------- | -------------------------------------------- |
+| `409`  | `permissions_conflict` | the server's own `message`                   |
+| `409`  | anything else          | that conversation already has a turn running |
+| `400`  | `empty_prompt`         | `-p` needs a non-empty prompt                |
+| `400`  | `bad_conversation_id`  | the server's own `message`                   |
+| `415`  | —                      | body rejected; this browser is too old       |
+| other  | —                      | the raw status and body, unsmoothed          |
+
+
+
 
 ## 3. The poll — `GET /agent/result?taskId=<id>`
 
@@ -90,13 +88,15 @@ thread.
 { "state": "done", "result": { … } }
 ```
 
-| `state` | outcome |
-|---|---|
-| `running` | poll again |
-| `done` | decode `result` (below) |
-| `rejected` | failed — empty prompt, nothing to run |
-| `displaced` | failed — unknown, evicted or superseded task id |
-| anything else | failed — unknown state |
+
+| `state`       | outcome                                         |
+| ------------- | ----------------------------------------------- |
+| `running`     | poll again                                      |
+| `done`        | decode `result` (below)                         |
+| `rejected`    | failed — empty prompt, nothing to run           |
+| `displaced`   | failed — unknown, evicted or superseded task id |
+| anything else | failed — unknown state                          |
+
 
 Any non-200, or an envelope with no `state`, fails the turn.
 
@@ -145,75 +145,9 @@ two overlapping turns race; the client warns and runs anyway. Do not implement i
 server.
 
 1. `POST /agent/new` with `{"sessionId": "<id>"}` (or no body for a fresh chat) →
-   `{"sessionId": "<id>"}`. A mismatch, or a missing id, fails the turn.
+  `{"sessionId": "<id>"}`. A mismatch, or a missing id, fails the turn.
 2. `POST /agent/permissions` with `{"permissions": [...]}` — sent on every run, including
-   the empty deny list, so a run never inherits the previous one's grants.
+  the empty deny list, so a run never inherits the previous one's grants.
 3. `POST /agent/task` with the **raw prompt** as the body → `{"taskId": "…"}`.
 4. The same poll as above.
 
-## A minimal server
-
-Enough to satisfy the whole protocol-2 path. It answers instantly rather than running a
-model, and it checks no token — a real one must.
-
-```python
-#!/usr/bin/env python3
-import json, uuid
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import urlparse, parse_qs
-
-TASKS = {}
-
-class Agent(BaseHTTPRequestHandler):
-    def reply(self, status, payload):
-        body = json.dumps(payload).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        url = urlparse(self.path)
-        if url.path == "/agent/lane":
-            return self.reply(200, {"protocol": 2, "conversation": None})
-        if url.path == "/agent/result":
-            task_id = parse_qs(url.query).get("taskId", [""])[0]
-            answer = TASKS.get(task_id)
-            if answer is None:
-                return self.reply(200, {"state": "displaced"})
-            return self.reply(200, {"state": "done", "result": {
-                "finalText": answer, "completion": "end_turn", "failureReason": None}})
-        self.reply(404, {"error": "not_found"})
-
-    def do_POST(self):
-        if urlparse(self.path).path != "/agent/run":
-            return self.reply(404, {"error": "not_found"})
-        length = int(self.headers.get("Content-Length") or 0)
-        request = json.loads(self.rfile.read(length) or b"{}")
-        prompt = (request.get("prompt") or "").strip()
-        if not prompt:
-            return self.reply(400, {"error": "empty_prompt"})
-        task_id = str(uuid.uuid4())
-        TASKS[task_id] = f"echo: {prompt}"
-        self.reply(200, {"taskId": task_id,
-                         "conversation": request.get("conversation") or str(uuid.uuid4()).upper(),
-                         "known": True})
-
-HTTPServer(("127.0.0.1", 8799), Agent).serve_forever()
-```
-
-Captured against that server, unedited — the chat line is on stderr:
-
-```console
-$ alohajet -p "hello" --endpoint http://127.0.0.1:8799
-echo: hello
-
-chat C24C1192-A986-4E49-B51A-B863D78C6005 — continue it with: --resume C24C1192-A986-4E49-B51A-B863D78C6005
-
-$ alohajet -p "hello" --endpoint http://127.0.0.1:8799 --json
-{"finalText":"echo: hello","completion":"end_turn","isSuccess":true,"failureReason":null,"sessionId":"B2E2F7F4-6EE5-4C31-84D9-EBF3896D3999"}
-```
-
-Nothing was launched to serve that: the app launcher fires only for a loopback endpoint on
-the app's own fixed port (8765), so `-p` against your own server never touches a browser.
