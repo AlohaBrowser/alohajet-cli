@@ -206,7 +206,7 @@ jobs:
       # tag" whenever GITHUB_REF is not refs/tags/*, which is every workflow_dispatch run —
       # and it throws at the very end, after the matrix has built and the attestations
       # have been minted against a release that never appears.
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ inputs.version || github.ref_name }}
           files: |
