@@ -4,10 +4,9 @@
 # Deliberately not the release an app ships: that kind signs and notarizes a DMG of
 # a GUI app from a self-hosted runner holding a Developer ID. This package is a
 # command-line binary with no bundle, no app and no secrets, so it runs entirely on
-# GitHub-hosted runners and signs nothing. What that costs the user is stated in
-# RELEASING.md rather than hidden: an unsigned macOS binary is fine when fetched with
-# curl (no quarantine attribute) and is blocked by Gatekeeper when fetched with a
-# browser, which is the whole reason the install script exists.
+# GitHub-hosted runners and signs nothing. What that costs the user: an unsigned macOS
+# binary is fine when fetched with curl (no quarantine attribute) and is blocked by
+# Gatekeeper when fetched with a browser, until `xattr -d com.apple.quarantine` clears it.
 name: release
 
 on:
@@ -20,8 +19,10 @@ on:
         required: true
         type: string
 
+# The floor every job inherits: the build matrix only checks out and uploads artifacts.
+# Writing the release is the `publish` job's business, and it restates what it needs.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -39,14 +40,22 @@ jobs:
             runner: macos-15
             asset: alohajet-macos-universal
             build_flags: "--arch arm64 --arch x86_64"
+          # `--static-swift-stdlib` is what makes the tarball usable at all: SwiftPM on
+          # Linux links the runtime dynamically by default, so the binary resolves
+          # libswiftCore.so and libFoundation*.so out of /usr/lib/swift — a directory that
+          # exists in this container and on no machine that merely downloaded the release.
+          # Measured in swift:6.2.3-noble: the dynamic binary answers
+          # "error while loading shared libraries: libswiftCore.so" in a bare ubuntu:24.04,
+          # the static one runs. What it still asks of the host is libcurl.so.4, which
+          # FoundationNetworking links, over libc/libstdc++/libgcc — so any box with curl.
           - name: linux-x86_64
             runner: ubuntu-24.04
             container: swift:6.2.3-noble
             asset: alohajet-linux-x86_64
-            build_flags: ""
+            build_flags: "--static-swift-stdlib"
     container: ${{ matrix.container || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select a toolchain that can build this package
         # macOS only: the Linux leg runs in swift:6.2.3-noble, which is already right.
@@ -99,13 +108,25 @@ jobs:
 
       - name: Stage, smoke test and pack
         shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME:-${{ inputs.version }}}"
+          # GITHUB_REF_NAME is always set — on a dispatch it names the BRANCH, so the
+          # event, not the emptiness of a variable, is what picks the version.
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+          else
+            version="$GITHUB_REF_NAME"
+          fi
           # The tag names the tarball; Sources/alohajet/Version.swift is what the binary
           # reports through --version and MCP serverInfo. They are two statements of one
           # fact, so a mismatch ships a binary that lies about which release it is.
-          declared="$(sed -n 's/^public let alohajetVersion = "\(.*\)"$/\1/p' Sources/alohajet/Version.swift)"
+          declared="$(sed -n 's/^\(public \)*let alohajetVersion = "\(.*\)"$/\2/p' Sources/alohajet/Version.swift)"
+          if [ -z "$declared" ]; then
+            echo "could not read alohajetVersion out of Sources/alohajet/Version.swift" >&2
+            exit 1
+          fi
           if [ "${version#v}" != "$declared" ]; then
             echo "tag ${version} and Version.swift ${declared} disagree — bump the constant in the commit you tag" >&2
             exit 1
@@ -116,14 +137,26 @@ jobs:
           # A tarball whose binary cannot start is worse than no release. `--help`
           # touches argument parsing and the usage table and launches no browser.
           "$binary" --help > /dev/null
+          # But that ran inside the Swift image, where every runtime library is on the
+          # box, so it says nothing about the machine that downloads the tarball. The
+          # linkage is the part that travels: a dependency under /usr/lib/swift means the
+          # asset only starts on a host with a toolchain installed.
+          if command -v ldd > /dev/null && ldd "$binary" | grep -q '/usr/lib/swift'; then
+            echo "$binary links the Swift runtime dynamically; it would not start without a toolchain" >&2
+            ldd "$binary" >&2
+            exit 1
+          fi
           stage="dist/alohajet-${version}-${{ matrix.name }}"
           mkdir -p "$stage"
           cp "$binary" "$stage/alohajet"
-          cp LICENSE README.md SECURITY.md "$stage/" 2>/dev/null || true
+          cp LICENSE THIRD-PARTY-NOTICES README.md "$stage/"
+          # `sudo xcode-select -s` in the picker step persists for the rest of the job,
+          # so this is the toolchain that was chosen and that built the binary above.
+          swift --version | head -n 1 > "$stage/BUILD-TOOLCHAIN"
           tar -C dist -czf "dist/${{ matrix.asset }}.tar.gz" "alohajet-${version}-${{ matrix.name }}"
           rm -rf "$stage"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}.tar.gz
@@ -132,19 +165,50 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-24.04
+    # A job block REPLACES the workflow one rather than adding to it, so contents:write is
+    # restated here. Only this job gets the attestation scopes; the workflow block stays
+    # without them.
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: dist
           merge-multiple: true
 
       # ONE SHA256SUMS for the whole release, in the format `sha256sum -c` reads, so
-      # the install script can verify with a stock tool and no jq.
+      # a download can be verified with a stock tool and no jq.
       - name: Checksums
         run: cd dist && sha256sum *.tar.gz | tee SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
+      # Nothing here is signed or notarized, so provenance is the only thing a downloader
+      # can check: a Sigstore attestation, verifiable with `gh attestation verify`, that
+      # binds each asset to this workflow, this repository and this commit.
+      # The SHA is the COMMIT the v3 tag points at, not the annotated tag object's own
+      # SHA — `uses:` resolves a commit, and a tag-object SHA fails the checkout with
+      # "unable to resolve action".
+      #
+      # Non-blocking: the attestation API answers "Feature not available for the
+      # organization ... or make this repository public" on a private repository
+      # without the paid plan, and a release that cannot ship because its provenance
+      # is unavailable is worse than a release without provenance. It starts working
+      # by itself the moment the repository is public.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        continue-on-error: true
         with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
+
+      # `tag_name` is not optional here: the action throws "GitHub Releases requires a
+      # tag" whenever GITHUB_REF is not refs/tags/*, which is every workflow_dispatch run —
+      # and it throws at the very end, after the matrix has built and the attestations
+      # have been minted against a release that never appears.
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ inputs.version || github.ref_name }}
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS

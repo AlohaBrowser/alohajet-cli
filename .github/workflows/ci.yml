@@ -21,8 +21,7 @@
 #      CoreFoundation does not exist off Apple. (Rewriting that also surfaced a real
 #      cross-platform bug: `{"index":0}` was arriving at the tools as `false`.)
 #   3. A test using `URLSession` without `import FoundationNetworking`.
-#   4. And the one that matters most, because it is the SAME CLASS as the crash the
-#      corelibs gate dies on elsewhere: the obvious fix for (1) —
+#   4. And the one that matters most: the obvious fix for (1) —
 #      `FileHandle.standardOutput.write` — compiles everywhere and TRAPS on Linux.
 #      corelibs-Foundation implements it as a `try!` (Foundation/FileHandle.swift:699)
 #      that turns an ordinary `EINTR` into a fatal error, and it killed the test process
@@ -45,6 +44,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -56,7 +58,7 @@ jobs:
     env:
       ALOHAJET_REQUIRE_BROWSER: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select a toolchain that can build this package
         # `swift-tools-version:6.2` plus SE-0466 default isolation: an older toolchain
@@ -64,10 +66,27 @@ jobs:
         # that the runner image may not carry, take the newest one installed and then
         # ASSERT the Swift version — so an image change produces "found Swift 6.1" here
         # instead of a hundred syntax errors three steps later.
+        # Same step, same assertion, same BAD list as release.yml, which writes out what
+        # each skipped toolchain does to this package; the two must not drift, and the
+        # release-configuration build below is the one BAD exists for.
         run: |
           set -euo pipefail
-          newest="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1)"
-          if [ -n "$newest" ]; then sudo xcode-select -s "$newest"; fi
+          BAD="6.2.4"
+          picked=""
+          for app in $(ls -d /Applications/Xcode*.app 2>/dev/null | sort -Vr); do
+            swiftbin="$app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swift"
+            [ -x "$swiftbin" ] || { echo "skipping $app (no swift at $swiftbin)"; continue; }
+            v="$("$swiftbin" -version 2>/dev/null | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -n 1 || true)"
+            [ -n "$v" ] || { echo "skipping $app (could not read its Swift version)"; continue; }
+            echo "candidate $app -> Swift $v"
+            case " $BAD " in *" $v "*) echo "skipping $app (Swift $v is known bad)"; continue ;; esac
+            picked="$app"; break
+          done
+          if [ -z "$picked" ]; then
+            echo "No installed Xcode has a usable Swift; saw: $(ls -d /Applications/Xcode*.app 2>/dev/null | tr '\n' ' ')" >&2
+            exit 1
+          fi
+          sudo xcode-select -s "$picked"
           xcodebuild -version
           swift --version
           version="$(swift -version 2>&1 | sed -n 's/.*Swift version \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n 1)"
@@ -95,6 +114,13 @@ jobs:
       - name: Test
         run: swift test
 
+      - name: Build the release configuration the release workflow builds
+        # Debug and release-universal are different compilations, and this is the one that
+        # has actually broken: see the BAD list above. Without this step a tag push is the
+        # first time anybody runs it, and a tag cannot be cleanly re-pushed. Compile only —
+        # the tests ran above, on the same sources.
+        run: swift build -c release --product alohajet --arch arm64 --arch x86_64
+
   linux:
     name: Linux (Swift 6.2.3, Ubuntu 24.04)
     runs-on: ubuntu-24.04
@@ -112,7 +138,7 @@ jobs:
     env:
       ALOHAJET_REQUIRE_BROWSER: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Report versions
         run: swift --version

@@ -11,3 +11,9 @@
 *.xcworkspace
 DerivedData/
 .DS_Store
+dist/
+.env
+*.pem
+*.p12
+*.key
+.cursor/
