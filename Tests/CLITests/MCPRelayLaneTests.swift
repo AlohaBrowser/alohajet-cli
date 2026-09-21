@@ -3,7 +3,7 @@ import Testing
 
 // `alohajet mcp` is one verb over two products, and `--endpoint` is the whole selector:
 //
-//   alohajet mcp                    this package's MCP server, nine tools, own Chromium
+//   alohajet mcp                    this package's MCP server, its own tools and Chromium
 //   alohajet mcp --endpoint <url>   a PIPE onto the MCP server a running Aloha browser
 //                                   already mounts at <url>/mcp — no tools, no browser
 //
@@ -53,7 +53,7 @@ struct MCPRelayLaneTests {
 
     /// The other half of that differential, stated here rather than assumed: with no
     /// `--endpoint` the identical invocation IS this package's server, answering over its
-    /// own nine tools.
+    /// own tools.
     @Test func withoutTheFlagTheServerLaneAnswersAsBefore() throws {
         let server = try runCLI(
             ["--cdp", "1", "mcp"],

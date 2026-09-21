@@ -29,36 +29,25 @@ public struct ParsedKeyChord: Equatable, Sendable {
 /// into a sequence of key presses with their modifiers.
 public func parseKeyChordSequence(_ input: String) -> [ParsedKeyChord] {
     if input.contains(" ") && input.contains("+") {
-        let parts = input.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }).map(String.init)
-        var result: [ParsedKeyChord] = []
-        for part in parts {
-            result.append(contentsOf: parseKeyChordSequence(part))
-        }
-        return result
+        return input
+            .split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" })
+            .flatMap { parseKeyChordSequence(String($0)) }
     }
     if input == "+" {
         return [ParsedKeyChord(key: "+", modifiers: [])]
     }
     if input.contains("+") {
         let tokens = input.split(separator: "+", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
-        let key = tokens[tokens.count - 1]
-        let modifierTokens = tokens.dropLast()
-        var modifiers: [String] = []
-        for token in modifierTokens {
+        let modifiers: [String] = tokens.dropLast().compactMap { token in
             switch token.lowercased() {
-            case "cmd", "command", "meta":
-                modifiers.append("meta")
-            case "ctrl", "control":
-                modifiers.append("control")
-            case "shift":
-                modifiers.append("shift")
-            case "alt", "option":
-                modifiers.append("alt")
-            default:
-                break
+            case "cmd", "command", "meta": "meta"
+            case "ctrl", "control": "control"
+            case "shift": "shift"
+            case "alt", "option": "alt"
+            default: nil
             }
         }
-        return [ParsedKeyChord(key: key, modifiers: modifiers)]
+        return [ParsedKeyChord(key: tokens[tokens.count - 1], modifiers: modifiers)]
     }
     let namedKeys = [
         "Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowLeft", "ArrowRight",
@@ -77,7 +66,7 @@ public func parseKeyChordSequence(_ input: String) -> [ParsedKeyChord] {
 /// Serializes an arbitrary agent result value to a string, JSON-encoding
 /// objects/arrays and truncating very large payloads.
 public func stringifyAgentResult(_ value: JSValue?) -> String {
-    guard let value = value else { return "undefined" }
+    guard let value else { return "undefined" }
     switch value {
     case .null:
         return "null"
@@ -114,7 +103,7 @@ private func jsValueToPlainString(_ value: JSValue) -> String {
 /// Pretty-prints a JSValue with two-space indentation, preserving object key
 /// insertion order, equivalent to `JSON.stringify(value, null, 2)`.
 private func jsValuePrettyJSON(_ value: JSValue) -> String? {
-    return prettyPrint(value, indent: 0)
+    prettyPrint(value, indent: 0)
 }
 
 private func prettyPrint(_ value: JSValue, indent: Int) -> String {
@@ -165,7 +154,7 @@ public nonisolated struct ConsoleCapture: Equatable, Sendable {
 /// Formats captured console entries into a human-readable block, or an empty
 /// string when there are none.
 public func formatConsoleOutput(_ entries: [ConsoleCapture]) -> String {
-    if entries.isEmpty { return "" }
+    guard !entries.isEmpty else { return "" }
     let lines = entries.map { "[\($0.level)] \($0.msg)" }
     return "Console output (\(entries.count) entries):\n" + lines.joined(separator: "\n")
 }
@@ -173,7 +162,7 @@ public func formatConsoleOutput(_ entries: [ConsoleCapture]) -> String {
 // MARK: - Screenshot extension support
 
 public func isSupportedScreenshotExtension(_ extensionWithDot: String) -> Bool {
-    return extensionWithDot == ".png" || extensionWithDot == ".jpg" || extensionWithDot == ".jpeg"
+    [".png", ".jpg", ".jpeg"].contains(extensionWithDot)
 }
 
 /// Strips a `data:...,` prefix from a base64 string, returning everything after
@@ -199,13 +188,9 @@ public final class ActionCollector {
         actions.append(action)
     }
 
-    public func drain() -> [BridgeAction] {
-        return actions
-    }
+    public func drain() -> [BridgeAction] { actions }
 
-    public func size() -> Int {
-        return actions.count
-    }
+    public func size() -> Int { actions.count }
 }
 
 // MARK: - Agent browser bridge
@@ -313,31 +298,25 @@ public struct PendingRequest: Sendable {
 /// ``AgentCodeRunResult``. A non-object value (e.g. a runtime that returned the
 /// raw expression value) is treated as the bare result with no error / pending.
 public func decodeAgentCodeRunResult(_ value: JSValue?) -> AgentCodeRunResult {
-    guard let value, case let .object(members) = value else {
+    guard let value, case .object = value else {
         return AgentCodeRunResult(result: value, error: nil, pending: [])
     }
-    func member(_ key: String) -> JSValue? { members.last(where: { $0.0 == key })?.1 }
-
-    let result = member("result")
     var error: AgentCodeError?
-    if let errorValue = member("error"), case .object = errorValue {
+    if let errorValue = value["error"], case .object = errorValue {
         error = AgentCodeError(
-            message: errorValue["message"]?.stringValue ?? "Error",
-            stack: errorValue["stack"]?.stringValue,
-            name: errorValue["name"]?.stringValue ?? "Error")
+            message: errorValue.string("message") ?? "Error",
+            stack: errorValue.string("stack"),
+            name: errorValue.string("name") ?? "Error")
     }
-    var pending: [PendingRequest] = []
-    if let pendingValue = member("pending"), case let .array(items) = pendingValue {
-        for item in items {
-            guard case .object = item, let type = item["type"]?.stringValue else { continue }
-            var params: [String: JSValue] = [:]
-            if let paramsValue = item["params"], case let .object(paramMembers) = paramsValue {
-                for (key, member) in paramMembers { params[key] = member }
-            }
-            pending.append(PendingRequest(type: type, params: params))
+    let pending = (value.array("pending") ?? []).compactMap { item -> PendingRequest? in
+        guard case .object = item, let type = item.string("type") else { return nil }
+        var params: [String: JSValue] = [:]
+        if case let .object(paramMembers)? = item["params"] {
+            for (key, member) in paramMembers { params[key] = member }
         }
+        return PendingRequest(type: type, params: params)
     }
-    return AgentCodeRunResult(result: result, error: error, pending: pending)
+    return AgentCodeRunResult(result: value["result"], error: error, pending: pending)
 }
 
 public nonisolated struct NavigationReadinessOptions: Sendable, Equatable {
@@ -502,9 +481,7 @@ public final class AgentBrowserBridge {
         if backend.isAborted { throw AgentAbortError() }
     }
 
-    private func isAbortError(_ error: Error) -> Bool {
-        return error is AgentAbortError
-    }
+    private func isAbortError(_ error: Error) -> Bool { error is AgentAbortError }
 
     public func waitForRecentAgentDownloads() async -> [CapturedDownload] {
         let first = backend.consumeAgentDownloads()
@@ -623,7 +600,7 @@ public final class AgentBrowserBridge {
         if !consoleOutput.isEmpty {
             output += "\n\n\(consoleOutput)"
         }
-        if actionCollector != nil, !backend.isAborted {
+        if !backend.isAborted {
             await emitPostExecSnapshot(startedAt: startedAt)
         }
         return AgentActionResult(
@@ -775,21 +752,16 @@ public final class AgentBrowserBridge {
     private func handlePendingRequest(_ request: PendingRequest) async throws -> PendingResult {
         switch request.type {
         case "pressKeys":
-            let keys = request.params["keys"]?.stringValue ?? ""
-            let r = await pressKeys(keys)
-            return PendingResult(type: "pressKeys", success: !r.isError, error: r.isError ? r.output : nil)
+            return pendingResult("pressKeys", await pressKeys(request.params["keys"]?.stringValue ?? ""))
         case "typeText":
-            let text = request.params["text"]?.stringValue ?? ""
-            let r = await typeText(text)
-            return PendingResult(type: "typeText", success: !r.isError, error: r.isError ? r.output : nil)
+            return pendingResult("typeText", await typeText(request.params["text"]?.stringValue ?? ""))
         case "type":
             let alohaId = request.params["alohaId"]?.stringValue ?? ""
             let text = request.params["text"]?.stringValue ?? ""
             // Default REPLACE (see DefaultBridgeExecutors): typing sets a value, it does not
             // append — an append default doubled re-typed fields (login username -> loop).
             let replace = request.params["replace"]?.boolValue ?? true
-            let r = await type(alohaId, text, replace: replace)
-            return PendingResult(type: "type", success: !r.isError, error: r.isError ? r.output : nil)
+            return pendingResult("type", await type(alohaId, text, replace: replace))
         case "click":
             return await handleClickPendingRequest(request)
         case "doubleClick":
@@ -801,35 +773,30 @@ public final class AgentBrowserBridge {
         case "hover":
             return await handleHoverPendingRequest(request)
         case "goto":
-            let url = request.params["url"]?.stringValue ?? ""
-            let r = await goto(url)
-            return PendingResult(
-                type: "goto",
-                success: !r.isError,
-                error: r.isError ? r.output : nil,
-                data: .object([("url", .string(backend.currentURL()))]))
+            let landed = await goto(request.params["url"]?.stringValue ?? "")
+            return pendingResult("goto", landed, url: backend.currentURL())
         case "back":
-            let r = await back()
-            return PendingResult(
-                type: "back",
-                success: !r.isError,
-                error: r.isError ? r.output : nil,
-                data: .object([("url", .string(backend.currentURL()))]))
+            let stepped = await back()
+            return pendingResult("back", stepped, url: backend.currentURL())
         case "scrollTo":
-            let alohaId = request.params["alohaId"]?.stringValue ?? ""
-            let r = await scrollTo(alohaId)
-            return PendingResult(type: "scrollTo", success: !r.isError, error: r.isError ? r.output : nil)
+            return pendingResult("scrollTo", await scrollTo(request.params["alohaId"]?.stringValue ?? ""))
         case "drag":
-            let r = await drag(request.params)
-            return PendingResult(type: "drag", success: !r.isError, error: r.isError ? r.output : nil)
+            return pendingResult("drag", await drag(request.params))
         case "moveMouse":
-            let r = await moveMouse(request.params)
-            return PendingResult(type: "moveMouse", success: !r.isError, error: r.isError ? r.output : nil)
+            return pendingResult("moveMouse", await moveMouse(request.params))
         case "screenshot":
             return await handleScreenshotPendingRequest(request)
         default:
             return PendingResult(type: request.type, success: false, error: "Unknown pending type: \(request.type)")
         }
+    }
+
+    private func pendingResult(_ type: String, _ result: AgentActionResult, url: String? = nil) -> PendingResult {
+        PendingResult(
+            type: type,
+            success: !result.isError,
+            error: result.isError ? result.output : nil,
+            data: url.map { .object([("url", .string($0))]) })
     }
 
     private func handleScreenshotPendingRequest(_ request: PendingRequest) async -> PendingResult {
@@ -851,8 +818,10 @@ public final class AgentBrowserBridge {
         let resolvedViewport = requestedViewport ?? result.viewport
         let data: JSValue?
         if let resolvedViewport {
-            var fields: [(String, JSValue)] = [("base64", result.rawResult ?? .null)]
-            fields.append(("viewport", viewportJSValue(resolvedViewport)))
+            var fields: [(String, JSValue)] = [
+                ("base64", result.rawResult ?? .null),
+                ("viewport", viewportJSValue(resolvedViewport))
+            ]
             if let imageSize = result.imageSize { fields.append(("imageSize", viewportJSValue(imageSize))) }
             data = .object(fields)
         } else {
@@ -964,10 +933,10 @@ public final class AgentBrowserBridge {
             let maxAttempts = 3
             for _ in 0..<maxAttempts {
                 let value = try await backend.evaluateViaCdp(script)
-                guard let value = value, value.objectMember("found")?.boolValue == true else {
+                guard let value, value.bool("found") == true else {
                     return AgentActionResult(output: "Element with aloha-id \(alohaId) not found", isError: true)
                 }
-                if value.objectMember("inViewport")?.boolValue == true {
+                if value.bool("inViewport") == true {
                     return AgentActionResult(output: "Scrolled to element \(alohaId)")
                 }
                 try? await Task.sleep(nanoseconds: 300_000_000)
@@ -990,19 +959,18 @@ public final class AgentBrowserBridge {
 
     /// The profile whose daily per-domain budget the rate limiter charges a
     /// navigation against, when known.
-    public var profileId: String? { _profileId }
-    private var _profileId: String?
+    public private(set) var profileId: String?
 
     @discardableResult
     public func boundToProfile(_ profileId: String?) -> AgentBrowserBridge {
-        _profileId = profileId
+        self.profileId = profileId
         return self
     }
 
     public func goto(_ url: String) async -> AgentActionResult {
         do {
             try throwIfAborted()
-            try await backend.navigate(url: url, profileId: _profileId, options: Self.navigationReadiness)
+            try await backend.navigate(url: url, profileId: profileId, options: Self.navigationReadiness)
             try throwIfAborted()
             return AgentActionResult(output: "Navigated to \(backend.currentURL())")
         } catch {
@@ -1217,6 +1185,7 @@ public final class AgentBrowserBridge {
             label: '',
             role: '',
             inputType: (el.getAttribute('type') || '').toLowerCase(),
+            autocomplete: el.getAttribute('autocomplete'),
             name: el.getAttribute('name'),
             htmlId: el.id || null,
             ariaLabel: el.getAttribute('aria-label'),
@@ -1242,6 +1211,7 @@ public final class AgentBrowserBridge {
             label: '',
             role: '',
             inputType: (el.getAttribute('type') || '').toLowerCase(),
+            autocomplete: el.getAttribute('autocomplete'),
             name: el.getAttribute('name'),
             htmlId: el.id || null,
             ariaLabel: el.getAttribute('aria-label'),
@@ -1282,7 +1252,7 @@ public final class AgentBrowserBridge {
               if (!el) return { found: false };
               var tag = el.tagName;
               var inputType = (el.getAttribute('type') || 'text').toLowerCase();
-              var nonText = ['button','submit','reset','checkbox','radio','file','image','range','color','hidden'];
+              var nonText = ['button','checkbox','color','file','hidden','image','radio','range','reset','submit'];
               var accepts = (tag === 'TEXTAREA'
                   || (tag === 'INPUT' && nonText.indexOf(inputType) === -1)
                   || el.isContentEditable === true)
@@ -1301,19 +1271,19 @@ public final class AgentBrowserBridge {
               };
             })()
             """)
-            guard probe?.objectMember("found")?.boolValue == true else {
+            guard probe?.bool("found") == true else {
                 return AgentActionResult(output: "Element with aloha-id \(alohaId) not found", isError: true)
             }
-            let tag = (probe?.objectMember("tag")?.stringValue ?? "unknown").lowercased()
-            let inputType = probe?.objectMember("inputType")?.stringValue ?? ""
+            let tag = (probe?.string("tag") ?? "unknown").lowercased()
+            let inputType = probe?.string("inputType") ?? ""
             let kind = inputType.isEmpty ? "<\(tag)>" : "<\(tag) type=\(inputType)>"
-            guard probe?.objectMember("acceptsText")?.boolValue == true else {
+            guard probe?.bool("acceptsText") == true else {
                 return AgentActionResult(
                     output: "Element with aloha-id \(alohaId) cannot accept typed text (it is \(kind)). "
                         + "No keystrokes were sent. Re-read the page and pass the aloha-id of the text field itself.",
                     isError: true)
             }
-            guard probe?.objectMember("focused")?.boolValue == true else {
+            guard probe?.bool("focused") == true else {
                 return AgentActionResult(
                     output: "Element with aloha-id \(alohaId) (\(kind)) could not take keyboard focus — it is hidden, "
                         + "detached or focus was moved away, so nothing would be typed into it. No keystrokes were "
@@ -1413,7 +1383,7 @@ public final class AgentBrowserBridge {
 
     private func isPrintableAsciiChar(_ char: String) -> Bool {
         guard char.count == 1, let scalar = char.unicodeScalars.first else { return false }
-        return scalar.value >= 32 && scalar.value <= 126
+        return (32...126).contains(scalar.value)
     }
 
     /// Types a single character: a printable ASCII key rides a `keyDown`/`keyUp`
@@ -1478,7 +1448,7 @@ public final class AgentBrowserBridge {
             let viewport = backend.viewportDimensions()
             let imageSize = ViewportSize(width: captured.imageWidth, height: captured.imageHeight)
             let output: String
-            if let viewport = viewport {
+            if let viewport {
                 output = "Screenshot captured (\(captured.base64.count) chars base64, viewport: \(viewport.width)x\(viewport.height), image: \(imageSize.width)x\(imageSize.height))"
             } else {
                 output = "Screenshot captured (\(captured.base64.count) chars base64, image: \(imageSize.width)x\(imageSize.height))"
@@ -1493,23 +1463,15 @@ public final class AgentBrowserBridge {
     }
 
     private func errorMessage(_ error: Error) -> String {
-        if let e = error as? LocalizedError, let d = e.errorDescription { return d }
-        return "\(error)"
+        (error as? LocalizedError)?.errorDescription ?? "\(error)"
     }
 
     private struct KeyChordDescriptor {
-        let key: String
-        let code: String
-        let keyCode: Int
-        let text: String?
-        let unmodifiedText: String?
-        init(key: String, code: String, keyCode: Int, text: String? = nil, unmodifiedText: String? = nil) {
-            self.key = key
-            self.code = code
-            self.keyCode = keyCode
-            self.text = text
-            self.unmodifiedText = unmodifiedText
-        }
+        var key: String
+        var code: String
+        var keyCode: Int
+        var text: String?
+        var unmodifiedText: String?
     }
 
     private static let modifierKeyChordDescriptors: [String: KeyChordDescriptor] = [
@@ -1555,12 +1517,13 @@ public final class AgentBrowserBridge {
     private func emulateKeyChordViaCdp(_ chord: ParsedKeyChord) async throws {
         try throwIfAborted()
         let combinedModifiers = chord.modifiers.reduce(0) { $0 | modifierBit($1) }
-        let modifierWithoutShift = (combinedModifiers & ~8) != 0
+        let modifierWithoutShift = (combinedModifiers & ~modifierBit("shift")) != 0
 
-        let isSpecial = Self.specialKeyChordDescriptors[chord.key] != nil
+        let special = Self.specialKeyChordDescriptors[chord.key]
+        let isSpecial = special != nil
         let isSingleChar = !isSpecial && chord.key.count == 1
         let descriptor: KeyChordDescriptor
-        if let special = Self.specialKeyChordDescriptors[chord.key] {
+        if let special {
             descriptor = special
         } else {
             let upper = chord.key.uppercased()
@@ -1672,10 +1635,10 @@ public final class AgentBrowserBridge {
             let script = "window.__aloha.select(\(jsonStringLiteral(alohaId)), \(selectorLiteral))"
             let value = try await backend.evaluateViaCdp(script)
             try throwIfAborted()
-            guard value?.objectMember("success")?.boolValue == true else {
+            guard value?.bool("success") == true else {
                 return AgentActionResult(output: "Select failed on element \(alohaId).", isError: true)
             }
-            let selectedLabel = value?.objectMember("selected")?.objectMember("label")?.stringValue ?? ""
+            let selectedLabel = value?["selected"]?.string("label") ?? ""
             return AgentActionResult(output: "Selected \"\(selectedLabel)\" on element \(alohaId).", rawResult: value)
         } catch {
             if isAbortError(error) {
@@ -1725,7 +1688,7 @@ public final class AgentBrowserBridge {
             let script = "window.__aloha.waitFor(\(jsonStringLiteral(selector)), \(Int(clamped)))"
             let value = try await backend.evaluateViaCdp(script)
             try throwIfAborted()
-            guard value?.objectMember("success")?.boolValue == true else {
+            guard value?.bool("success") == true else {
                 return AgentActionResult(output: "Timed out waiting for \"\(selector)\".", isError: true)
             }
             return AgentActionResult(output: "Element matching \"\(selector)\" appeared.", rawResult: value)
@@ -1735,22 +1698,5 @@ public final class AgentBrowserBridge {
             }
             return AgentActionResult(output: "page_wait_for failed: \(errorMessage(error))", isError: true)
         }
-    }
-}
-
-private extension JSValue {
-    var stringValue: String? {
-        if case .string(let s) = self { return s }
-        return nil
-    }
-    var boolValue: Bool? {
-        if case .bool(let b) = self { return b }
-        return nil
-    }
-    func objectMember(_ key: String) -> JSValue? {
-        if case .object(let members) = self {
-            return members.last(where: { $0.0 == key })?.1
-        }
-        return nil
     }
 }

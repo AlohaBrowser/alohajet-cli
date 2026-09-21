@@ -60,6 +60,16 @@ private final class ScriptedProbe {
     }
 }
 
+/// The pinned table with every digest replaced by the fake payload's, so the
+/// fetch → verify → extract → stage path runs end to end without a 145 MB download.
+private func tableMatching(_ payload: Data) -> ChromiumBuildTable {
+    ChromiumBuildTable(
+        version: ChromiumBuildTable.pinned.version,
+        builds: ChromiumBuildTable.pinned.builds.mapValues {
+            .init(url: $0.url, sha256: sha256Hex(payload))
+        })
+}
+
 private func tempCacheRoot() -> String {
     FileManager.default.temporaryDirectory
         .appendingPathComponent("chromium-prov-tests-\(UUID().uuidString)")
@@ -91,22 +101,22 @@ struct ChromiumProvisionerTests {
 
 @Test func resolvesDownloadURLForMacArm64() throws {
     let p = try ChromiumProvisioner(platformKey: .macArm64)
-    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/mac-arm64/chrome-mac-arm64.zip")
+    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-arm64/chrome-mac-arm64.zip")
 }
 
 @Test func resolvesDownloadURLForMacX64() throws {
     let p = try ChromiumProvisioner(platformKey: .macX64)
-    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/mac-x64/chrome-mac-x64.zip")
+    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/mac-x64/chrome-mac-x64.zip")
 }
 
 @Test func resolvesDownloadURLForLinuxX64() throws {
     let p = try ChromiumProvisioner(platformKey: .linuxX64)
-    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/linux64/chrome-linux64.zip")
+    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/linux64/chrome-linux64.zip")
 }
 
 @Test func resolvesDownloadURLForWindowsX64() throws {
     let p = try ChromiumProvisioner(platformKey: .windowsX64)
-    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/win64/chrome-win64.zip")
+    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/win64/chrome-win64.zip")
 }
 
 // MARK: - (d) Extract / staged-path computation
@@ -115,15 +125,15 @@ struct ChromiumProvisionerTests {
     let root = "/cache"
 
     let mac = try ChromiumProvisioner(cacheRoot: root, platformKey: .macArm64)
-    #expect(mac.stagedRootDir() == "/cache/126.0.6478.126/mac-arm64")
+    #expect(mac.stagedRootDir() == "/cache/153.0.8010.52/mac-arm64")
     #expect(mac.stagedExecutablePath()
-        == "/cache/126.0.6478.126/mac-arm64/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
+        == "/cache/153.0.8010.52/mac-arm64/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing")
 
     let linux = try ChromiumProvisioner(cacheRoot: root, platformKey: .linuxX64)
-    #expect(linux.stagedExecutablePath() == "/cache/126.0.6478.126/linux64/chrome-linux64/chrome")
+    #expect(linux.stagedExecutablePath() == "/cache/153.0.8010.52/linux64/chrome-linux64/chrome")
 
     let win = try ChromiumProvisioner(cacheRoot: root, platformKey: .windowsX64)
-    #expect(win.stagedExecutablePath() == "/cache/126.0.6478.126/win64/chrome-win64/chrome.exe")
+    #expect(win.stagedExecutablePath() == "/cache/153.0.8010.52/win64/chrome-win64/chrome.exe")
 }
 
 // MARK: - (b) Explicit browserPath short-circuits download
@@ -256,6 +266,7 @@ struct ChromiumProvisionerTests {
     let p = try ChromiumProvisioner(
         cacheRoot: cacheRoot,
         platformKey: .linuxX64,
+        buildTable: tableMatching(Data("FAKE-ZIP".utf8)),
         systemDefaultPath: "/nope/google-chrome",
         download: downloader.make(),
         extract: extractor.make(),
@@ -266,7 +277,7 @@ struct ChromiumProvisionerTests {
     #expect(resolved == p.stagedExecutablePath())
     #expect(downloader.callCount == 1)
     #expect(downloader.lastURL?.absoluteString
-        == "https://storage.googleapis.com/chrome-for-testing-public/126.0.6478.126/linux64/chrome-linux64.zip")
+        == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/linux64/chrome-linux64.zip")
     #expect(extractor.calls.count == 1)
     // The archive must have been staged under (a child of) the cache root and
     // extracted into the staged root dir.
@@ -286,6 +297,7 @@ struct ChromiumProvisionerTests {
     let p = try ChromiumProvisioner(
         cacheRoot: cacheRoot,
         platformKey: .macX64,
+        buildTable: tableMatching(Data("FAKE-ZIP".utf8)),
         systemDefaultPath: "/nope",
         download: downloader.make(),
         extract: extractor.make(),
@@ -296,10 +308,53 @@ struct ChromiumProvisionerTests {
     }
 }
 
-@Test func buildTableHasURLForEveryPlatform() throws {
+@Test func buildTableHasURLAndDigestForEveryPlatform() throws {
     for key in ChromiumPlatformKey.allCases {
-        #expect((try? ChromiumBuildTable.pinned.url(for: key)) != nil)
+        let build = try ChromiumBuildTable.pinned.build(for: key)
+        #expect(build.url.hasPrefix("https://"))
+        #expect(build.sha256.count == 64)
+        #expect(build.sha256.allSatisfy { $0.isHexDigit && !$0.isUppercase })
     }
+}
+
+// MARK: - Archive integrity
+
+@Test func sha256MatchesKnownVectors() {
+    #expect(sha256Hex(Data()) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+    #expect(sha256Hex(Data("abc".utf8)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    // 1 000 000 × 'a' — the NIST long message, the one that exercises multi-block padding.
+    #expect(sha256Hex(Data(repeating: UInt8(ascii: "a"), count: 1_000_000))
+        == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")
+}
+
+/// A payload that does not hash to the pinned digest never reaches the filesystem: the
+/// extractor is never called, so nothing is left unpacked to be run later.
+@Test func wrongDigestIsRejectedBeforeAnythingIsStaged() async throws {
+    let cacheRoot = tempCacheRoot()
+    defer { try? FileManager.default.removeItem(atPath: cacheRoot) }
+
+    let payload = Data("NOT-THE-PINNED-ARCHIVE".utf8)
+    let expected = String(repeating: "0", count: 64)
+    let extractor = RecordingExtractor()
+    let table = ChromiumBuildTable(
+        version: "153.0.8010.52",
+        builds: [.linuxX64: .init(url: "https://example.invalid/chrome-linux64.zip", sha256: expected)])
+
+    let p = try ChromiumProvisioner(
+        cacheRoot: cacheRoot,
+        platformKey: .linuxX64,
+        buildTable: table,
+        systemDefaultPath: "/nope",
+        download: CountingDownloader(payload: payload).make(),
+        extract: extractor.make(),
+        executableExists: ScriptedProbe().make())
+
+    await #expect(throws: ChromiumProvisionerError.archiveDigestMismatch(
+        platform: "linux64", expected: expected, actual: sha256Hex(payload))) {
+        _ = try await p.provision()
+    }
+    #expect(extractor.calls.isEmpty)
+    #expect(FileManager.default.fileExists(atPath: cacheRoot) == false)
 }
 
 }

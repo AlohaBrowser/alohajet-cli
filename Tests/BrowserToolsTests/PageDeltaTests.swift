@@ -11,14 +11,15 @@ import Testing
 struct PageDeltaTests {
 
     @Test func anUnchangedUrlIsSaidOutLoud() {
-        let delta = PageDelta.describe(urlBefore: "http://host/a", urlAfter: "http://host/a")
-        #expect(delta.contains("did NOT navigate"))
-        #expect(delta.contains("http://host/a"))
+        #expect(PageDelta.describe(urlBefore: "http://host/a", urlAfter: "http://host/a") == """
+             The page did NOT navigate — still at http://host/a. If you expected a new page, \
+            the action did not do what you assumed: read the page before acting again.
+            """)
     }
 
     @Test func aChangedUrlIsNamed() {
         #expect(PageDelta.describe(urlBefore: "http://host/a", urlAfter: "http://host/b")
-                    .contains("Navigated to http://host/b"))
+                == " Navigated to http://host/b.")
     }
 
     /// The seam is optional and some backends return "". A confident "did not navigate" that really meant
@@ -34,15 +35,11 @@ struct PageDeltaTests {
 
     /// One wording, three tools. Three tools saying the same thing three slightly different ways is how a
     /// model learns to distrust all three.
-    @Test func everyActionToolUsesTheSharedHelper() {
-        for file in ["PageClick", "PageType", "PageSelect"] {
-            let path = "Sources/BrowserTools/Tools/\(file).swift"
-            let source = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-            // Skipped rather than failed when the test runs from a different working directory: the
-            // assertion is about the repo, and a false failure on cwd would teach people to ignore it.
-            if source.isEmpty { continue }
-            #expect(source.contains("PageDelta.describe("), "\(file) still ships a stateless receipt")
-            #expect(source.contains("bridge.currentPageURL()"), "\(file) never reads the url")
-        }
+    @Test("every action tool uses the shared helper",
+          arguments: ["PageClick", "PageType", "PageSelect"])
+    func everyActionToolUsesTheSharedHelper(_ file: String) throws {
+        let source = try packageSource("Sources/BrowserTools/Tools/\(file).swift")
+        #expect(source.contains("PageDelta.describe("), "\(file) still ships a stateless receipt")
+        #expect(source.contains("bridge.currentPageURL()"), "\(file) never reads the url")
     }
 }

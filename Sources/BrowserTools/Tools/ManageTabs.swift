@@ -224,7 +224,7 @@ func manageTabsList(_ tabsWindow: TabsWindow, _ session: ChatModeSession? = nil)
         }
         return TabSummary(
             id: tab.id,
-            title: tab.title?.isEmpty == false ? tab.title! : "Untitled",
+            title: tab.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled",
             url: url,
             isActive: tab.id == activeTabId,
             openedByHuman: tab.openedByHuman
@@ -258,7 +258,7 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
     if let live = tabsModel as? LiveTabMetadataRefreshing { await live.refreshTabMetadata() }
 
     do {
-        let title = tab.title?.isEmpty == false ? tab.title! : "Untitled"
+        let title = tab.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled"
         let url = tab.url
         // The id the caller should use from here on. A tab this session just opened was
         // addressed by the provisional id it was allocated with; now that it is attached,
@@ -430,7 +430,7 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
         outputLines.append("This tab is now the one page_click, page_type, page_select, page_navigate, page_press_keys, page_wait_for and get_text address. The page below is a snapshot taken at open; nothing refreshes it for you. After any click, type or navigation, call manage_tabs read with this tab_id to see the current page. Pass use: false on open to skip taking it.")
     }
     if !opened.isError, let body = opened.output,
-       !body.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty {
+       !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
         outputLines.append(body)
     }
 
@@ -482,7 +482,7 @@ func manageTabsClose(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTab
     // truthfully at every construction site: true when seeded, restored or adopted live,
     // false only for a tab this session opened or a click spawned.
     if tab.openedByHuman {
-        let title = tab.title?.isEmpty == false ? tab.title! : "Untitled"
+        let title = tab.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled"
         return TabToolResult(
             output: "Cannot close \"\(title)\": it is the user's tab, not one you opened. "
                 + "You may only close tabs opened by manage_tabs.",

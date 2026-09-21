@@ -71,7 +71,7 @@ func parseArgs(_ argv: [String]) throws -> Args {
             break
         }
         if token.hasPrefix("-"), let equals = token.firstIndex(of: "=") {
-            args.flags[String(token[token.startIndex..<equals])] = String(token[token.index(after: equals)...])
+            args.flags[String(token[..<equals])] = String(token[token.index(after: equals)...])
         } else if valueFlags.contains(token) {
             index += 1
             guard index < argv.count else {
@@ -83,7 +83,7 @@ func parseArgs(_ argv: [String]) throws -> Args {
             } else {
                 args.flags[token] = argv[index]
             }
-        } else if token.hasPrefix("-") && token != "-" {
+        } else if token.hasPrefix("-"), token != "-" {
             args.flags[token] = ""
         } else {
             args.positional.append(token)
@@ -435,7 +435,7 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
     // The shared lane. `ownsBrowser: true` is the whole difference between this and
     // `--cdp`: the tabs in there are ones alohajet opened, so `close` may close them,
     // where a tab in the user's own browser may not be touched.
-    // ponytail: last writer wins. Two commands starting from cold at the same instant
+    // KNOWN CEILING: last writer wins. Two commands starting from cold at the same instant
     // both launch, and one browser ends up unrecorded — the usual pid-file race. Take a
     // lock on the state file if that ever bites; a human typing commands cannot hit it.
     if let browser = readSharedState(), let port = browser.port {
@@ -447,6 +447,11 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
         // a signal never got to remove its throwaway profile, and the record about to be
         // overwritten is the last thing that knows where it is. Remove it now or nothing
         // ever will: that is how a machine ends up with seven abandoned profile dirs.
+        //
+        // Said out loud, because the refs the last command printed die with it and the next
+        // command's "no page open" names the wrong cause.
+        writeToStandardError(
+            "alohajet: the shared browser on port \(port) is gone; starting a new one\n")
         if let profile = browser.profile { try? FileManager.default.removeItem(atPath: profile) }
         if let stderrLog = browser.stderrLog { try? FileManager.default.removeItem(atPath: stderrLog) }
     }
@@ -470,7 +475,7 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
 /// the browser it launched. A CDP connection to the recorded port IS that proof.
 func quitSharedBrowser() async -> Int32 {
     guard let state = readSharedState(), let port = state.port else {
-        writeToStandardOutput("No shared browser is running." + "\n")
+        writeToStandardOutput("No shared browser is running.\n")
         return exitOK
     }
     var closed = false
@@ -506,7 +511,7 @@ func quitSharedBrowser() async -> Int32 {
 /// that landed there was a leak and a `goto`/`type` that landed there drove their tab;
 /// the caller is told to open one or name one with `--tab` instead.
 ///
-/// ponytail: scrapes the `ID:`/`URL:` lines out of `manage_tabs list`'s prose, because
+/// KNOWN CEILING: scrapes the `ID:`/`URL:` lines out of `manage_tabs list`'s prose, because
 /// the tab list is not exposed any other way. Swap it for a structured accessor if one
 /// ever lands on the session.
 func resolveTab(_ session: BrowserToolSession, _ explicit: String?) async -> String? {
@@ -524,14 +529,15 @@ func resolveTab(_ session: BrowserToolSession, _ explicit: String?) async -> Str
             tabs[tabs.count - 1].url = String(trimmed.dropFirst(5))
         }
     }
-    let web = tabs.filter { $0.url.hasPrefix("http://") || $0.url.hasPrefix("https://") }
+    let web = Set(
+        tabs.lazy
+            .filter { $0.url.hasPrefix("http://") || $0.url.hasPrefix("https://") }
+            .map(\.id))
     guard !web.isEmpty else { return nil }
     // The remembered ids are checked against the live list, not trusted: a tab may have
     // been closed since, and a stale id would fail every later command with "not found".
-    if let remembered = lane.tab, web.contains(where: { $0.id == remembered }) {
-        return remembered
-    }
-    return (lane.openedTabs ?? []).last { id in web.contains { $0.id == id } }
+    if let remembered = lane.tab, web.contains(remembered) { return remembered }
+    return (lane.openedTabs ?? []).last(where: web.contains)
 }
 
 /// The tab id a `manage_tabs` result named, off the metadata channel the tool already
@@ -584,7 +590,10 @@ func toolCall(
 
     case "click":
         try await useTab(session, args.value("--tab"))
-        let clickType = args.has("--right") ? "right" : (args.has("--double") ? "double" : "single")
+        let clickType =
+            if args.has("--right") { "right" }
+            else if args.has("--double") { "double" }
+            else { "single" }
         return ("page_click", ["aloha_id": try args.required(1, "ref"), "click_type": clickType])
 
     case "type":
@@ -671,7 +680,11 @@ func rememberTab(_ command: String, _ args: Args, _ result: RawToolResult, ok: B
     }
     guard next != lane else { return }
     lane = next
-    updateSharedState { $0.lanes = ($0.lanes ?? [:]).merging([key: next]) { _, latest in latest } }
+    updateSharedState {
+        var lanes = $0.lanes ?? [:]
+        lanes[key] = next
+        $0.lanes = lanes
+    }
 }
 
 func report(_ error: CLIError, json: Bool) {
@@ -773,7 +786,21 @@ func main() async -> Int32 {
         let (tool, arguments) = try await toolCall(command, args, session)
         let result = await session.run(tool, arguments: arguments)
         emit(result, json: json)
-        code = result.isError == true ? exitToolError : exitOK
+        // Every page tool catches its own transport loss into an error RESULT, so a dead
+        // browser arrives here indistinguishable from a page that said no. Ask the socket:
+        // a wrapper script branches on exit 3 to restart the browser, and exit 1 sends it
+        // round the same failing command instead.
+        if result.isError != true {
+            code = exitOK
+        } else if await session.client.isConnected {
+            code = exitToolError
+        } else {
+            let url = URLComponents(string: session.webSocketEndpoint)
+            let host = [url?.host, url?.port.map(String.init)].compactMap { $0 }.joined(separator: ":")
+            writeToStandardError(
+                "alohajet: the browser at \(host.isEmpty ? session.webSocketEndpoint : host) is gone\n")
+            code = exitUnreachable
+        }
         rememberTab(command, args, result, ok: code == exitOK)
     } catch let error as CLIError {
         report(error, json: json)

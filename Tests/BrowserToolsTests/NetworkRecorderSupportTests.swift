@@ -70,6 +70,16 @@ private final class RecordSink {
     }
 }
 
+/// Polls `condition` at a short interval until it holds or the attempt cap is reached, so
+/// event-loop subscription, body fetches and teardown can be awaited deterministically.
+private func waitFor(attempts: Int = 400, _ condition: @escaping () async -> Bool) async {
+    var tries = 0
+    while await !condition() && tries < attempts {
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        tries += 1
+    }
+}
+
 // MARK: - decodeBase64Body (successful gunzip round trip)
 
 #if canImport(zlib)
@@ -82,8 +92,8 @@ struct DecodeBase64BodyGzipTests {
             return
         }
         // Sanity: the produced data begins with the gzip magic bytes.
-        #expect(Int(gzipped[gzipped.startIndex]) == GZIP_MAGIC_BYTE_1)
-        #expect(Int(gzipped[gzipped.index(after: gzipped.startIndex)]) == GZIP_MAGIC_BYTE_2)
+        #expect(Int(gzipped[gzipped.startIndex]) == gzipMagicByte1)
+        #expect(Int(gzipped[gzipped.index(after: gzipped.startIndex)]) == gzipMagicByte2)
         let decoded = decodeBase64Body(gzipped.base64EncodedString())
         #expect(decoded == original)
     }
@@ -168,7 +178,7 @@ struct NetworkRecorderEventTests {
         let sink = RecordSink()
         let (recorder, _) = makeRecorder(sink)
         recorder.onCDPMessage("Network.requestWillBeSent", requestParams(id: "r1", url: "https://x.test/page"))
-        // text/css is NOT in CAPTURABLE_MIME_TYPES -> shouldCaptureBody is false.
+        // text/css is NOT in capturableMimeTypes -> shouldCaptureBody is false.
         recorder.onCDPMessage("Network.responseReceived", .object([
             ("requestId", .string("r1")),
             ("response", .object([
@@ -202,7 +212,7 @@ struct NetworkRecorderEventTests {
     @Test func ignoredResourceTypesAreSkipped() {
         let sink = RecordSink()
         let (recorder, _) = makeRecorder(sink)
-        // "Image" is in IGNORED_RESOURCE_TYPES.
+        // "Image" is in ignoredResourceTypes.
         recorder.onCDPMessage("Network.requestWillBeSent", requestParams(id: "r1", url: "https://x.test/logo.png", type: "Image"))
         recorder.onCDPMessage("Network.loadingFailed", .object([("requestId", .string("r1"))]))
         #expect(sink.all.isEmpty)
@@ -223,10 +233,10 @@ struct NetworkRecorderEventTests {
     @Test func postDataIsClampedToCaptureBudget() {
         let sink = RecordSink()
         let (recorder, _) = makeRecorder(sink)
-        let big = String(repeating: "a", count: MAX_BODY_CAPTURE_BYTES + 500)
+        let big = String(repeating: "a", count: maxBodyCaptureBytes + 500)
         recorder.onCDPMessage("Network.requestWillBeSent", requestParams(id: "r1", url: "https://x.test/upload", method: "POST", postData: big))
         recorder.onCDPMessage("Network.loadingFailed", .object([("requestId", .string("r1"))]))
-        #expect(sink.all.first?.postData?.count == MAX_BODY_CAPTURE_BYTES)
+        #expect(sink.all.first?.postData?.count == maxBodyCaptureBytes)
     }
 
     @Test func unknownMethodIsIgnored() {
@@ -259,13 +269,8 @@ struct NetworkRecorderEventTests {
         recorder.onCDPMessage("Network.loadingFinished", .object([("requestId", .string("r1"))]))
 
         // The body fetch is dispatched to a detached Task; poll briefly for it.
-        var records = sink.all
-        var attempts = 0
-        while records.isEmpty && attempts < 200 {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-            records = sink.all
-            attempts += 1
-        }
+        await waitFor(attempts: 200) { !sink.all.isEmpty }
+        let records = sink.all
         await recorder.stop()
 
         #expect(records.count == 1)
@@ -337,11 +342,7 @@ struct NetworkRecorderDetachTests {
 
         await transport.emit(CDPEvent(method: "Inspector.detached", params: .object([("reason", .string("target_closed"))])))
 
-        var attempts = 0
-        while recorder.isRecording() && attempts < 200 {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-            attempts += 1
-        }
+        await waitFor(attempts: 200) { !recorder.isRecording() }
         #expect(!recorder.isRecording())
         // An external detach must NOT try to disable Network over the dead
         // transport (only the start enable was sent).
@@ -372,16 +373,6 @@ struct NetworkRecorderDetachTests {
         #expect(!recorder.isRecording())
     }
 
-    /// Polls `condition` at a short interval until it holds or the attempt cap is
-    /// reached, so event-loop subscription/teardown can be awaited deterministically.
-    private func waitFor(_ condition: @escaping () async -> Bool, attempts: Int = 400) async {
-        var tries = 0
-        while await !condition() && tries < attempts {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-            tries += 1
-        }
-    }
-
     @Test func eventStreamFinishingWhileRecordingStopsRecording() async {
         let sink = RecordSink()
         let transport = StubCDPTransport()
@@ -392,11 +383,7 @@ struct NetworkRecorderDetachTests {
 
         await transport.finishEvents()
 
-        var attempts = 0
-        while recorder.isRecording() && attempts < 200 {
-            try? await Task.sleep(nanoseconds: 5_000_000)
-            attempts += 1
-        }
+        await waitFor(attempts: 200) { !recorder.isRecording() }
         #expect(!recorder.isRecording())
     }
 }

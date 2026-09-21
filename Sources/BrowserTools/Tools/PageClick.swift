@@ -78,11 +78,11 @@ import ToolABI
 
     static func route(for clickType: String) -> ClickRoute? {
         switch clickType {
-        case "single": return ClickRoute(call: "click", pendingType: "click")
-        case "double": return ClickRoute(call: "doubleClick", pendingType: "doubleClick")
-        case "triple": return ClickRoute(call: "tripleClick", pendingType: "tripleClick")
-        case "right": return ClickRoute(call: "rightClick", pendingType: "rightClick")
-        default: return nil
+        case "single": ClickRoute(call: "click", pendingType: "click")
+        case "double": ClickRoute(call: "doubleClick", pendingType: "doubleClick")
+        case "triple": ClickRoute(call: "tripleClick", pendingType: "tripleClick")
+        case "right": ClickRoute(call: "rightClick", pendingType: "rightClick")
+        default: nil
         }
     }
 

@@ -9,9 +9,9 @@ import CDP
 // this type does is decide WHICH endpoint, bring the app up when it is not running, and
 // wait until the listener actually answers.
 //
-// Shaped like the app's own launcher — the injected
-// probe/opener seams, the "wait on the real condition, never a fixed sleep" loop, and the
-// loud failure that names the endpoint and the setting to turn on. What is NOT here is
+// It carries the injected probe/opener seams, the "wait on the real condition, never a
+// fixed sleep" loop, and the loud failure that names the endpoint and the setting to turn
+// on. What is NOT here is
 // everything that speaks to the app's loopback `AutomationServer`: the `GET /state`
 // readiness probe and its headless/visibleWindow booleans, the `alohajet://attach` deep
 // link, the one-shot headless launch token, the bearer credential. None of that exists on
@@ -34,9 +34,9 @@ public enum AlohaBrowserError: Error, Equatable, CustomStringConvertible {
     public var description: String {
         switch self {
         case let .launchFailed(detail):
-            return "could not launch the Aloha browser: \(detail)"
+            "could not launch the Aloha browser: \(detail)"
         case let .notReachable(port, seconds):
-            return """
+            """
                 no CDP endpoint answered on 127.0.0.1:\(port) after \(seconds)s — if the \
                 browser is running, its CDP listener is off: it is disabled by \
                 ALOHA_CDP_DISABLED=1, or it relocated off a taken \(port) \

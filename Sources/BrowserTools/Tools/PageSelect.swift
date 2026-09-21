@@ -22,9 +22,9 @@ import ToolABI
         // name rather than clamped to an option the caller never asked for.
         let indexInput = PageToolInput.number(input, "index")
         let index = indexInput.flatMap { Int(exactly: $0.rounded()) }
-        if indexInput != nil, index == nil {
+        if let indexInput, index == nil {
             return RawToolResult(
-                output: "page_select \"index\" must be a whole option number, got \(indexInput!).",
+                output: "page_select \"index\" must be a whole option number, got \(indexInput).",
                 isError: true)
         }
         guard text != nil || index != nil else {

@@ -22,7 +22,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
 (() => {
     const DEBUG = \#(debug);
     \#(sensitiveFieldPredicateJS)
-    const buildDomTree = (collectAllInteractive = true, debug = false) => {
+    const collectDomTree = (collectAllInteractive = true, debug = false) => {
   const DEBUG = debug;
 
   const SEMANTIC_STRUCTURE_TAGS = new Set(["header", "footer", "aside", "main", "article", "fieldset", "section", "nav"]);
@@ -46,7 +46,14 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   };
 
   const INTERACTIVE_TAGS = new Set(["a", "button", "input", "select", "textarea", "details", "summary", "label", "option", "optgroup", "fieldset", "legend"]);
-  const INTERACTIVE_CURSORS = new Set(["pointer", "move", "text", "grab", "grabbing", "cell", "copy", "alias", "all-scroll", "col-resize", "context-menu", "crosshair", "e-resize", "ew-resize", "help", "n-resize", "ne-resize", "nesw-resize", "ns-resize", "nw-resize", "nwse-resize", "row-resize", "s-resize", "se-resize", "sw-resize", "vertical-text", "w-resize", "zoom-in", "zoom-out"]);
+  const INTERACTIVE_CURSORS = new Set([
+    "pointer", "context-menu", "help", "crosshair", "cell", "alias", "copy",
+    "text", "vertical-text",
+    "move", "grab", "grabbing", "all-scroll",
+    "col-resize", "row-resize", "n-resize", "e-resize", "s-resize", "w-resize",
+    "ne-resize", "nw-resize", "se-resize", "sw-resize", "ew-resize", "ns-resize", "nesw-resize", "nwse-resize",
+    "zoom-in", "zoom-out"
+  ]);
   const DISABLED_CURSORS = new Set(["not-allowed", "no-drop", "wait", "progress"]);
   const HIGHLIGHT_LABEL_TAGS = new Set(["a", "button", "input", "select", "textarea", "textarea-shape", "details", "summary"]);
   const LEAF_NODE_TAGS = new Set(["a", "button", "input", "select", "textarea", "summary", "details", "label", "option"]);
@@ -124,6 +131,12 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   }
 
   const nodeMap = {};
+  // Document order, kept apart from nodeMap because `for...in` does not preserve it: an
+  // aloha-id whose hex happens to be all digits ("38397819") is a canonical array index,
+  // and JS enumerates those first and numerically ascending, ahead of every other key.
+  // The read's element order IS the page's structure, so hoisting ~2% of refs to the top
+  // of every read silently mis-describes the page.
+  const orderedIds = [];
   const takenAlohaIds = new Set();
 
   // THE ONLY PLACE AN ALOHA-ID COMES FROM. Read `identity` top to bottom; the first rung
@@ -162,7 +175,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   // Refuse a name the framework minted this render. #ember1234, #mui-5 and #radix-:r1: are
   // renumbered on remount, so hashing one would make the id LESS stable than the position it
   // replaced — on exactly the pages this change exists for.
-  // ponytail: two regexes, not a framework list. Widen if real ids start churning between walks.
+  // KNOWN CEILING: two regexes, not a framework list. Widen if real ids start churning between walks.
   function looksGenerated(value) {
     return !/^[A-Za-z][\w-]*$/.test(value) || /\d{3,}$/.test(value) || /[-_]\d+$/.test(value);
   }
@@ -206,7 +219,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     return `${Math.abs(hash).toString(16).slice(0, 10)}`;
   }
 
-  const HIGHLIGHT_CONTAINER_ID = "alohajet-highlight-container";
+  const OVERLAY_ROOT_ID = "alohajet-highlight-container";
   const highlightedElements = new Set();
   let scrollListenersAttached = false;
   let updateScheduled = false;
@@ -294,10 +307,10 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     let labelWidth = 20;
     let labelHeight = 16;
     try {
-      let container = document.getElementById(HIGHLIGHT_CONTAINER_ID);
+      let container = document.getElementById(OVERLAY_ROOT_ID);
       if (!container) {
         container = document.createElement("div");
-        container.id = HIGHLIGHT_CONTAINER_ID;
+        container.id = OVERLAY_ROOT_ID;
         container.style.cssText =
           "position:fixed;pointer-events:none;top:0;left:0;width:100%;height:100%;z-index:2147483647;background-color:transparent";
         document.body.appendChild(container);
@@ -385,7 +398,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     let indexOfElement = 0;
     let sibling = parent.firstElementChild;
     for (; sibling; ) {
-      if (sibling.tagName === tagName && sibling.id !== HIGHLIGHT_CONTAINER_ID) {
+      if (sibling.tagName === tagName && sibling.id !== OVERLAY_ROOT_ID) {
         count++;
         if (sibling === element) indexOfElement = count;
       }
@@ -436,13 +449,12 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   function isInteractive(element) {
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
     if (interactiveCache.has(element)) return !!interactiveCache.get(element);
-    const interactiveCursors = INTERACTIVE_CURSORS;
     const disabledCursors = DISABLED_CURSORS;
 
     function hasInteractiveCursor(el) {
       if (el.tagName.toLowerCase() === "html") return false;
       const style = getComputedStyleCached(el);
-      return style ? !!interactiveCursors.has(style.cursor) : false;
+      return style ? INTERACTIVE_CURSORS.has(style.cursor) : false;
     }
 
     const cursorIsInteractive = hasInteractiveCursor(element);
@@ -888,6 +900,23 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
 
   let cachedModalContainers;
 
+  const VIEWPORT_EDGE_SLACK = 1;
+
+  function isRectOnScreen(rect) {
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    return !(
+      rect.bottom < VIEWPORT_EDGE_SLACK ||
+      rect.top > window.innerHeight - VIEWPORT_EDGE_SLACK ||
+      rect.right < VIEWPORT_EDGE_SLACK ||
+      rect.left > window.innerWidth - VIEWPORT_EDGE_SLACK
+    );
+  }
+
+  function rectsIncludeOnScreen(rects) {
+    for (const rect of rects) if (isRectOnScreen(rect)) return true;
+    return false;
+  }
+
   function getVisibleModalContainers() {
     if (cachedModalContainers) return cachedModalContainers;
     let containers = [];
@@ -900,17 +929,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       for (const candidate of candidates) {
         const rects = candidate.getClientRects();
         if (!rects || rects.length === 0) continue;
-        let visible = false;
-        for (const rect of rects)
-          if (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            !(rect.bottom < 1 || rect.top > window.innerHeight + -1 || rect.right < 1 || rect.left > window.innerWidth + -1)
-          ) {
-            visible = true;
-            break;
-          }
-        if (visible) containers.push(candidate);
+        if (rectsIncludeOnScreen(rects)) containers.push(candidate);
       }
     } catch {
       containers = [];
@@ -922,22 +941,9 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   function isTopElement(element) {
     const rects = element.getClientRects();
     if (!rects || rects.length === 0) return false;
-    let hasVisibleRect = false;
-    for (const rect of rects)
-      if (
-        rect.width > 0 &&
-        rect.height > 0 &&
-        !(rect.bottom < 1 || rect.top > window.innerHeight + -1 || rect.right < 1 || rect.left > window.innerWidth + -1)
-      ) {
-        hasVisibleRect = true;
-        break;
-      }
+    const hasVisibleRect = rectsIncludeOnScreen(rects);
     if (element.ownerDocument !== window.document) return true;
-    if (element.getRootNode() instanceof ShadowRoot) {
-      rects[Math.floor(rects.length / 2)].left + rects[Math.floor(rects.length / 2)].width / 2;
-      rects[Math.floor(rects.length / 2)].top + rects[Math.floor(rects.length / 2)].height / 2;
-      return true;
-    }
+    if (element.getRootNode() instanceof ShadowRoot) return true;
     if (!hasVisibleRect) return true;
     const centerX = rects[Math.floor(rects.length / 2)].left + rects[Math.floor(rects.length / 2)].width / 2;
     const centerY = rects[Math.floor(rects.length / 2)].top + rects[Math.floor(rects.length / 2)].height / 2;
@@ -1488,7 +1494,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   }
 
   function walkNode(node, parentIframe = null, inheritedHighlight = false, contextPath = [], parentXPath = null) {
-    if (!node || node.id === HIGHLIGHT_CONTAINER_ID) return null;
+    if (!node || node.id === OVERLAY_ROOT_ID) return null;
 
     if (node === document.body) {
       const body = node;
@@ -1512,6 +1518,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       }
       const id = alohaIdFor(descriptor, body);
       nodeMap[id] = descriptor;
+      orderedIds.push(id);
       try {
         body.setAttribute("aloha-id", id);
         descriptor.attributes["aloha-id"] = id;
@@ -1605,6 +1612,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       };
       const id = alohaIdFor(descriptor, null);
       nodeMap[id] = descriptor;
+      orderedIds.push(id);
       return id;
     }
 
@@ -1837,6 +1845,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
 
     const id = alohaIdFor(descriptor, element);
     nodeMap[id] = descriptor;
+    orderedIds.push(id);
     try {
       element.setAttribute("aloha-id", id);
       descriptor.attributes["aloha-id"] = id;
@@ -1895,9 +1904,9 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     }
     console.log("[DOM Debug] Semantic tags in final map:", semanticCounts);
   }
-  return { rootId, map: nodeMap };
+  return { rootId, map: nodeMap, order: orderedIds };
 };
-    const { map } = buildDomTree(\#(collectAllInteractive), \#(debug));
+    const { map, order } = collectDomTree(\#(collectAllInteractive), \#(debug));
 
     const debugStats = {
       totalNodes: 0,
@@ -2018,7 +2027,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     }
 
     const metadata = [];
-    for (const id in map) {
+    for (const id of order) {
       const nodeData = map[id];
       if (!nodeData) continue;
 

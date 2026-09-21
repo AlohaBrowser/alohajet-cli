@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import CDP
+import ToolABI
 @testable import BrowserTools
 
 // The two things that must not go wrong when a run ends badly: a browser we launched must
@@ -21,8 +22,13 @@ private func deadPid() -> Int32 {
     return process.processIdentifier
 }
 
+// `ToolABI.temporaryDirectory`, not `FileManager.default.temporaryDirectory`: the reaper
+// under test reads the former, which honours `$TMPDIR`. Fixtures built from the latter
+// land somewhere the reaper never looks the moment a `TMPDIR` is exported — and CI never
+// exports one, so the disagreement fails only on a developer's machine.
+
 @MainActor private func makeProfile(owner: String?) -> URL {
-    let dir = FileManager.default.temporaryDirectory
+    let dir = temporaryDirectory
         .appendingPathComponent("alohajet-cdp-\(UUID().uuidString)", isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     // A file the reaper must take with it, so "the directory is gone" means the whole
@@ -72,7 +78,7 @@ private func deadPid() -> Int32 {
 // wrong exactly once.
 
 @MainActor private func makeStderrLog(ageInSeconds: TimeInterval) -> URL {
-    let log = FileManager.default.temporaryDirectory
+    let log = temporaryDirectory
         .appendingPathComponent("alohajet-chrome-stderr-\(UUID().uuidString).log")
     try? Data("chrome said things".utf8).write(to: log)
     try? FileManager.default.setAttributes(

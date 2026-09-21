@@ -5,18 +5,18 @@ import ToolABI
 import zlib
 #endif
 
-public nonisolated let GZIP_MAGIC_BYTE_1 = 31
-public nonisolated let GZIP_MAGIC_BYTE_2 = 139
-public nonisolated let MAX_BODY_CAPTURE_BYTES = 50_000
+public nonisolated let gzipMagicByte1 = 31
+public nonisolated let gzipMagicByte2 = 139
+public nonisolated let maxBodyCaptureBytes = 50_000
 
-nonisolated let IGNORED_RESOURCE_TYPES: Set<String> = ["Image", "Media", "Font", "Stylesheet", "Ping", "CSPViolationReport", "Preflight"]
-nonisolated let CAPTURABLE_MIME_TYPES: [String] = [
+nonisolated let ignoredResourceTypes: Set<String> = ["Image", "Media", "Font", "Stylesheet", "Ping", "CSPViolationReport", "Preflight"]
+nonisolated let capturableMimeTypes: [String] = [
     "application/json", "text/html", "text/plain", "text/xml", "application/xml",
     "application/x-www-form-urlencoded", "application/x-protobuf", "application/octet-stream",
     "application/grpc-web",
 ]
 
-public let TYPING_SESSION_CONFIG = TypingSessionConfig()
+public let typingSessionConfig = TypingSessionConfig()
 public struct TypingSessionConfig: Sendable {
     public let reuseWindowMs: Double = 60 * 60 * 1000
     public let textChangeThreshold: Double = 0.9
@@ -24,7 +24,7 @@ public struct TypingSessionConfig: Sendable {
     public let emitDebounceMs: Double = 500
 }
 
-public let ACTIVITY_TRACKING_CONFIG = ActivityTrackingConfig()
+public let activityTrackingConfig = ActivityTrackingConfig()
 public struct ActivityTrackingConfig: Sendable {
     public let scrollThresholdPx: Int = 1200
     public let scrollSettleMs: Double = 500
@@ -38,7 +38,7 @@ public struct ActivityTrackingConfig: Sendable {
 /// magic bytes. Falls back to a `base64:`-prefixed marker when decoding fails.
 public func decodeBase64Body(_ base64: String) -> String {
     guard let data = Data(base64Encoded: base64) else { return "base64:\(base64)" }
-    if data.count >= 2, Int(data[data.startIndex]) == GZIP_MAGIC_BYTE_1, Int(data[data.index(after: data.startIndex)]) == GZIP_MAGIC_BYTE_2 {
+    if data.count >= 2, Int(data[data.startIndex]) == gzipMagicByte1, Int(data[data.index(after: data.startIndex)]) == gzipMagicByte2 {
         if let decompressed = gunzip(data), let text = String(data: decompressed, encoding: .utf8) {
             return text
         }
@@ -157,19 +157,19 @@ public final class NetworkRecorder {
     }
 
     public func isRecording() -> Bool {
-        return running
+        running
     }
 
     func setRunningForTesting(_ value: Bool) {
-        running = value;
+        running = value
     }
 
     func pendingRequestCountForTesting() -> Int {
-        return pendingRequests.count
+        pendingRequests.count
     }
 
     public func start() async {
-        if running { return }
+        guard !running else { return }
         do {
             _ = try await transport.send(method: "Network.enable", params: [
                 "maxTotalBufferSize": .number(Double(10 * 1024 * 1024)),
@@ -203,7 +203,7 @@ public final class NetworkRecorder {
     /// `Inspector.detached` event or the event stream ending while recording is
     /// still active. Issues no further CDP commands: the transport is dead.
     func handleDetached() {
-        if !running { return }
+        guard running else { return }
         running = false
         agentLog(.warn, "[NetworkRecorder] Debugger was detached externally, stopping recording")
         eventTask?.cancel()
@@ -212,11 +212,9 @@ public final class NetworkRecorder {
     }
 
     public func stop() async {
-        if !running { return }
+        guard running else { return }
         running = false
-        do {
-            _ = try await transport.send(method: "Network.disable")
-        } catch {}
+        _ = try? await transport.send(method: "Network.disable")
         eventTask?.cancel()
         eventTask = nil
         pendingRequests.removeAll()
@@ -243,7 +241,7 @@ public final class NetworkRecorder {
               let url = request.string("url") else { return }
         let type = params.string("type")
         if url.hasPrefix("data:") { return }
-        if let type, IGNORED_RESOURCE_TYPES.contains(type) { return }
+        if let type, ignoredResourceTypes.contains(type) { return }
         let method = request.string("method") ?? ""
         let headers = stringDictionary(request["headers"])
         let postData = request.string("postData")
@@ -252,7 +250,7 @@ public final class NetworkRecorder {
             url: url,
             resourceType: type,
             requestHeaders: headers,
-            postData: postData.map { String($0.prefix(MAX_BODY_CAPTURE_BYTES)) }
+            postData: postData.map { String($0.prefix(maxBodyCaptureBytes)) }
         )
     }
 
@@ -267,9 +265,8 @@ public final class NetworkRecorder {
     }
 
     private func onLoadingFinished(_ params: JSValue) {
-        guard let requestId = params.string("requestId") else { return }
-        let pending = pendingRequests.removeValue(forKey: requestId)
-        guard let pending else { return }
+        guard let requestId = params.string("requestId"),
+              let pending = pendingRequests.removeValue(forKey: requestId) else { return }
         if shouldCaptureBody(pending) {
             Task { [weak self] in
                 guard let self else { return }
@@ -285,9 +282,8 @@ public final class NetworkRecorder {
     }
 
     private func onLoadingFailed(_ params: JSValue) {
-        guard let requestId = params.string("requestId") else { return }
-        let pending = pendingRequests.removeValue(forKey: requestId)
-        guard let pending else { return }
+        guard let requestId = params.string("requestId"),
+              let pending = pendingRequests.removeValue(forKey: requestId) else { return }
         emit(NetworkRecord(
             ts: isoTimestamp(),
             type: "failed",
@@ -323,7 +319,7 @@ public final class NetworkRecorder {
     }
 
     private func fetchResponseBodyAndEmit(_ requestId: String, _ pending: PendingNetworkRequest) async throws {
-        if !isRecording() {
+        guard isRecording() else {
             emitComplete(pending)
             return
         }
@@ -332,7 +328,7 @@ public final class NetworkRecorder {
             let rawBody = result.string("body") ?? ""
             let base64Encoded = result.bool("base64Encoded") ?? false
             let decoded = base64Encoded ? decodeBase64Body(rawBody) : rawBody
-            emitComplete(pending, body: String(decoded.prefix(MAX_BODY_CAPTURE_BYTES)), bodySize: rawBody.count)
+            emitComplete(pending, body: String(decoded.prefix(maxBodyCaptureBytes)), bodySize: rawBody.count)
         } catch {
             emitComplete(pending)
         }
@@ -340,7 +336,7 @@ public final class NetworkRecorder {
 
     private func shouldCaptureBody(_ pending: PendingNetworkRequest) -> Bool {
         guard let mimeType = pending.responseMimeType else { return false }
-        return CAPTURABLE_MIME_TYPES.contains { mimeType.hasPrefix($0) }
+        return capturableMimeTypes.contains { mimeType.hasPrefix($0) }
     }
 
     private func emit(_ record: NetworkRecord) {
@@ -351,10 +347,14 @@ public final class NetworkRecorder {
 private func stringDictionary(_ value: JSValue?) -> [String: String]? {
     guard let members = value?.objectValue else { return nil }
     var result: [String: String] = [:]
-    for (key, val) in members {
-        if let s = val.stringValue { result[key] = s }
-        else if let n = val.doubleValue { result[key] = numberToString(n) }
-        else if let b = val.boolValue { result[key] = String(b) }
+    for (key, member) in members {
+        if let text = member.stringValue {
+            result[key] = text
+        } else if let number = member.doubleValue {
+            result[key] = numberToString(number)
+        } else if let flag = member.boolValue {
+            result[key] = String(flag)
+        }
     }
     return result
 }
@@ -401,12 +401,12 @@ public final class TypingSession {
     }
 
     public func isSameTypingSession(_ selector: String, _ url: String, _ candidateText: String, _ timestamp: Double) -> Bool {
-        if elementSelector != selector || self.url != url || timestamp - lastUpdate >= TYPING_SESSION_CONFIG.reuseWindowMs {
+        if elementSelector != selector || self.url != url || timestamp - lastUpdate >= typingSessionConfig.reuseWindowMs {
             return false
         }
         let distance = levenshteinDistance(text, candidateText)
-        let shrinkRatio = text.count > 0 ? Double(text.count - candidateText.count) / Double(text.count) : 0
-        return !(shrinkRatio > TYPING_SESSION_CONFIG.textChangeThreshold && distance > TYPING_SESSION_CONFIG.minCharDistance)
+        let shrinkRatio = text.isEmpty ? 0 : Double(text.count - candidateText.count) / Double(text.count)
+        return !(shrinkRatio > typingSessionConfig.textChangeThreshold && distance > typingSessionConfig.minCharDistance)
     }
 
     public func updateText(_ newText: String, _ timestamp: Double) {
@@ -416,7 +416,7 @@ public final class TypingSession {
     }
 
     public func isStale(_ now: Double) -> Bool {
-        now - lastUpdate > TYPING_SESSION_CONFIG.reuseWindowMs
+        now - lastUpdate > typingSessionConfig.reuseWindowMs
     }
 
     public func cancelPendingEmit() {
@@ -433,7 +433,7 @@ public final class TypingSession {
         }
         debounceTask?.cancel()
         debounceTask = Task { [weak self] in
-            let nanos = UInt64(TYPING_SESSION_CONFIG.emitDebounceMs * 1_000_000)
+            let nanos = UInt64(typingSessionConfig.emitDebounceMs * 1_000_000)
             try? await Task.sleep(nanoseconds: nanos)
             guard let self, !Task.isCancelled else { return }
             self.emit(self)

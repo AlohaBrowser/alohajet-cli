@@ -94,17 +94,19 @@ enum MCPServer {
                 }
                 if session == nil, sessionFailure == nil {
                     do {
-                        session = try await connect(args)
+                        let connected = try await connect(args)
                         // A host that kills the server instead of closing stdin must not
                         // leave the browser behind. No-op for an attached one.
-                        session?.installSignalReaper()
+                        connected.installSignalReaper()
+                        session = connected
                     } catch {
                         // Latched: retrying a connection that already failed once, on
                         // every tool call, only multiplies the timeout.
                         let detail = (error as? CLIError)?.message
                             ?? (error as? BrowserToolSessionError)?.description ?? "\(error)"
-                        sessionFailure = "Could not reach a browser: \(detail)"
-                        log(sessionFailure!)
+                        let failure = "Could not reach a browser: \(detail)"
+                        sessionFailure = failure
+                        log(failure)
                     }
                 }
                 if let sessionFailure {
@@ -128,12 +130,12 @@ enum MCPServer {
 
         // EOF on stdin is the host hanging up: close a browser we launched and leave.
         await session?.shutdown()
-        return 0
+        return exitOK
     }
 
     // MARK: - tools/list
 
-    /// The eight tools, with name, description and `inputSchema` taken verbatim from the
+    /// The tools, with name, description and `inputSchema` taken verbatim from the
     /// package's own registry — `Schemas.swift` is the single source of truth and nothing
     /// is re-authored here. Its `inputSchema` is already JSON Schema in `JSValue` form, so
     /// the adapter this was budgeted for turned out to be the identity function.

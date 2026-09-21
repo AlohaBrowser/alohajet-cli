@@ -18,7 +18,7 @@ public final class AbortSignalError: Error, CustomStringConvertible, Sendable {
 
 // MARK: - Logging shim
 
-/// A minimal logger interface; ``NOOP_LOGGER`` is its no-op implementation.
+/// A minimal logger interface; ``noopLogger`` is its no-op implementation.
 public protocol AbortChainLogger: Sendable {
     func info(_ message: String)
     func warn(_ message: String)
@@ -34,7 +34,7 @@ public struct NoopAbortChainLogger: AbortChainLogger {
     public func debug(_ message: String) {}
 }
 
-public let NOOP_LOGGER: AbortChainLogger = NoopAbortChainLogger()
+public let noopLogger: AbortChainLogger = NoopAbortChainLogger()
 
 // MARK: - Abort signal
 
@@ -52,19 +52,15 @@ public final class AbortSignal {
         _reason = reason
     }
 
-    public var aborted: Bool { return _aborted }
-    public var reason: String? { return _reason }
+    public var aborted: Bool { _aborted }
+    public var reason: String? { _reason }
 
     public func abort(_ reason: String?) {
-        let handlers: [() -> Void]? = {
-            if _aborted { return nil }
-            _aborted = true
-            _reason = reason
-            let snapshot = Array(listeners.values)
-            listeners.removeAll()
-            return snapshot
-        }()
-        guard let handlers else { return }
+        guard !_aborted else { return }
+        _aborted = true
+        _reason = reason
+        let handlers = Array(listeners.values)
+        listeners.removeAll()
         for handler in handlers { handler() }
     }
 
@@ -174,7 +170,7 @@ public final class AbortController {
 public func chainAbortSignal(
     _ parent: AbortController,
     _ child: AbortController,
-    _ logger: AbortChainLogger = NOOP_LOGGER
+    _ logger: AbortChainLogger = noopLogger
 ) -> () -> Void {
     if parent.signal.aborted {
         logger.info("[chainSignal] Parent already aborted at chain time, aborting child immediately")
@@ -210,7 +206,7 @@ public func raceAbort<T: Sendable>(
     return try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask { try await operation() }
         group.addTask {
-            try await controller.signal.waitUntilAborted()
+            await controller.signal.waitUntilAborted()
             throw AbortSignalError("Aborted")
         }
         defer { group.cancelAll() }
@@ -221,7 +217,7 @@ public func raceAbort<T: Sendable>(
     }
 }
 
-nonisolated public func isAbortError(_ error: Error) -> Bool {
+public nonisolated func isAbortError(_ error: Error) -> Bool {
     error is AbortSignalError
 }
 

@@ -38,7 +38,7 @@ struct LocalFileUploadStagingTests {
         let directory = try scratchDirectory()
         let path = try write(3, named: "note.txt", in: directory)
 
-        let staged = try await LocalFileUploadStaging().stage([path], maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: nil)
+        let staged = try await LocalFileUploadStaging().stage([path], maxTotalBytes: maxUploadTotalBytes, signal: nil)
 
         #expect(staged.cdpPaths == [path])
         #expect(staged.files.count == 1)
@@ -54,7 +54,7 @@ struct LocalFileUploadStagingTests {
         let first = try write(1, named: "a.png", in: directory)
         let second = try write(1, named: "b.png", in: directory)
 
-        let staged = try await LocalFileUploadStaging().stage([first, second], maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: nil)
+        let staged = try await LocalFileUploadStaging().stage([first, second], maxTotalBytes: maxUploadTotalBytes, signal: nil)
 
         #expect(staged.cdpPaths == [first, second])
         #expect(staged.files.map(\.name) == ["a.png", "b.png"])
@@ -70,20 +70,20 @@ struct LocalFileUploadStagingTests {
         let directory = try scratchDirectory()
         let path = try write(1, named: name, in: directory)
 
-        let staged = try await LocalFileUploadStaging().stage([path], maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: nil)
+        let staged = try await LocalFileUploadStaging().stage([path], maxTotalBytes: maxUploadTotalBytes, signal: nil)
 
         #expect(staged.files[0].mime == expected)
     }
 
     @Test func noPathsStagesNothing() async throws {
-        let staged = try await LocalFileUploadStaging().stage([], maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: nil)
+        let staged = try await LocalFileUploadStaging().stage([], maxTotalBytes: maxUploadTotalBytes, signal: nil)
         #expect(staged == StagedUpload(cdpPaths: [], files: []))
     }
 
     // MARK: The byte cap
 
     @Test func theCapIs50MB() {
-        #expect(MAX_UPLOAD_TOTAL_BYTES == 50 * 1024 * 1024)
+        #expect(maxUploadTotalBytes == 50 * 1024 * 1024)
     }
 
     /// The cap is a TOTAL, not a per-file limit: two files each comfortably under it are
@@ -93,12 +93,11 @@ struct LocalFileUploadStagingTests {
         let first = try write(600, named: "a.bin", in: directory)
         let second = try write(600, named: "b.bin", in: directory)
 
-        do {
-            _ = try await LocalFileUploadStaging().stage([first, second], maxTotalBytes: 1_000, signal: nil)
-            Issue.record("1200 bytes staged under a 1000-byte cap")
-        } catch let error as UploadStagingError {
-            #expect(error.message.contains("limit"))
+        let error = try await #require(throws: UploadStagingError.self,
+                                       "1200 bytes staged under a 1000-byte cap") {
+            try await LocalFileUploadStaging().stage([first, second], maxTotalBytes: 1_000, signal: nil)
         }
+        #expect(error.message.contains("limit"))
     }
 
     /// THE SYMLINK CASE, which is why the size is read from the RESOLVED path: a symlink's
@@ -110,12 +109,11 @@ struct LocalFileUploadStagingTests {
         let link = directory.appendingPathComponent("link.bin")
         try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target)
 
-        do {
-            _ = try await LocalFileUploadStaging().stage([link.path], maxTotalBytes: 1_024, signal: nil)
-            Issue.record("a 4096-byte file staged through a symlink under a 1024-byte cap")
-        } catch let error as UploadStagingError {
-            #expect(error.message.contains("limit"))
+        let error = try await #require(throws: UploadStagingError.self,
+                                       "a 4096-byte file staged through a symlink under a 1024-byte cap") {
+            try await LocalFileUploadStaging().stage([link.path], maxTotalBytes: 1_024, signal: nil)
         }
+        #expect(error.message.contains("limit"))
     }
 
     // MARK: Refusals
@@ -123,25 +121,23 @@ struct LocalFileUploadStagingTests {
     @Test func aMissingFileIsNamed() async throws {
         let missing = FileManager.default.temporaryDirectory
             .appendingPathComponent("alohajet-absent-\(UUID().uuidString).png").path
-        do {
-            _ = try await LocalFileUploadStaging().stage([missing], maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: nil)
-            Issue.record("a path that does not exist staged anyway")
-        } catch let error as UploadStagingError {
-            #expect(error.message.contains(missing))
-            #expect(error.message.contains("cannot find"))
+        let error = try await #require(throws: UploadStagingError.self,
+                                       "a path that does not exist staged anyway") {
+            try await LocalFileUploadStaging().stage([missing], maxTotalBytes: maxUploadTotalBytes, signal: nil)
         }
+        #expect(error.message.contains(missing))
+        #expect(error.message.contains("cannot find"))
     }
 
     /// Negative/edge case: a directory exists and is readable, so only an explicit check
     /// stops it — and `DOM.setFileInputFiles` handed one fails far from here.
     @Test func aDirectoryIsRefused() async throws {
         let directory = try scratchDirectory()
-        do {
-            _ = try await LocalFileUploadStaging().stage([directory.path], maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: nil)
-            Issue.record("a directory staged as a file")
-        } catch let error as UploadStagingError {
-            #expect(error.message.contains("directory"))
+        let error = try await #require(throws: UploadStagingError.self,
+                                       "a directory staged as a file") {
+            try await LocalFileUploadStaging().stage([directory.path], maxTotalBytes: maxUploadTotalBytes, signal: nil)
         }
+        #expect(error.message.contains("directory"))
     }
 
     /// An already-aborted turn reads nothing. The error is the package's own
@@ -154,7 +150,7 @@ struct LocalFileUploadStagingTests {
         signal.abort("stopped")
 
         await #expect(throws: AbortSignalError.self) {
-            _ = try await LocalFileUploadStaging().stage([path], maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: signal)
+            _ = try await LocalFileUploadStaging().stage([path], maxTotalBytes: maxUploadTotalBytes, signal: signal)
         }
     }
 }

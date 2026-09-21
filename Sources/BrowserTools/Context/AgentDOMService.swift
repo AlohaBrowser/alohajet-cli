@@ -178,17 +178,12 @@ public nonisolated struct ScrollToElementOptions: Sendable {
 public nonisolated struct ScrollToElementResult: Sendable {
     public var message: String
     public var scrollDistance: Double
-    public var bounds: ElementBounds??
-    public init(message: String, scrollDistance: Double, bounds: ElementBounds?? = nil) {
+    public var bounds: ElementBounds?
+    public init(message: String, scrollDistance: Double, bounds: ElementBounds? = nil) {
         self.message = message
         self.scrollDistance = scrollDistance
         self.bounds = bounds
     }
-}
-
-public nonisolated struct ClickableXYDecision: Sendable {
-    public var shouldFallback: Bool
-    public init(shouldFallback: Bool) { self.shouldFallback = shouldFallback }
 }
 
 public nonisolated struct KeyStroke: Sendable {
@@ -229,6 +224,12 @@ public nonisolated struct InteractMarkdownResult: Sendable {
     public var markdown: String
     public var screenshot: String?
     public var diagnostics: InteractMarkdownDiagnostics
+}
+
+private extension ClickElementOptions {
+    var mouseButton: String { rightClick == true ? "right" : "left" }
+    /// A triple click outranks a double one, as the flags are not mutually exclusive.
+    var clickCount: Int { tripleClick == true ? 3 : (doubleClick == true ? 2 : 1) }
 }
 
 // MARK: - AgentDOMService
@@ -297,9 +298,7 @@ public final class AgentDOMService {
     }
 
     public func isAbortError(_ error: Error) -> Bool {
-        if error is AbortSignalError { return true }
-        if let named = error as? NamedError, named.name == "AbortError" { return true }
-        return false
+        error is AbortSignalError || (error as? NamedError)?.name == "AbortError"
     }
 
     /// Waits `ms` milliseconds, resolving early (by throwing) if `signal` aborts.
@@ -344,7 +343,7 @@ public final class AgentDOMService {
     // MARK: Script builders
 
     public func buildFindElementGlobalScript(_ selectorExpression: String) -> String {
-        return """
+        """
 
               const selector = \(selectorExpression);
 
@@ -415,8 +414,9 @@ public final class AgentDOMService {
     /// Scrolls the element with `alohaId` into view (when offscreen), optionally
     /// adds a debug glow, and returns its bounds.
     public func evalFindElementBounds(alohaId: String?, addDebugGlow: Bool = true, signal: AbortSignal?) async throws -> ElementBounds? {
-        let selector = (alohaId?.isEmpty == false) ? "[aloha-id=\"\(alohaId!)\"]" : ""
-        let elementExpression = selector.isEmpty ? "null" : "document.querySelector('\(selector)')"
+        let elementExpression = alohaId
+            .flatMap { $0.isEmpty ? nil : $0 }
+            .map { "document.querySelector('[aloha-id=\"\($0)\"]')" } ?? "null"
         let glowBlock = addDebugGlow ? """
 
               try {
@@ -464,51 +464,6 @@ public final class AgentDOMService {
         try await scrollIntoViewAndGetBounds(id, signal)
     }
 
-    // MARK: Clickability self-check
-
-    /// Asks the page whether a DOM-level click fallback should be preferred for
-    /// the element with `alohaId`.
-    public func checkElementClickableXY(_ alohaId: String) async throws -> ClickableXYDecision {
-        let script = """
-
-              (async () => {
-                async function shouldFallbackToDOMClick(element) {
-                  const checks = {
-                      boundingBoxAccuracy: false,
-                      cssTransformIssues: false,
-                      zoomIssues: false,
-                      viewportIssues: false,
-                      overlayDetection: false
-                  };
-
-                  const rect = element.getBoundingClientRect();
-                  const centerX = rect.left + rect.width / 2;
-                  const centerY = rect.top + rect.height / 2;
-
-                  const shouldFallback = Object.values(checks).some(check => check);
-
-                  return {
-                      shouldFallback,
-                      reasons: checks,
-                      coordinates: { x: centerX, y: centerY }
-                  };
-                }
-
-                const element = document.querySelector('[aloha-id="\(alohaId)"]')
-                if (element) {
-                  return await shouldFallbackToDOMClick(element)
-                }
-                return { shouldFallback: false, reasons: {}, coordinates: { x: 0, y: 0 } }
-              })()
-
-        """
-        let result = try await tab.layer.executeJavaScript(script)
-        if case .object = result {
-            return ClickableXYDecision(shouldFallback: result.bool("shouldFallback") ?? false)
-        }
-        return ClickableXYDecision(shouldFallback: false)
-    }
-
     // MARK: Clicking
 
     /// Clicks the element with `id`, animating the cursor and choosing between a
@@ -523,7 +478,7 @@ public final class AgentDOMService {
         }
         let scroll = try await scrollToElement(id, label ?? "Agent", ScrollToElementOptions(returnBounds: true, signal: signal))
         try throwIfAborted(signal)
-        guard let bounds = scroll.bounds ?? nil else {
+        guard let bounds = scroll.bounds else {
             return ClickResult(isOnTop: false, message: "Element \(id) not found", element: node)
         }
         let point = try await findClickablePoint(id, signal)
@@ -568,7 +523,7 @@ public final class AgentDOMService {
 
         if !point.isClickable {
             rootLogger.info("\(prefix) PATH: dom_fallback_fully_covered → element covered by \"\(point.coveringElement ?? "unknown")\", trying DOM click (shadow-aware) first")
-            await cursorAnimator.animateAgentCursorClick(tab, bounds, "\(label ?? "")", scaleOnClick: true, cursorLabelKind: options.cursorLabelKind)
+            await cursorAnimator.animateAgentCursorClick(tab, bounds, label ?? "", scaleOnClick: true, cursorLabelKind: options.cursorLabelKind)
             try await abortableDelay(50, signal)
             let domResult = try await performDomClick()
             try throwIfAborted(signal)
@@ -580,10 +535,9 @@ public final class AgentDOMService {
             return ClickResult(isOnTop: true, message: "Clicked element \(id) (DOM fallback via \(domResult.string("rootType") ?? "") root)", element: node)
         }
 
-        let decision = try await checkElementClickableXY(id)
         let isContentEditable = node.element.attributes["contenteditable"] == "true"
-        if decision.shouldFallback || isContentEditable {
-            let devLabel = isDevEnvironment ? "\(label ?? "") (fallback - this text is only in dev)" : "\(label ?? "")"
+        if isContentEditable {
+            let devLabel = isDevEnvironment ? "\(label ?? "") (fallback - this text is only in dev)" : (label ?? "")
             await cursorAnimator.animateAgentCursorClick(tab, bounds, devLabel, scaleOnClick: true, cursorLabelKind: options.cursorLabelKind)
             try await abortableDelay(50, signal)
             let domResult = try await performDomClick()
@@ -599,11 +553,7 @@ public final class AgentDOMService {
         await cursorAnimator.animateAgentCursorClick(tab, bounds, label ?? "", scaleOnClick: true, cursorLabelKind: options.cursorLabelKind)
         try await abortableDelay(50, signal)
         do {
-            let button = options.rightClick == true ? "right" : "left"
-            var count = 1
-            if options.doubleClick == true { count = 2 }
-            if options.tripleClick == true { count = 3 }
-            try await debuggerInstance.simulateMouseClick(clickX, clickY, button, count, signal)
+            try await debuggerInstance.simulateMouseClick(clickX, clickY, options.mouseButton, options.clickCount, signal)
             try throwIfAborted(signal)
             if node.element.attributes["contenteditable"] == "true" {
                 let focusScript = """
@@ -640,13 +590,9 @@ public final class AgentDOMService {
     ) async throws -> ClickResult {
         let x = Int((bounds.left + bounds.width / 2).rounded())
         let y = Int((bounds.top + bounds.height / 2).rounded())
-        let button = options.rightClick == true ? "right" : "left"
-        var count = 1
-        if options.doubleClick == true { count = 2 }
-        if options.tripleClick == true { count = 3 }
         rootLogger.info("\(prefix) PATH: \(pathTag) → trying CDP fallback at (\(x), \(y))")
         do {
-            try await debuggerInstance.simulateMouseClick(x, y, button, count, signal)
+            try await debuggerInstance.simulateMouseClick(x, y, options.mouseButton, options.clickCount, signal)
             return ClickResult(isOnTop: true, message: "Clicked element \(id) (CDP fallback at \(x),\(y) after DOM fallback target missing)", element: node)
         } catch {
             if isAbortError(error) { throw error }
@@ -672,11 +618,8 @@ public final class AgentDOMService {
             )
             await cursorAnimator.animateAgentCursorClick(tab, bounds, label, scaleOnClick: true, cursorLabelKind: options.cursorLabelKind)
             try await abortableDelay(50, signal)
-            let button = options.rightClick == true ? "right" : "left"
-            var count = 1
-            if options.doubleClick == true { count = 2 }
-            if options.tripleClick == true { count = 3 }
-            try await debuggerInstance.simulateMouseClick(Int(x.rounded()), Int(y.rounded()), button, count, signal)
+            try await debuggerInstance.simulateMouseClick(
+                Int(x.rounded()), Int(y.rounded()), options.mouseButton, options.clickCount, signal)
             return ClickAtResult(success: true, message: "Clicked at absolute coordinates")
         } catch {
             if isAbortError(error) { throw error }
@@ -846,10 +789,13 @@ public final class AgentDOMService {
         try throwIfAborted(signal)
         let point = try await findClickablePoint(id, signal)
         try throwIfAborted(signal)
-        var x = point.x
-        var y = point.y
         var bounds = try await getCurrentElementBounds(id, signal)
-        if !point.isClickable || x == nil || y == nil {
+        let x: Double
+        let y: Double
+        if point.isClickable, let pointX = point.x, let pointY = point.y {
+            x = pointX
+            y = pointY
+        } else {
             bounds = bounds ?? positioningBounds(for: id)
             guard let resolved = bounds else {
                 return FocusResult(success: false, message: "Pointer activation failed: element has no bounds")
@@ -857,11 +803,11 @@ public final class AgentDOMService {
             x = resolved.left + resolved.width / 2
             y = resolved.top + resolved.height / 2
         }
-        let animateBounds = bounds ?? boundsAroundPoint(x!, y!)
+        let animateBounds = bounds ?? boundsAroundPoint(x, y)
         await cursorAnimator.animateAgentCursorClick(tab, animateBounds, "Focus", scaleOnClick: true, cursorLabelKind: nil)
         try await abortableDelay(50, signal)
         do {
-            try await debuggerInstance.simulateMouseClick(Int(x!.rounded()), Int(y!.rounded()), "left", 1, signal)
+            try await debuggerInstance.simulateMouseClick(Int(x.rounded()), Int(y.rounded()), "left", 1, signal)
             try await abortableDelay(80, signal)
             return FocusResult(success: true, message: "Pointer activation succeeded")
         } catch {
@@ -989,25 +935,14 @@ public final class AgentDOMService {
                 // Show the agent cursor for the explicit hover / scroll verbs (the
                 // internal pre-click scroll passes a different label, so it does not
                 // double-animate on top of the click's own cursor move).
-                if label == "Hover" || label == "Scroll",
-                   let boundsValue = result["bounds"], case .object = boundsValue {
-                    await animateCursorToBounds(ElementBounds(json: boundsValue), label ?? "")
-                }
-                let distance = result.number("scrollDistance") ?? 0
-                let bounds: ElementBounds??
-                if options.returnBounds {
-                    if let boundsValue = result["bounds"], case .object = boundsValue {
-                        bounds = .some(ElementBounds(json: boundsValue))
-                    } else {
-                        bounds = .some(nil)
-                    }
-                } else {
-                    bounds = nil
+                let bounds = result["bounds"].flatMap(ElementBounds.init(json:))
+                if label == "Hover" || label == "Scroll" {
+                    await animateCursorToBounds(bounds, label ?? "")
                 }
                 return ScrollToElementResult(
                     message: "Scrolled to element\(label.map { ": \($0)" } ?? "").",
-                    scrollDistance: distance,
-                    bounds: bounds
+                    scrollDistance: result.number("scrollDistance") ?? 0,
+                    bounds: options.returnBounds ? bounds : nil
                 )
             }
             throw SimpleError("Scroll failed: \(result.string("error") ?? "unknown error")")
@@ -1072,7 +1007,7 @@ public final class AgentDOMService {
                     success: false,
                     error: "File upload failed at the staging stage: no upload staging is available.")
             }
-            let staged = try await staging.stage(filePaths, maxTotalBytes: MAX_UPLOAD_TOTAL_BYTES, signal: signal)
+            let staged = try await staging.stage(filePaths, maxTotalBytes: maxUploadTotalBytes, signal: signal)
             if !filePaths.isEmpty && staged.cdpPaths.isEmpty && staged.files.isEmpty {
                 return UploadResult(
                     success: false,
@@ -1301,17 +1236,11 @@ public final class AgentDOMService {
               return out;
             })()
         """
-        let result: JSValue
-        do {
-            result = try await executeJavaScript(script, signal)
-        } catch {
-            if isAbortError(error) { return nil }
-            return nil
-        }
-        let jsonLd = (result["jsonLd"]?.arrayValue ?? []).compactMap { $0.stringValue }
-        let nextData = result["nextData"]?.stringValue
-        let shopify = result["shopify"]?.stringValue
-        return siteJsonStructuredBlock(jsonLdScripts: jsonLd, nextData: nextData, shopifyProductsJson: shopify)
+        guard let result = try? await executeJavaScript(script, signal) else { return nil }
+        return siteJsonStructuredBlock(
+            jsonLdScripts: (result.array("jsonLd") ?? []).compactMap(\.stringValue),
+            nextData: result.string("nextData"),
+            shopifyProductsJson: result.string("shopify"))
     }
 
     // MARK: Markdown
@@ -1350,7 +1279,7 @@ public final class AgentDOMService {
     /// the page's trailing interactive elements. Returns the (possibly truncated)
     /// markdown and the token count to report for it.
     static func cappedObservation(markdown: String, tokenCount: Int, cap: Int?) -> (markdown: String, tokenCount: Int) {
-        guard let cap = cap, cap > 0 else { return (markdown, tokenCount) }
+        guard let cap, cap > 0 else { return (markdown, tokenCount) }
         let estTokens = tokenCount > 0 ? tokenCount : (markdown.count + 3) / 4
         guard estTokens > cap else { return (markdown, tokenCount) }
         let charBudget = max(400, Int(Double(markdown.count) * Double(cap) / Double(max(1, estTokens))))
@@ -1421,7 +1350,7 @@ public final class AgentDOMService {
             // then squeeze 3+ blank lines to one.
             markdown = markdown
                 .components(separatedBy: "\n")
-                .map { line -> String in
+                .map { line in
                     let lead = line.prefix { $0 == " " }
                     let rest = line.dropFirst(lead.count)
                         .replacingOccurrences(of: "[ \t]+", with: " ", options: .regularExpression)
@@ -1544,10 +1473,11 @@ public final class AgentDOMService {
             let combinedModifiers = stroke.modifiers.reduce(0) { $0 | modifierBit($1) }
             let modifierWithoutShift = (combinedModifiers & ~8) != 0
 
-            let isSpecial = Self.specialKeyDescriptors[stroke.key] != nil
+            let special = Self.specialKeyDescriptors[stroke.key]
+            let isSpecial = special != nil
             let isSingleChar = !isSpecial && stroke.key.count == 1
             let descriptor: KeyDescriptor
-            if let special = Self.specialKeyDescriptors[stroke.key] {
+            if let special {
                 descriptor = special
             } else {
                 let upper = stroke.key.uppercased()
@@ -1856,37 +1786,27 @@ public final class AgentDOMService {
 func parseDomNode(_ value: JSValue) -> DomNode? {
     guard let id = value.string("id") else { return nil }
     let elementValue = value["element"]
-    var tagName = ""
     var attributes: [String: String] = [:]
-    var textContent: String?
-    var childText: String?
-    if let elementValue {
-        tagName = elementValue.string("tagName") ?? ""
-        if case let .object(attrMembers)? = elementValue["attributes"] {
-            for (key, attr) in attrMembers {
-                if case let .string(stringValue) = attr {
-                    attributes[key] = stringValue
-                }
-            }
+    if case let .object(attrMembers)? = elementValue?["attributes"] {
+        for (key, attr) in attrMembers {
+            if let stringValue = attr.stringValue { attributes[key] = stringValue }
         }
-        textContent = elementValue.string("textContent")
-        childText = elementValue.string("childText")
     }
-    let element = DomElement(tagName: tagName, attributes: attributes, textContent: textContent, childText: childText)
+    let element = DomElement(
+        tagName: elementValue?.string("tagName") ?? "",
+        attributes: attributes,
+        textContent: elementValue?.string("textContent"),
+        childText: elementValue?.string("childText"))
 
     var content = DomContent()
     if let contentValue = value["content"] {
         content.comprehensiveText = contentValue.string("comprehensiveText")
         if let optionValue = contentValue["optionData"], case .object = optionValue {
-            var options: [DomSelectOption] = []
-            if let optionArray = optionValue.array("options") {
-                for option in optionArray {
-                    options.append(DomSelectOption(
-                        text: option.string("text"),
-                        value: option.string("value"),
-                        selected: option.bool("selected") ?? false
-                    ))
-                }
+            let options = (optionValue.array("options") ?? []).map { option in
+                DomSelectOption(
+                    text: option.string("text"),
+                    value: option.string("value"),
+                    selected: option.bool("selected") ?? false)
             }
             content.optionData = DomOptionData(options: options, multiple: optionValue.bool("multiple") ?? false)
         }
@@ -1930,13 +1850,6 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
         }
     }
 
-    var children: [String] = []
-    if let childArray = value.array("children") {
-        for child in childArray {
-            if case let .string(childId) = child { children.append(childId) }
-        }
-    }
-
     return DomNode(
         id: id,
         nodeType: value.string("nodeType"),
@@ -1944,7 +1857,7 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
         content: content,
         interactivity: interactivity,
         positioning: positioning,
-        children: children
+        children: (value.array("children") ?? []).compactMap(\.stringValue)
     )
 }
 
@@ -1954,16 +1867,6 @@ nonisolated struct SimpleError: Error, CustomStringConvertible {
     let message: String
     init(_ message: String) { self.message = message }
     var description: String { message }
-}
-
-/// A one-shot guard ensuring a continuation is resumed exactly once.
-final class ResolvedFlag {
-    private var resolved = false
-    func markResolved() -> Bool {
-        if resolved { return false }
-        resolved = true
-        return true
-    }
 }
 
 /// Suspends until its signal aborts (throwing) or it is cancelled. Resuming
@@ -1998,9 +1901,7 @@ final class AbortWaiter<T: Sendable> {
     }
 
     private func resume(throwing error: Error) {
-        if resolved {
-            return
-        }
+        guard !resolved else { return }
         resolved = true
         let pending = continuation
         continuation = nil

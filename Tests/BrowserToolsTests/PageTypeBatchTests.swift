@@ -78,25 +78,22 @@ import Foundation
         #expect(PageTypeExecutorTool.fields(value(many))?.count == 20)
     }
 
-    @Test func theDescriptionTellsTheModelItCanFillAWholeForm() {
+    @Test func theDescriptionTellsTheModelItCanFillAWholeForm() throws {
         // A capability nothing advertises does not fire; that failure was found five separate times in one day.
         //
-        // Asserted against the REGISTRY the agent is actually handed, not against the source text. The sibling
-        // `get_text` test once grepped a source file for its wording, which passes even if
-        // the constant it finds is never wired into a schema the model receives — the exact gap that let a
-        // registered-but-unadvertised lever fire zero times.
-        let schema = getNativeAgentToolSchemas().first { $0.name == "page_type" }
-        #expect(schema != nil)
-        let text = schema?.description ?? ""
+        // Asserted against the REGISTRY the agent is actually handed, not against the source text: a constant
+        // that says the right thing still advertises nothing if it is never wired into a schema the model
+        // receives — the exact gap that let a registered-but-unadvertised lever fire zero times.
+        let text = try #require(getNativeAgentToolSchemas().first { $0.name == "page_type" }?.description)
         #expect(text.contains("fields"))
         #expect(text.contains("one call"))
     }
 
-    @Test func theBatchParameterIsInTheSchemaWithAnItemShape() {
+    @Test func theBatchParameterIsInTheSchemaWithAnItemShape() throws {
         // A provider running strict function-calling rejects an array parameter with no `items`, which costs
         // the tool the whole call rather than degrading it. Every other array in that file declares one.
-        let schema = getNativeAgentToolSchemas().first { $0.name == "page_type" }
-        let encoded = String(describing: schema?.inputSchema ?? .null)
+        let schema = try #require(getNativeAgentToolSchemas().first { $0.name == "page_type" })
+        let encoded = String(describing: schema.inputSchema)
         #expect(encoded.contains("fields"))
         #expect(encoded.contains("items"))
     }

@@ -40,8 +40,8 @@ import ToolABI
         guard !ids.isEmpty else {
             return RawToolResult(output: "get_text requires an \"aloha_id\" naming the element to read.", isError: true)
         }
-        var unique: [String] = []
-        for id in ids where !unique.contains(id) { unique.append(id) }
+        var seen: Set<String> = []
+        let unique = ids.filter { seen.insert($0).inserted }
         let capped = Array(unique.prefix(Self.maxBatch))
         // Split the budget across the ids so one enormous element cannot starve the rest, and so a
         // batch costs no more than a single read. A read that hit the cap says so, in place.

@@ -25,13 +25,8 @@ public func parseDataUrlImage(_ value: String) -> ParsedDataUrlImage? {
         return nil
     }
     let mime = String(trimmed[mimeRange])
-    let payload = String(trimmed[dataRange])
-    if mime == "image/jpeg" || mime == "image/jpg" {
-        return ParsedDataUrlImage(base64: payload, mediaType: "image/jpeg")
-    }
-    if mime == "image/png" {
-        return ParsedDataUrlImage(base64: payload, mediaType: "image/png")
-    }
-    return ParsedDataUrlImage(base64: payload, mediaType: "image/jpeg")
+    return ParsedDataUrlImage(
+        base64: String(trimmed[dataRange]),
+        mediaType: mime == "image/png" ? "image/png" : "image/jpeg")
 }
 

@@ -15,7 +15,7 @@ import Darwin
 /// JavaScript source string for the in-page `DataTransfer` fallback, which is ~1.33x the
 /// file's own size and has to be handed to the page and parsed in one piece. A cap on the
 /// read alone would let a file the browser cannot swallow through.
-public let MAX_UPLOAD_TOTAL_BYTES = 50 * 1024 * 1024
+public let maxUploadTotalBytes = 50 * 1024 * 1024
 
 /// One file, staged both ways at once.
 public nonisolated struct StagedUploadFile: Equatable, Sendable {
@@ -63,7 +63,7 @@ public nonisolated struct UploadStagingError: Error, CustomStringConvertible, Se
 /// (a dropzone with no `<input>`) or the browser cannot read the path.
 ///
 /// An implementation must refuse an upload whose bytes total more than `maxTotalBytes`;
-/// see ``MAX_UPLOAD_TOTAL_BYTES`` for why the ceiling is not the caller's business.
+/// see ``maxUploadTotalBytes`` for why the ceiling is not the caller's business.
 public protocol UploadStaging: Sendable {
     func stage(_ paths: [String], maxTotalBytes: Int, signal: AbortSignal?) async throws -> StagedUpload
 }

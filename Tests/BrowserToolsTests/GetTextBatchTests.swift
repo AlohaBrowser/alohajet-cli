@@ -50,15 +50,13 @@ import Foundation
         #expect(parse(many).count == 20)
     }
 
-    @Test func theDescriptionTellsTheModelItCanBatch() {
+    @Test func theDescriptionTellsTheModelItCanBatch() throws {
         // A capability nothing advertises does not fire — five separate instances of that were found the same
         // day this was written. So the batching contract is asserted against the SCHEMA THE MODEL IS SENT,
         // not against source text: an earlier version of this test read a file path off `#filePath`, and after
         // the move the path no longer resolved, the file read itself, and both assertions passed against the
         // test's own source. It was green for the wrong reason and could never fail.
-        let schema = getNativeAgentToolSchema("get_text")
-        #expect(schema != nil)
-        let description = schema?.description ?? ""
+        let description = try #require(getNativeAgentToolSchema("get_text")?.description)
         #expect(description.contains("comma-separated"))
         #expect(description.contains("20"))
         // And the cap the description promises is the cap the parser enforces.

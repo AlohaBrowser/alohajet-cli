@@ -43,8 +43,13 @@ private func node(
     @Test func truncateTextInsertsMarkerForLongInput() {
         let long = String(repeating: "x", count: 500)
         let result = truncateText(long, 200)
-        #expect(result.contains("[content truncated"))
-        #expect(result.count < 500)
+        // The marker names how much was dropped, and the whole answer lands on the budget —
+        // the marker is paid for out of it, not added on top.
+        #expect(result.contains("... [content truncated, 300 chars hidden] ..."))
+        #expect(result.count == 200)
+        // Text survives on BOTH sides of the marker: a head-only truncation loses the tail.
+        #expect(result.hasPrefix("x"))
+        #expect(result.hasSuffix("x"))
     }
 
     @Test func truncateLabelEllipsizes() {
@@ -197,7 +202,7 @@ private func node(
     @Test func wrapperWithItsOwnTextIsKept() {
         let span = kept("s", tag: "span", text: "Submitted by user", children: ["a2"])
         let a2 = kept("a2", tag: "a", text: "user", attrs: ["href": "/user/u"])
-        #expect(!emitInViewportElement(span, 0, ["s": span, "a2": a2]).isEmpty)
+        #expect(emitInViewportElement(span, 0, ["s": span, "a2": a2]).contains("Submitted by user"))
     }
 
     /// A standalone genuinely-actionable link is never deduped.

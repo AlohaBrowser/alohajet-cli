@@ -60,9 +60,8 @@ public enum AlohaAppLaunchError: Error, Equatable, CustomStringConvertible {
         case .headlessStateUnknown:
             return "the automation server did not report its headless state; update the browser or drop --headless"
         case .alreadyRunningHeadless:
-            // A host CLI names `alohajet quit` here; this package's `quit` closes
-            // the shared Chromium of the tool lane, so naming it would send the user at
-            // the wrong browser.
+            // Deliberately does not name `alohajet quit`: that closes the shared Chromium
+            // of the tool lane, so naming it would send the user at the wrong browser.
             return """
                 app already running headless — it has no window on screen, so add \
                 --headless to drive it, or quit that instance first.

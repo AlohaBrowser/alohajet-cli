@@ -42,6 +42,7 @@ struct AutomationTokenTests {
         "https://127.0.0.1.evil.example",           // carries the prefix, is not loopback
         "https://127.0.0.1@evil.example",           // userinfo, not a host
         "https://2130706433", "https://0177.0.0.1", // integer/octal spellings: not parsed, so denied
+        "http://127.1:8765",                        // short dotted form: not parsed either
         "https://example.com/agent",
     ])
     func fileTokenIsConfinedToLoopback(_ endpoint: String) throws {

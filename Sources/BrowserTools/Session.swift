@@ -8,7 +8,7 @@ import Darwin
 import Glibc
 #endif
 
-// This file is the one place a browser, a CDP client, a tabs service, and the eight tools
+// This file is the one place a browser, a CDP client, a tabs service, and the tools
 // are wired into something that can execute a call. The CLI and the MCP server are front
 // ends over `BrowserToolSession.run`; neither builds any of this itself.
 
@@ -47,14 +47,14 @@ public enum BrowserToolSessionError: Error, CustomStringConvertible, Sendable {
 
     public var description: String {
         switch self {
-        case .browserUnavailable(let path):
-            return "No browser executable at \(path). Pass executablePath: (or install Chrome/Chromium)."
-        case .launchFailed(let detail):
-            return "Could not launch the browser: \(detail)"
-        case .connectFailed(let detail):
-            return "Could not reach the CDP endpoint: \(detail)"
-        case .noFreePort(let detail):
-            return "Could not reserve a debug port: \(detail)"
+        case let .browserUnavailable(path):
+            "No browser executable at \(path). Pass executablePath: (or install Chrome/Chromium)."
+        case let .launchFailed(detail):
+            "Could not launch the browser: \(detail)"
+        case let .connectFailed(detail):
+            "Could not reach the CDP endpoint: \(detail)"
+        case let .noFreePort(detail):
+            "Could not reserve a debug port: \(detail)"
         }
     }
 }
@@ -73,7 +73,7 @@ public struct AgentOwnedTabs: Sendable {
     }
 }
 
-/// A live browser plus the eight tools wired to drive it.
+/// A live browser plus the tools wired to drive it.
 ///
 /// Build one with ``launch(executablePath:headless:port:userDataDir:profileDirectory:sessionId:networkLogDirectory:webExtractionOptions:)``
 /// (this process owns the browser) or ``attach(webSocketURL:sessionId:networkLogDirectory:webExtractionOptions:)``
@@ -431,12 +431,11 @@ public struct AgentOwnedTabs: Sendable {
     ///
     /// A `DispatchSource` rather than `signal(2)`: its handler runs on a queue, so it may
     /// allocate, spawn and touch the file system, none of which is legal inside a real
-    /// signal handler — and `Handle.terminate()` does all three. Same shape as the
-    /// shape a long-running CLI's SIGINT teardown needs. The kernel default must be ignored so the source,
-    /// and not the default, is what handles the signal.
+    /// signal handler — and `Handle.terminate()` does all three. The kernel default must
+    /// be ignored so the source, and not the default, is what handles the signal.
     ///
-    /// `{ @Sendable in }` IS LOAD-BEARING, and is the half of that CLI's handler that got
-    /// dropped the first time this was written. This module is main-actor-by-default
+    /// `{ @Sendable in }` IS LOAD-BEARING, and was the half that got dropped the first
+    /// time this was written. This module is main-actor-by-default
     /// (SE-0466, `Package.swift`), so a bare closure literal here is main-actor isolated —
     /// and Dispatch calls it on a global queue, where the isolation check traps BEFORE the
     /// first line of the body runs. Measured, with a breadcrumb on that first line that
@@ -500,7 +499,7 @@ public struct AgentOwnedTabs: Sendable {
 
     // MARK: - ExecutorSession
     //
-    // Chat-transcript surface. None of the eight tools touches it (they never call
+    // Chat-transcript surface. None of the tools touches it (they never call
     // `context.updateToolResult`), and there is no transcript here to mutate, so every
     // member is inert by design rather than unimplemented.
 

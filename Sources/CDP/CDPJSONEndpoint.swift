@@ -20,7 +20,7 @@ import Glibc
 // localhost debug interface answering a tiny GET, and one path exercised everywhere
 // beats two where each is only ever tested on one platform.
 
-public enum CDPJSONEndpointError: Error, CustomStringConvertible, Sendable {
+enum CDPJSONEndpointError: Error, CustomStringConvertible, Sendable {
     case invalidHost(String)
     case invalidPort(Int)
     case socketCreationFailed(errno: Int32)
@@ -113,7 +113,7 @@ private func cdpJSONEndpointGetBlocking(
     let wholeSeconds = Int(timeoutSeconds)
     var timeout = timeval(
         tv_sec: wholeSeconds,
-        tv_usec: Self_suseconds((timeoutSeconds - Double(wholeSeconds)) * 1_000_000))
+        tv_usec: microseconds((timeoutSeconds - Double(wholeSeconds)) * 1_000_000))
     _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
     _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
@@ -214,11 +214,11 @@ func cdpJSONEndpointBody(of response: Data) throws -> Data {
 
 /// `timeval.tv_usec` is `__darwin_suseconds_t` on Apple and `Int` on Glibc.
 #if canImport(Darwin)
-private func Self_suseconds(_ value: Double) -> __darwin_suseconds_t {
+private func microseconds(_ value: Double) -> __darwin_suseconds_t {
     __darwin_suseconds_t(value)
 }
 #else
-private func Self_suseconds(_ value: Double) -> Int {
+private func microseconds(_ value: Double) -> Int {
     Int(value)
 }
 #endif

@@ -51,7 +51,6 @@ public enum CDPError: Error, Sendable {
     case remote(code: Int, message: String)
     /// The socket closed before a pending request was answered.
     case connectionClosed
-    case malformedMessage(String)
     case missingField(String)
     /// A command went unanswered past the per-call backstop deadline. The client
     /// drops the orphaned pending continuation and fails the call so
@@ -107,7 +106,7 @@ final class URLSessionWebSocketChannel: CDPMessageChannel, Sendable {
     init(url: URL, session: URLSession) {
         self.task = session.webSocketTask(with: url)
         // CDP responses are unbounded — a Runtime.evaluate result (e.g. a full
-        // DOM-tree snapshot from `buildDomTree`), Page.captureScreenshot, or a
+        // DOM-tree snapshot from `collectDomTree`), Page.captureScreenshot, or a
         // network body easily exceeds Foundation's 1 MiB default
         // `maximumMessageSize`, which would throw EMSGSIZE ("Message too long")
         // on `receive()` and wedge the connection. 64 MiB so they reassemble.
@@ -281,20 +280,7 @@ public actor CDPClient: CDPTransport {
     }
 
     public func send(method: String, params: [String: JSValue]) async throws -> JSValue {
-        guard let channel, !isClosed else {
-            throw CDPError.notConnected
-        }
-
-        let id = allocateID()
-        var message: [String: JSValue] = [
-            "id": .number(id),
-            "method": .string(method)
-        ]
-        if !params.isEmpty {
-            message["params"] = .object(Array(params))
-        }
-        let payload = try Self.encode(.object(Array(message)))
-        return try await awaitResponse(id: id, method: method, channel: channel, payload: payload)
+        try await dispatch(method: method, params: params, sessionId: nil)
     }
 
     /// Send a CDP command addressed to an attached target's flat session.
@@ -305,6 +291,10 @@ public actor CDPClient: CDPTransport {
     /// not nested inside `params`. This routes such a command to the given
     /// `sessionId` and awaits its result.
     public func send(method: String, params: [String: JSValue], sessionId: String) async throws -> JSValue {
+        try await dispatch(method: method, params: params, sessionId: sessionId)
+    }
+
+    private func dispatch(method: String, params: [String: JSValue], sessionId: String?) async throws -> JSValue {
         guard let channel, !isClosed else {
             throw CDPError.notConnected
         }
@@ -312,13 +302,15 @@ public actor CDPClient: CDPTransport {
         let id = allocateID()
         var message: [String: JSValue] = [
             "id": .number(id),
-            "method": .string(method),
-            "sessionId": .string(sessionId)
+            "method": .string(method)
         ]
+        if let sessionId {
+            message["sessionId"] = .string(sessionId)
+        }
         if !params.isEmpty {
             message["params"] = .object(Array(params))
         }
-        let payload = try Self.encode(.object(Array(message)))
+        let payload = JSValue.object(Array(message)).stringify()
         return try await awaitResponse(id: id, method: method, channel: channel, payload: payload)
     }
 
@@ -331,12 +323,13 @@ public actor CDPClient: CDPTransport {
     /// command the browser never answers at all (e.g. an `awaitPromise: true`
     /// evaluate against a wedged page).
     ///
-    /// Resume-once safety: every resume path — the response in `handle(message:)`,
-    /// the cancel handler, the timeout task, the write-failure path, and
-    /// `close()`/`handleReceiveFailure` — funnels through ``removePending(_:)``,
-    /// which atomically removes and returns the continuation (or `nil` if it has
-    /// already been consumed). Whoever wins the race takes it; every loser sees
-    /// `nil` and resumes nothing, so it is resumed exactly once.
+    /// Resume-once safety: the per-id resume paths — the response in
+    /// `handle(message:)`, the cancel handler, the timeout task and the
+    /// write-failure path — funnel through ``removePending(_:)``, which atomically
+    /// removes and returns the continuation (or `nil` if it has already been
+    /// consumed). `close()` and `handleReceiveFailure` instead drain the whole
+    /// table and clear it without suspending, so on this actor no per-id path can
+    /// observe a continuation either of them took. Either way it resumes once.
     private func awaitResponse(
         id: Int,
         method: String,
@@ -370,9 +363,7 @@ public actor CDPClient: CDPTransport {
                         do {
                             try await channel.send(payload)
                         } catch {
-                            if let waiter = self.removePending(id) {
-                                waiter.resume(throwing: error)
-                            }
+                            self.removePending(id)?.resume(throwing: error)
                         }
                     }
 
@@ -399,15 +390,11 @@ public actor CDPClient: CDPTransport {
     }
 
     private func failPendingWithTimeout(id: Int, method: String) {
-        if let waiter = removePending(id) {
-            waiter.resume(throwing: CDPError.timeout(method: method))
-        }
+        removePending(id)?.resume(throwing: CDPError.timeout(method: method))
     }
 
     private func failPendingWithCancellation(id: Int) {
-        if let waiter = removePending(id) {
-            waiter.resume(throwing: CancellationError())
-        }
+        removePending(id)?.resume(throwing: CancellationError())
     }
 
     public nonisolated func events() -> AsyncStream<CDPEvent> {
@@ -431,13 +418,12 @@ public actor CDPClient: CDPTransport {
     /// ``subscribeEvents()`` under a caller-chosen id, so the subscriber can end it
     /// with ``endEventSubscription(_:)``.
     public func subscribeEvents(id: UUID) -> AsyncStream<CDPEvent> {
-        let stream = AsyncStream<CDPEvent> { continuation in
+        AsyncStream<CDPEvent> { continuation in
             registerEventStream(id: id, continuation: continuation)
             continuation.onTermination = { _ in
                 Task { await self.removeEventStream(id: id) }
             }
         }
-        return stream
     }
 
     /// Ends the subscription registered under `id`. Finishing the stream from this
@@ -456,14 +442,7 @@ public actor CDPClient: CDPTransport {
         receiveLoop = nil
         if let channel { await channel.close() }
         channel = nil
-        for (_, continuation) in pending {
-            continuation.resume(throwing: CDPError.connectionClosed)
-        }
-        pending.removeAll()
-        for (_, continuation) in eventContinuations {
-            continuation.finish()
-        }
-        eventContinuations.removeAll()
+        failAllWaiters()
     }
 
     // MARK: High-level helpers
@@ -496,23 +475,6 @@ public actor CDPClient: CDPTransport {
             throw CDPError.missingField("Target.attachToTarget.sessionId")
         }
         return sessionId
-    }
-
-    /// Navigate an attached page (identified by its flat-session `sessionId`) to
-    /// `url`, returning the resulting `frameId`.
-    @discardableResult
-    public func navigate(url: String, sessionId: String) async throws -> String {
-        let result = try await send(
-            method: "Page.navigate",
-            params: [
-                "url": .string(url),
-                "sessionId": .string(sessionId)
-            ]
-        )
-        guard let frameId = result["frameId"]?.stringValue else {
-            throw CDPError.missingField("Page.navigate.frameId")
-        }
-        return frameId
     }
 
     // MARK: - Internals
@@ -565,29 +527,33 @@ public actor CDPClient: CDPTransport {
         channel
     }
 
+    /// Whether the channel is up. False once ``close()`` ran or the transport failed
+    /// under us — the difference between a tool that failed and a browser that is gone.
+    public var isConnected: Bool { !isClosed && channel != nil }
+
     private func handleReceiveFailure(_ error: Error) {
         guard !isClosed else { return }
         isClosed = true
         channel = nil
-        for (_, continuation) in pending {
-            continuation.resume(throwing: error)
+        failAllWaiters()
+    }
+
+    /// `connectionClosed`, not the transport's own error: a dead browser surfaced as
+    /// `NSPOSIXErrorDomain Code=57` carrying the internal devtools URL in its userInfo,
+    /// which is neither a sentence for the operator nor a case a caller can match on.
+    private func failAllWaiters() {
+        for continuation in pending.values {
+            continuation.resume(throwing: CDPError.connectionClosed)
         }
         pending.removeAll()
-        for (_, continuation) in eventContinuations {
+        for continuation in eventContinuations.values {
             continuation.finish()
         }
         eventContinuations.removeAll()
     }
 
     private func handle(message: String) {
-        let data = Data(message.utf8)
-
-        guard
-            let object = Self.decode(data),
-            case .object = object
-        else {
-            return
-        }
+        guard let object = JSValue.parse(message), case .object = object else { return }
 
         if let id = object["id"]?.intValue {
             guard let continuation = removePending(id) else { return }
@@ -605,23 +571,10 @@ public actor CDPClient: CDPTransport {
             let params = object["params"] ?? .object([])
             let sessionId = object["sessionId"]?.stringValue
             let event = CDPEvent(method: method, params: params, sessionId: sessionId)
-            for (_, continuation) in eventContinuations {
+            for continuation in eventContinuations.values {
                 continuation.yield(event)
             }
         }
-    }
-
-    // MARK: Wire (de)serialization
-
-    /// Serialize a `JSValue` to a compact JSON string for the wire, preserving
-    /// object key order.
-    private static func encode(_ value: JSValue) throws -> String {
-        return value.stringify()
-    }
-
-    private static func decode(_ data: Data) -> JSValue? {
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        return JSValue.parse(text)
     }
 }
 
@@ -847,7 +800,7 @@ public struct ChromeLauncher: Sendable {
     /// run's profile. A `pgrep` that cannot run reports nothing, and the profile is then
     /// removed anyway — that is the outcome that matters.
     ///
-    /// ponytail: `pgrep -f` takes a regex and the path is spliced in unescaped, so a
+    /// KNOWN CEILING: `pgrep -f` takes a regex and the path is spliced in unescaped, so a
     /// temp directory containing regex metacharacters matches nothing and leaves the
     /// browser. Swap for a `/proc` + `sysctl` scan if that ever shows up.
     private static func pidsHolding(profile path: String) -> [Int32] {

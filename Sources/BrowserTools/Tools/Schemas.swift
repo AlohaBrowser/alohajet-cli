@@ -148,8 +148,10 @@ private let pageTypeDescription =
     + "For a single field, pass aloha_id and text directly. One of the two shapes is required: "
     + "either aloha_id with text, or fields."
 
+private let pageTypeTargetDescription = "The aloha-id of the element to type into."
+
 private let pageTypeSchema = objectSchema([
-    ("aloha_id", schemaField(type: "string", description: "The aloha-id of the element to type into. Omit when using \"fields\".")),
+    ("aloha_id", schemaField(type: "string", description: "\(pageTypeTargetDescription) Omit when using \"fields\".")),
     ("text", schemaField(type: "string", description: "The text to type. Omit when using \"fields\".")),
     ("fields", schemaField(
         type: "array",
@@ -160,7 +162,7 @@ private let pageTypeSchema = objectSchema([
         // rejects an array parameter with no item schema outright, which would cost the tool its whole call
         // rather than degrade it.
         items: objectSchema([
-            ("aloha_id", schemaField(type: "string", description: "The aloha-id of the element to type into.")),
+            ("aloha_id", schemaField(type: "string", description: pageTypeTargetDescription)),
             ("text", schemaField(type: "string", description: "The text to type into it.")),
             ("replace", schemaField(
                 type: "boolean",
@@ -187,12 +189,14 @@ private let pageSelectDescription =
     "Select an option in a <select> dropdown on the active tab by its aloha-id, matching by visible text or index. "
     + "At least one of text or index is required."
 
+private let pageSelectOptionRequirement = "At least one of text/index is required."
+
 private let pageSelectSchema = objectSchema([
     ("aloha_id", schemaField(type: "string", description: "The aloha-id of the <select> element.")),
-    ("text", schemaField(type: "string", description: "The visible option text to match. At least one of text/index is required.")),
+    ("text", schemaField(type: "string", description: "The visible option text to match. \(pageSelectOptionRequirement)")),
     ("index", schemaField(
         type: "integer",
-        description: "The zero-based option index to match. At least one of text/index is required.",
+        description: "The zero-based option index to match. \(pageSelectOptionRequirement)",
         minimum: 0
     ))
 ], required: ["aloha_id"])
@@ -272,17 +276,18 @@ private let pageUploadSchema = objectSchema([
     ))
 ], required: ["aloha_id", "paths"])
 
-private let nativeToolSchemaTable: [String: NativeToolSchema] = [
-    "manage_tabs": NativeToolSchema(name: "manage_tabs", description: manageTabsDescription, inputSchema: manageTabsSchema),
-    "page_click": NativeToolSchema(name: "page_click", description: pageClickDescription, inputSchema: pageClickSchema),
-    "page_type": NativeToolSchema(name: "page_type", description: pageTypeDescription, inputSchema: pageTypeSchema),
-    "page_select": NativeToolSchema(name: "page_select", description: pageSelectDescription, inputSchema: pageSelectSchema),
-    "get_text": NativeToolSchema(name: "get_text", description: getTextDescription, inputSchema: getTextSchema),
-    "page_navigate": NativeToolSchema(name: "page_navigate", description: pageNavigateDescription, inputSchema: pageNavigateSchema),
-    "page_press_keys": NativeToolSchema(name: "page_press_keys", description: pagePressKeysDescription, inputSchema: pagePressKeysSchema),
-    "page_wait_for": NativeToolSchema(name: "page_wait_for", description: pageWaitForDescription, inputSchema: pageWaitForSchema),
-    "page_upload": NativeToolSchema(name: "page_upload", description: pageUploadDescription, inputSchema: pageUploadSchema)
-]
+private let nativeToolSchemaTable: [String: NativeToolSchema] = Dictionary(
+    uniqueKeysWithValues: [
+        NativeToolSchema(name: "manage_tabs", description: manageTabsDescription, inputSchema: manageTabsSchema),
+        NativeToolSchema(name: "page_click", description: pageClickDescription, inputSchema: pageClickSchema),
+        NativeToolSchema(name: "page_type", description: pageTypeDescription, inputSchema: pageTypeSchema),
+        NativeToolSchema(name: "page_select", description: pageSelectDescription, inputSchema: pageSelectSchema),
+        NativeToolSchema(name: "get_text", description: getTextDescription, inputSchema: getTextSchema),
+        NativeToolSchema(name: "page_navigate", description: pageNavigateDescription, inputSchema: pageNavigateSchema),
+        NativeToolSchema(name: "page_press_keys", description: pagePressKeysDescription, inputSchema: pagePressKeysSchema),
+        NativeToolSchema(name: "page_wait_for", description: pageWaitForDescription, inputSchema: pageWaitForSchema),
+        NativeToolSchema(name: "page_upload", description: pageUploadDescription, inputSchema: pageUploadSchema)
+    ].map { ($0.name, $0) })
 
 /// The wire surface a consumer can pin: tool name -> parameter name -> that parameter's enum
 /// values, empty when it has none. Derived from the schemas above, so it cannot drift from what

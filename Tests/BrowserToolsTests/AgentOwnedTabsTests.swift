@@ -38,7 +38,7 @@ private func seededModel(agentOwned: Set<String>) async throws -> TabsModel {
     let service = await makeCDPBrowserTabsService(
         client: client, seed: false, seededTabsAreHuman: true,
         agentOwnedTabIds: ["agents-target"])
-    let tabs = (service.window!).tabs
+    let tabs = try #require(service.window).tabs
     #expect(tabs.getOrRestoreTab("agents-target", restoreIfNeeded: true)?.openedByHuman == false)
     #expect(tabs.getOrRestoreTab("users-target", restoreIfNeeded: true)?.openedByHuman == true)
 }

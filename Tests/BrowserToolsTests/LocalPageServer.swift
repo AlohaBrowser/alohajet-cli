@@ -12,7 +12,7 @@ import Darwin
 // python3 script to a temp file and runs it; this package has no python dependency and
 // should not acquire one to serve four hundred bytes of HTML.
 //
-// ponytail: one connection at a time, one response body, no keep-alive, no MIME table.
+// KNOWN CEILING: one connection at a time, one response body, no keep-alive, no MIME table.
 // It answers every request with the same page, which is all a fixture needs. Give it a
 // route table when a test needs two pages.
 nonisolated final class LocalPageServer: @unchecked Sendable {

@@ -53,59 +53,49 @@ struct BrowserLaneParityTests {
         defer { server.stop() }
 
         // One browser. Everything below attaches to it; nothing else is launched.
-        let owner = try await BrowserToolSession.launch(headless: true, port: nil)
-        defer { Task { await owner.shutdown() } }
-        let port = try #require(owner.launchedBrowser?.port, "the launch reported no port")
+        try await withHeadlessBrowser { owner in
+            let port = try #require(owner.launchedBrowser?.port, "the launch reported no port")
 
-        // Open the page once, so both lanes read the SAME tab. Two `open` calls would
-        // yield two tab ids and the comparison would be vacuous.
-        let opened = await owner.run("manage_tabs", arguments: ["action": "open", "url": server.url])
-        #expect(opened.isError != true, "open failed: \(opened.output)")
-        let tabId = try #require(tabIdentifier(opened), "open printed no tab id:\n\(opened.output)")
+            // Open the page once, so both lanes read the SAME tab. Two `open` calls would
+            // yield two tab ids and the comparison would be vacuous.
+            let opened = await owner.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            let tabId = try #require(tabIdentifier(opened), "open printed no tab id:\n\(opened.output)")
 
-        // LANE 1 — `--cdp <port>`.
-        let chromium = try await BrowserToolSession.attach(port: port)
-        defer { Task { await chromium.shutdown() } }
+            // LANE 1 — `--cdp <port>`.
+            let chromium = try await BrowserToolSession.attach(port: port)
 
-        // LANE 2 — `--browser aloha`, through the real discovery read. The opener is wired
-        // to fail: a listener is already answering, so the lane must never reach it.
-        let aloha = AlohaBrowser(open: { Issue.record("the aloha lane launched an app while one was already answering") })
-        let discovered = try await aloha.endpoint(port: port)
-        #expect(discovered.scheme == "ws", "discovery yielded \(discovered)")
-        let alohaSession = try await BrowserToolSession.attach(webSocketURL: discovered.absoluteString)
-        defer { Task { await alohaSession.shutdown() } }
+            // LANE 2 — `--browser aloha`, through the real discovery read. The opener is wired
+            // to fail: a listener is already answering, so the lane must never reach it.
+            let aloha = AlohaBrowser(open: { Issue.record("the aloha lane launched an app while one was already answering") })
+            let discovered = try await aloha.endpoint(port: port)
+            #expect(discovered.scheme == "ws", "discovery yielded \(discovered)")
+            let alohaSession = try await BrowserToolSession.attach(webSocketURL: discovered.absoluteString)
 
-        // The same command, on the same tab, through each lane.
-        let viaCdp = await chromium.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
-        let viaAloha = await alohaSession.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+            // The same command, on the same tab, through each lane.
+            let viaCdp = await chromium.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
+            let viaAloha = await alohaSession.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
 
-        #expect(viaCdp.isError != true, "the --cdp lane failed: \(viaCdp.output)")
-        #expect(viaAloha.isError != true, "the aloha lane failed: \(viaAloha.output)")
-        #expect(viaCdp.output.contains("one page, two lanes"))
+            #expect(viaCdp.isError != true, "the --cdp lane failed: \(viaCdp.output)")
+            #expect(viaAloha.isError != true, "the aloha lane failed: \(viaAloha.output)")
+            #expect(viaCdp.output.contains("one page, two lanes"))
 
-        // BYTE-FOR-BYTE. The markdown carries the element refs the next command addresses,
-        // so a lane that rendered them differently would hand the model refs the other
-        // lane cannot use — the exact failure "both lanes end in the same CDPClient" is
-        // supposed to rule out.
-        #expect(viaAloha.output == viaCdp.output, """
-            the two lanes rendered the same page differently
-            --cdp:
-            \(viaCdp.output)
-            --browser aloha:
-            \(viaAloha.output)
-            """)
-        #expect(viaAloha.isError == viaCdp.isError)
-        #expect(viaAloha.status == viaCdp.status)
-    }
+            // BYTE-FOR-BYTE. The markdown carries the element refs the next command addresses,
+            // so a lane that rendered them differently would hand the model refs the other
+            // lane cannot use — the exact failure "both lanes end in the same CDPClient" is
+            // supposed to rule out.
+            #expect(viaAloha.output == viaCdp.output, """
+                the two lanes rendered the same page differently
+                --cdp:
+                \(viaCdp.output)
+                --browser aloha:
+                \(viaAloha.output)
+                """)
+            #expect(viaAloha.isError == viaCdp.isError)
+            #expect(viaAloha.status == viaCdp.status)
 
-    /// The tab id off the metadata channel, falling back to the printed `Tab ID:` line.
-    private func tabIdentifier(_ result: RawToolResult) -> String? {
-        if case let .string(id)? = result.metadata?["tabId"], !id.isEmpty { return id }
-        for line in result.output.split(separator: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("Tab ID: ") { return String(trimmed.dropFirst("Tab ID: ".count)) }
-            if trimmed.hasPrefix("ID: ") { return String(trimmed.dropFirst("ID: ".count)) }
+            await alohaSession.shutdown()
+            await chromium.shutdown()
         }
-        return nil
     }
 }

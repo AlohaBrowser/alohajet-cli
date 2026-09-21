@@ -74,13 +74,13 @@ public nonisolated struct WakeResult: Sendable, Equatable {
 public func wakeTab(_ tab: InjectorTab) async -> WakeResult {
     guard tab.tabType == "website" else { return WakeResult(ok: true) }
     do {
-        if try await tab.ensureLoaded() {
-            if tab.hasWebContents() {
-                return WakeResult(ok: true)
-            }
+        guard try await tab.ensureLoaded() else {
+            return WakeResult(ok: false, message: "Tab \"\(tab.id)\" is unavailable because it failed to wake or finish loading.")
+        }
+        guard tab.hasWebContents() else {
             return WakeResult(ok: false, message: "Tab \"\(tab.id)\" is unavailable because it has no live WebContents.")
         }
-        return WakeResult(ok: false, message: "Tab \"\(tab.id)\" is unavailable because it failed to wake or finish loading.")
+        return WakeResult(ok: true)
     } catch {
         let message = (error as? AbortSignalError)?.message ?? "\(error)"
         return WakeResult(ok: false, message: "Tab \"\(tab.id)\" is unavailable because it failed to wake: \(message)")

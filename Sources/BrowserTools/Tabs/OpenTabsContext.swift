@@ -124,12 +124,9 @@ public final class OpenTabsContextProvider {
     /// `trackedKeys`. Returns nil when there is no data or nothing changed.
     public func inject(_ host: OpenTabsContextHost, trackedKeys: inout [String]) -> String? {
         guard let data = host.getOpenTabsData() else { return nil }
-        let changedActive: OpenTabSummary? = {
-            if let active = data.activeTab, !host.hasContextTrackKey(host.getTabContextKey(active)) {
-                return active
-            }
-            return nil
-        }()
+        let changedActive = data.activeTab.flatMap { active in
+            host.hasContextTrackKey(host.getTabContextKey(active)) ? nil : active
+        }
         let changedOthers = data.otherTabs.filter { !host.hasContextTrackKey(host.getTabContextKey($0)) }
         if changedActive == nil && changedOthers.isEmpty {
             agentLog(.info, "[open-tabs] skipping (all tabs unchanged), total=\(data.allTabs.count)")
