@@ -55,7 +55,7 @@ jobs:
             build_flags: "--static-swift-stdlib"
     container: ${{ matrix.container || '' }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Select a toolchain that can build this package
         # macOS only: the Linux leg runs in swift:6.2.3-noble, which is already right.
