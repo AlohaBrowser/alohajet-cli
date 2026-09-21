@@ -1,15 +1,15 @@
 # alohajet
 
-**Drive a real browser from the command line and from MCP. Stable element refs, nine
-tools, and four libraries with no SwiftPM dependencies — the CLI is the one target that
-links one, the official MCP SDK, and only for `alohajet mcp --endpoint`.**
+**Drive a real browser from the command line and from MCP. Stable element refs, and four
+libraries with no SwiftPM dependencies — the CLI is the one target that links one, the
+official MCP SDK, and only for `alohajet mcp --endpoint`.**
 
-[Tool reference](docs/tools.md) · [A real session](docs/demo.md) · [Security](SECURITY.md)
-· [Releasing](RELEASING.md) · [Working on it](docs/development.md)
+[Tool reference](docs/tools.md) · [Threat model](docs/threat-model.md) ·
+[Contributing](docs/CONTRIBUTING.md)
 
 Playwright was built to script a browser you control. alohajet is built to hand a browser
 to a model: it attaches to a Chromium that already exists — one it launched, or one you
-were already using — and exposes nine verbs that can finish a task on a web page.
+were already using — and exposes a small set of verbs that can finish a task on a web page.
 
 The reason to pick it over the alternatives is that **element references are derived from
 the page, not minted per snapshot**. Competing tools hand out `[ref=e1]`, `[ref=e2]` over
@@ -32,9 +32,14 @@ That is the whole pitch, and [it is proved below](#the-proof) rather than assert
 page, three different browsers, same ref. You can reproduce the proof yourself in about a
 minute; it needs Python 3 and nothing else.
 
+Despite the name on every symbol, **no Aloha software is involved on that path**: the ref is
+minted by a script this package injects over plain CDP, the default lane drives a Chromium
+this package provisions itself, and `BrowserTools` does not link `AgentDriver` — so the tool
+layer cannot reach an Aloha automation server even by accident.
+
 **What it is not**, before you spend the minute: not a Playwright replacement — no
-assertions, no test runner, no trace viewer. Not a general CDP console — nine tools,
-deliberately, against chrome-devtools-mcp's ~57. No coordinate clicking, so a `<canvas>`
+assertions, no test runner, no trace viewer. Not a general CDP console — a deliberately
+small set against chrome-devtools-mcp's ~57. No coordinate clicking, so a `<canvas>`
 game or a WebGL viewport is unreachable. No extraction verb, no readability pass. Every one
 of those is expanded, with the reproduction, under [Limitations](#limitations).
 
@@ -46,9 +51,9 @@ of those is expanded, with the reproduction, under [Limitations](#limitations).
 |---|---|
 | Swift | 6.2 or newer |
 | OS | macOS 14+. Everything on this page was run on macOS 26.2 (arm64), Swift 6.2.3, Google Chrome 152.0.7977.77. |
-| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. |
-| Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 145 MB Chrome for Testing 126 is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
-| Python 3 | only to serve the fixture pages in [The proof](#the-proof) and [docs/demo.md](docs/demo.md). |
+| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. The release tarball needs `libcurl.so.4` — present wherever `curl` is, and `apt-get install -y libcurl4` on a minimal image. |
+| Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 191 MB Chrome for Testing is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
+| Python 3 | only to serve the fixture pages in [The proof](#the-proof). |
 | Dependencies | none in the four library products (`BrowserTools`, `AgentDriver`, `CDP`, `ToolABI`) — Foundation only, no vendored tree. One in the `alohajet` executable: the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) (`from: "0.12.1"`), which `mcp --endpoint` relays over and nothing else uses. A consumer linking the libraries resolves it and compiles none of it. |
 
 ## Install
@@ -67,8 +72,7 @@ Build of product 'alohajet' complete! (19.94s)
 ```
 
 If `~/.local/bin` is not on your `PATH`, every command on this page answers `command not
-found`. Check the install landed before going further — this is the only command that
-touches no browser:
+found`. Check the install landed — this is the only command that touches no browser:
 
 ```console
 $ alohajet --help | head -1
@@ -77,21 +81,31 @@ alohajet — the AlohaJet agent and a scriptable browser, from the command line.
 
 `alohajet --version` prints the version. There is no `doctor`.
 
-There is **no prebuilt binary**. `v0.1.0` is tagged and its release build failed, so no
-release exists and no `curl | sh` line works today. [RELEASING.md](RELEASING.md) has the
-detail.
+Prebuilt macOS and Linux tarballs are attached to every
+[release](https://github.com/AlohaBrowser/alohajet-cli/releases), with a `SHA256SUMS`
+beside them. Nothing is signed or notarized, so provenance is what there is to check:
+
+```sh
+sha256sum -c SHA256SUMS
+gh attestation verify alohajet-macos-universal.tar.gz --repo AlohaBrowser/alohajet-cli
+```
+
+The attestation is a Sigstore build-provenance statement binding each asset — and
+`SHA256SUMS` itself — to the workflow, repository and commit that produced it.
 
 To remove it: `rm ~/.local/bin/alohajet`, then `rm -rf "$TMPDIR/alohajet-$(id -u)"` and
 `rm -rf ~/Library/Application Support/AlohaJet` — the latter only exists if it downloaded a
-Chrome, and it is the 145 MB one. The throwaway `$TMPDIR/alohajet-cdp-<uuid>` profiles and
-`$TMPDIR/alohajet-chrome-stderr-*.log` files clean themselves up: `reapStaleProfiles` in
-`Sources/CDP/CDP.swift` deletes a profile once it can prove the owning pid is gone, and a
-stderr log once it is a day old.
+Chrome, and it is the 191 MB one. The throwaway `$TMPDIR/alohajet-cdp-<uuid>` profiles and
+`alohajet-chrome-stderr-*.log` files reap themselves (`reapStaleProfiles` in
+`Sources/CDP/CDP.swift`): a profile once the owning pid is provably gone, a log once it is
+a day old.
 
-As a library, add it to your `Package.swift` and depend on the `BrowserTools` product:
+As a library. Every library product is `@MainActor`-isolated by default, so a call from a
+non-isolated context needs an `await` or an actor hop:
 
 ```swift
-.package(url: "https://github.com/AlohaBrowser/alohajet-cli.git", branch: "main")
+.package(url: "https://github.com/AlohaBrowser/alohajet-cli.git", exact: "0.4.4")
+.product(name: "BrowserTools", package: "alohajet-cli")
 ```
 
 ## A real session
@@ -129,14 +143,9 @@ Closed the shared browser on port 55697.
 Two things there are not decoration. The `<untrusted_page_markdown K="BA0AFD9D">` wrapper is
 a keyed fence around everything the page said, so a model can tell page text from
 instructions; the key is fresh per read, so a page cannot close the fence and write outside
-it. It is a **delimiter, not a defence** — nothing detects prompt injection, and a model
-that ignores the fence is on its own ([SECURITY.md](SECURITY.md)). The paragraph above it is
-the tool's own preamble to the model, sent on every read — verbose on purpose, and the one
-thing this page shortens. Every cut on this page is marked `...`; nothing else is edited.
-
-A longer transcript — click, `back`, form fill, tab list, against a page served from disk
-so it does not depend on anyone's website staying the same — is in
-[docs/demo.md](docs/demo.md).
+it. It is a **delimiter, not a defence** — nothing detects prompt injection. The paragraph
+above it is the tool's own preamble to the model, sent on every read — verbose on purpose,
+and the one thing this page shortens. Every cut is marked `...`; nothing else is edited.
 
 ## The two surfaces
 
@@ -176,12 +185,12 @@ $ alohajet --cdp 9999 read                     ; echo $?   # 3  browser unreacha
 ```
 
 One command is not a tool call. `alohajet -p "<prompt>"` hands one turn to an agent loop
-that is already running behind an HTTP endpoint (`POST /agent/run`). **No loop ships in
-this package**: the endpoint defaults to `http://127.0.0.1:8765`, the Aloha browser's own
-automation server on this machine, and `--endpoint <url>` names a different one.
-
-The local app is launched — or activated — for you, and the launches that cannot work are
-refused by name instead of by timeout:
+that **does not ship here**: it POSTs to an HTTP endpoint, defaulting to
+`http://127.0.0.1:8765` — the Aloha browser's own automation server on this machine, which
+is launched or activated for you. Without that browser the flag needs a server of your own
+at `--endpoint <url>`, and the contract it has to speak is
+[docs/agent-endpoint.md](docs/agent-endpoint.md). Launches that cannot work are refused by
+name instead of by timeout:
 
 ```console
 $ alohajet -p "book me a table" --headless
@@ -215,8 +224,8 @@ not help it.
 ```
 
 To drive the browser you already have open instead of the shared one, add the
-connection flag — and read [SECURITY.md](SECURITY.md) first, because that config hands the
-agent every tab and every logged-in session in that browser:
+connection flag — that config hands the agent every tab and every logged-in session in
+that browser:
 
 ```json
 {
@@ -229,8 +238,8 @@ agent every tab and every logged-in session in that browser:
 }
 ```
 
-A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.1.0"}`, and
-`tools/list` returns the nine tools below with `readOnlyHint=true` on exactly two,
+A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.4.4"}`, and
+`tools/list` returns the tools below with `readOnlyHint=true` on exactly two,
 `get_text` and `page_wait_for`. The hint is per tool, not per call, so `manage_tabs` is
 false even though its `list` and `read` actions only observe. `manage_tabs` with
 `include_screenshot: true` returns a second content block of type `image` next to the text;
@@ -240,15 +249,14 @@ the CLI has no equivalent and drops the pixels.
 
 With `--endpoint`, `alohajet mcp` serves nothing of its own and launches no browser. It is
 a pipe: stdin/stdout on one side, `POST <url>/mcp` on the other — the MCP server a running
-Aloha browser mounts on its automation port. The tools you get are the browser's, not the
-nine above.
+Aloha browser mounts on its automation port. The tools you get are that browser's, not the
+nine above, so this lane needs that browser — or another host serving MCP over HTTP.
 
 It exists for one client. Claude Desktop's config parser takes `{command, args, env}` and
-drops any entry carrying `type`/`url`/`headers` with a "not valid MCP server
-configurations" dialog, so a browser that already speaks MCP over HTTP is unreachable from
-it without a stdio front end. Hosts that speak HTTP (Claude Code:
-`claude mcp add --transport http …`) should talk to that endpoint directly instead — this
-lane adds a process and buys them nothing.
+drops any entry carrying `type`/`url`/`headers`, so a browser that already speaks MCP over
+HTTP is unreachable from it without a stdio front end. Hosts that speak HTTP (Claude Code:
+`claude mcp add --transport http …`) should talk to that endpoint directly — this lane adds
+a process and buys them nothing.
 
 ```json
 {
@@ -261,16 +269,11 @@ lane adds a process and buys them nothing.
 }
 ```
 
-The bearer token is read per run, not pasted: `ALOHAJET_AGENT_TOKEN`, else the browser's
-own `~/Library/Application Support/Aloha/automation-token` — and that ambient file is sent
-to a loopback endpoint only, which is the same rule `-p` follows. Plaintext `http` to
-anywhere but this machine is refused outright (exit 2), since every frame on this pipe
-drives the browser. `https` to a host that is NOT this machine IS allowed — a port
-forward, a second machine — and TLS covers the wire; what such a host gets is no
-credential at all unless `ALOHAJET_AGENT_TOKEN` names one, and `alohajet` says so on
-stderr when it does not. Both halves use the official MCP SDK's own transports, because the
-server end validates `Accept: application/json, text/event-stream`, answers over SSE and
-issues a session id that has to be replayed as `Mcp-Session-Id`.
+Both halves use the official MCP SDK's own transports, because the server end validates
+`Accept: application/json, text/event-stream`, answers over SSE and issues a session id
+that has to be replayed as `Mcp-Session-Id`. The bearer token is read per run, never
+pasted, and plaintext `http` off this machine is refused outright (exit 2) — the same rules
+`-p` follows, written out in [docs/agent-endpoint.md](docs/agent-endpoint.md).
 
 ## The two browser lanes
 
@@ -461,10 +464,9 @@ Two consequences worth internalising:
   stack trace under it.
 - **A ref is only meaningful on the page it came from.** Refs are unique within a walk, not
   across the web: the same link text in the same structural position on two unrelated pages
-  hashes to the same string. [docs/demo.md](docs/demo.md) shows exactly that happening.
+  hashes to the same string.
 
-
-## The nine tools
+## The tools
 
 Full descriptions, defaults and constraints: **[docs/tools.md](docs/tools.md)** — generated
 from `Sources/BrowserTools/Tools/Schemas.swift`, with a test
@@ -484,9 +486,16 @@ below were read back off a live `tools/list`, so they are the schema, not a para
 | `page_upload` | `aloha_id`, `paths` (array of absolute paths, 1+) | `aloha_id`, `paths` |
 
 `page_type` and `get_text` are the two batch tools, and the batching is the point: filling
-a five-field form is one call, not five rounds. Both caps are 20 and both are declared in
-the schema (`maxItems`), not merely enforced at runtime, so a validating provider can see
-them.
+a five-field form is one call, not five rounds. Both caps are 20. `page_type` takes an
+array, so its cap is declared in the schema as `maxItems` and a validating provider sees
+it; `get_text` takes a comma-separated string, where `maxItems` is not expressible, so its
+cap lives in the description and is enforced when the tool runs — ids past the twentieth
+are not read, and the result says how many were.
+
+A `get_text` batch is an error only when **every** id failed, so one stale ref does not
+cost you the rest of the read. A batch that resolved at least one id exits 0 with the
+failures named in place, one line per id: `alohajet text a,b || handle` will not catch a
+missing element, and a script that cares has to read the labelled lines.
 
 Only `http` and `https` URLs are accepted, and **the scheme is not optional**:
 
@@ -504,7 +513,7 @@ Every variable the sources actually read, checked with
 
 | variable | default | effect |
 |---|---|---|
-| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. A path that is not an executable file is an error (exit 3), never a quiet fall-through to another browser. Unset and with no system Chrome, **Chrome for Testing 126.0.6478.126 is downloaded on first use** — a 145 MB zip, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing`. There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
+| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. A path that is not an executable file is an error (exit 3), never a quiet fall-through to another browser. Unset and with no system Chrome, **Chrome for Testing 153.0.8010.52 is downloaded on first use** — a 191 MB zip on mac-arm64, 196 MB on linux64, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing`. There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
 | `ALOHAJET_NETWORK_LOG` | off | a directory (or `1` for a temp dir) to record each agent-opened tab's requests as JSONL, `0600` in a `0700` directory. Read the limitation below before trusting it. |
 | `ALOHAJET_CREDENTIAL_GUARD` | off | `1` makes `page_type` refuse to type into a field it classifies as a credential field. Password-field *masking on read* is always on and is not controlled by this. |
 | `ALOHAJET_MARKDOWN_URLS` | off | `1` includes each link's `href`: `[Learn more](https://iana.org/domains/example) {aloha-id="719a97a0" a}` |
@@ -526,24 +535,9 @@ reproduced on this machine before it was written down.
 every transcript and the ref-stability proof were produced on macOS. The Linux job builds
 and runs the suite; it does not re-run the proof.
 
-**`close` refuses tabs alohajet itself opened, under `--cdp` and `--browser aloha`.** Each
-CLI command is a new process, and the "we opened this" bookkeeping does not survive it:
-
-```console
-$ alohajet --cdp 9787 open https://example.com
-Tab ID: 4FA9185C1D3265C7DA3AB09AD3A7879F
-
-$ alohajet --cdp 9787 close 4FA9185C1D3265C7DA3AB09AD3A7879F
-Cannot close "Example Domain": it is the user's tab, not one you opened.
-You may only close tabs opened by manage_tabs.
-```
-
-`close` works across processes on the default shared lane, where the bookkeeping lives in
-`browser.json`. On the other two lanes it is effectively dead.
-
-**"The tab in use" does not survive a process on those lanes either.** After the `open`
-above, a later bare `alohajet --cdp 9787 read` reads the browser's *first* http(s) tab, not
-the one `open` just took. Pass `--tab <id>` explicitly outside the default lane.
+**`close` refuses tabs it did not open.** A tab that was already there when alohajet
+attached is the user's; `close` says so and exits non-zero. Tabs alohajet opened close
+normally, across processes, on every lane.
 
 **No coordinate clicking, and that is a real gap.** Everything is addressed by ref, so
 anything the DOM walk does not emit is unreachable: a `<canvas>` game, a WebGL viewport, a
@@ -555,21 +549,23 @@ win.
 
 **No extraction verb.** There is no `web_extract`, no readability pass, no site-JSON
 extractor, no "give me the article". `nativeAgentToolNames` in
-`Sources/BrowserTools/Tools/Tools.swift` is exactly the nine tools above and none of them
-is an extractor. What you get is the rendered DOM serialized to markdown.
+`Sources/BrowserTools/Tools/Tools.swift` is exactly the tools above and none of them is an
+extractor. What you get is the rendered DOM serialized to markdown.
 
 **Whole capability areas are simply absent.** No performance traces or Lighthouse audits.
 No console messages. No network-request inspection a model can query. No heap snapshots. No
 device emulation, throttling, or viewport resize. No extension or PWA tools. No
 `evaluate_script`. No `hover`, `drag`, or dialog handling. No screencast.
-chrome-devtools-mcp has all of those across ~57 tools; this has nine, deliberately.
+chrome-devtools-mcp has all of those across ~57 tools; this has a deliberately small set.
 
 **`ALOHAJET_NETWORK_LOG` is a debugging aid, and a rough one.** The file is named from an
 internal id you cannot correlate to anything the CLI prints — a tab printed as
 `915E5DE332A24AF2218E6A9717ED027E` logged to `tab-914C8BAA-7A1.jsonl` — and the main
 document request is never recorded, only subresources, so a page whose only request is its
-own HTML produces an empty file. Response bodies are **not** masked, and nothing deletes
-these files.
+own HTML produces an empty file. Response bodies are kept, with credential-named fields
+inside them masked against a fixed sixteen-name list (`access_token`, `client_secret`,
+`refresh_token`, `password`, …); everything else in a body reaches disk verbatim, and
+nothing deletes these files.
 
 **The launched Chromium advertises itself as HeadlessChrome.** Its User-Agent is
 `...HeadlessChrome/152.0.0.0 Safari/537.36`, so a site that gates on it will refuse the
@@ -581,34 +577,41 @@ round-trip and image tokens on every read, so it is off by default. The CLI cann
 one at all.
 
 **Two sessions as the same user share one browser.** The default lane records its browser
-in `$TMPDIR/alohajet-<uid>/browser.json`, so a second alohajet driving the "same" tab from
-another terminal is not hypothetical — see the trap in
-[docs/development.md](docs/development.md). Give the second one its own `TMPDIR`, or its
-own `--cdp`.
+in `$TMPDIR/alohajet-<uid>/browser.json`, so a second alohajet drives the same tab from
+another terminal. Give the second one its own `TMPDIR`, or its own `--cdp`.
 
 **Chrome/Chromium only.** It speaks CDP. Firefox and Safari are out.
 
 **Rough edges you will meet.** A JavaScript stack trace leaks into tool output when a ref
-is not found. `manage_tabs list` sources its "in use" marker from the browser's own active
-tab rather than the session's, so in practice it marks nothing, while `alohajet tabs
---help` still claims it does. `page_type`'s result nudges CLI users toward
+is not found. `page_type`'s result nudges CLI users toward
 `fields=[{aloha_id, text}, ...]`, a shape the CLI has no flag for — that text is written
 for the MCP surface and emitted on both.
 
 ## Security
 
-Read [SECURITY.md](SECURITY.md) before pointing this at a browser you are logged into. The
-short version: URL validation refuses everything that is not `http(s)` — `file:`, `data:`,
+Before pointing this at a browser you are logged into: URL validation refuses everything that is not `http(s)` — `file:`, `data:`,
 `javascript:` — on both the destination and the tab a tool is standing on; password fields
 are masked in the page before their values cross the wire; the network log is off by
 default. There is no host allow-list, no sandbox, and no prompt-injection detection.
 `--cdp` and `--browser aloha` against your everyday browser hand an agent your logged-in
-sessions, by design.
+sessions, by design. `page_upload` reads any path the caller names and base64s it into the
+page: the filesystem is a trust domain this package does not fence.
+
+Two things that paragraph is too short to say. **A CDP port has no authentication** —
+Chrome's `--remote-debugging-port` is unauthenticated by design, loopback binding is
+Chrome's default rather than a promise this package makes, and any process running as the
+same user can connect and read cookies or evaluate JavaScript on any origin. And **no
+notion of which host is acceptable exists**: `http://169.254.169.254/latest/meta-data/`,
+`http://192.168.1.1` and an internal hostname on your VPN are all valid `http` URLs and
+are all accepted. What is defended and what is deliberately not is set out per lane in
+[docs/threat-model.md](docs/threat-model.md).
 
 ## Using it as a library
 
-`BrowserToolSession` is the whole API: connect, `run` a tool by name, shut down. The
-snippet below was compiled and run as written, and it leaves no browser behind.
+`BrowserToolSession` is the supported entry point: connect, `run` a tool by name, shut
+down. Everything else the libraries expose is plumbing, not a promise — at 0.x there is no
+API stability guarantee. The snippet below was compiled and run as written, and it leaves
+no browser behind.
 
 ```swift
 import BrowserTools
@@ -633,17 +636,15 @@ temp profile on every run.
 `BrowserToolSession.attach(port:)`, `.attach(host:port:)` and `.attach(webSocketURL:)`
 connect to a browser you did not launch. `run` never throws; failures come back as a
 `RawToolResult` with `isError == true`, which is what the model has to read anyway. The
-package also exports an `AgentDriver` product — the seam behind `-p`, not documented here
-because `-p` needs an endpoint this package does not provide.
+package also exports an `AgentDriver` product — the seam behind `-p`, whose HTTP contract is
+[docs/agent-endpoint.md](docs/agent-endpoint.md).
 
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
 
-This package carries no third-party source and vendors no tree: the CDP client, the
-WebSocket transport, the page-side runtime scripts, the DOM serializer and the tool layer
-were written for it. It declares one SwiftPM dependency, the official
-[MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk), and it hangs on the
-`alohajet` executable target alone — `mcp --endpoint` relays onto a running browser's own
-MCP server over that SDK's transports rather than re-implementing Streamable HTTP. The
-four library products link nothing.
+This package vendors no source tree, and the four library products link nothing. The
+released `alohajet` binary links the
+[MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) and its transitive
+dependencies statically — their notices are in
+[THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES).
