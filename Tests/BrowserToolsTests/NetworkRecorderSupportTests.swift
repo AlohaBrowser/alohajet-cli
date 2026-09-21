@@ -70,9 +70,6 @@ private final class RecordSink {
     }
 }
 
-// MARK: - decodeBase64Body (successful gunzip round trip)
-
-#if canImport(zlib)
 /// Polls `condition` at a short interval until it holds or the attempt cap is reached, so
 /// event-loop subscription, body fetches and teardown can be awaited deterministically.
 private func waitFor(attempts: Int = 400, _ condition: @escaping () async -> Bool) async {
@@ -83,6 +80,9 @@ private func waitFor(attempts: Int = 400, _ condition: @escaping () async -> Boo
     }
 }
 
+// MARK: - decodeBase64Body (successful gunzip round trip)
+
+#if canImport(zlib)
 @Suite("decodeBase64Body gzip round trip")
 struct DecodeBase64BodyGzipTests {
     @Test func gzipMagicBytesAreGunzipped() {
