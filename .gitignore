@@ -16,3 +16,4 @@ dist/
 *.pem
 *.p12
 *.key
+.cursor/

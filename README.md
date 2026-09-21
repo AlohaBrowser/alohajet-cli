@@ -4,8 +4,8 @@
 libraries with no SwiftPM dependencies — the CLI is the one target that links one, the
 official MCP SDK, and only for `alohajet mcp --endpoint`.**
 
-[Tool reference](docs/tools.md) · [A real session](docs/demo.md) ·
-[Threat model](docs/threat-model.md) · [Contributing](docs/CONTRIBUTING.md)
+[Tool reference](docs/tools.md) · [Threat model](docs/threat-model.md) ·
+[Contributing](docs/CONTRIBUTING.md)
 
 Playwright was built to script a browser you control. alohajet is built to hand a browser
 to a model: it attaches to a Chromium that already exists — one it launched, or one you
@@ -53,7 +53,7 @@ of those is expanded, with the reproduction, under [Limitations](#limitations).
 | OS | macOS 14+. Everything on this page was run on macOS 26.2 (arm64), Swift 6.2.3, Google Chrome 152.0.7977.77. |
 | Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. The release tarball needs `libcurl.so.4` — present wherever `curl` is, and `apt-get install -y libcurl4` on a minimal image. |
 | Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 191 MB Chrome for Testing is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
-| Python 3 | only to serve the fixture pages in [The proof](#the-proof) and [docs/demo.md](docs/demo.md). |
+| Python 3 | only to serve the fixture pages in [The proof](#the-proof). |
 | Dependencies | none in the four library products (`BrowserTools`, `AgentDriver`, `CDP`, `ToolABI`) — Foundation only, no vendored tree. One in the `alohajet` executable: the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) (`from: "0.12.1"`), which `mcp --endpoint` relays over and nothing else uses. A consumer linking the libraries resolves it and compiles none of it. |
 
 ## Install
@@ -146,10 +146,6 @@ instructions; the key is fresh per read, so a page cannot close the fence and wr
 it. It is a **delimiter, not a defence** — nothing detects prompt injection. The paragraph
 above it is the tool's own preamble to the model, sent on every read — verbose on purpose,
 and the one thing this page shortens. Every cut is marked `...`; nothing else is edited.
-
-A longer transcript — click, `back`, form fill, tab list, against a page served from disk
-so it does not depend on anyone's website staying the same — is in
-[docs/demo.md](docs/demo.md).
 
 ## The two surfaces
 
@@ -468,7 +464,7 @@ Two consequences worth internalising:
   stack trace under it.
 - **A ref is only meaningful on the page it came from.** Refs are unique within a walk, not
   across the web: the same link text in the same structural position on two unrelated pages
-  hashes to the same string. [docs/demo.md](docs/demo.md) shows exactly that happening.
+  hashes to the same string.
 
 ## The tools
 
