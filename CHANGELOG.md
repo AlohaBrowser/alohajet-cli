@@ -45,9 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `scripts/install.sh`, which pointed at a repository that does not hold this project, and
   `RELEASING.md` and `docs/development.md`, which described a state the code left behind.
-  `SECURITY.md` was split rather than dropped: the threat model is
-  [docs/threat-model.md](docs/threat-model.md) and the reporting channel is
-  [docs/SECURITY.md](docs/SECURITY.md).
+  The threat model is [docs/threat-model.md](docs/threat-model.md).
 - **Source-breaking.** `ClickableXYDecision` and `checkElementClickableXY` are gone; no
   tool reached them and nothing replaces them.
 - **Source-breaking.** Ten constants of the DOM serializer, the element-snapshot redactor

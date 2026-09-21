@@ -1,7 +1,6 @@
 # Threat model
 
-Read this before pointing alohajet at anything you are logged into. The reporting
-channel for a vulnerability is [SECURITY.md](SECURITY.md).
+Read this before pointing alohajet at anything you are logged into.
 
 **alohajet drives a real browser. It is not a sandbox, and it is not a
 security boundary.** The tools do what a person sitting at that browser could

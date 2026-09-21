@@ -38,5 +38,5 @@ the `exact:` pin in the README's library snippet on the same value.
 
 ## Security
 
-Do not report a vulnerability through a pull request or a public issue — see
-[SECURITY.md](SECURITY.md).
+Do not report a vulnerability through a pull request or a public issue. Use the
+repository's private advisory form.

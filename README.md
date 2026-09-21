@@ -5,8 +5,7 @@ libraries with no SwiftPM dependencies — the CLI is the one target that links 
 official MCP SDK, and only for `alohajet mcp --endpoint`.**
 
 [Tool reference](docs/tools.md) · [A real session](docs/demo.md) ·
-[Threat model](docs/threat-model.md) · [Contributing](docs/CONTRIBUTING.md) ·
-[Security](docs/SECURITY.md)
+[Threat model](docs/threat-model.md) · [Contributing](docs/CONTRIBUTING.md)
 
 Playwright was built to script a browser you control. alohajet is built to hand a browser
 to a model: it attaches to a Chromium that already exists — one it launched, or one you
@@ -609,8 +608,7 @@ same user can connect and read cookies or evaluate JavaScript on any origin. And
 notion of which host is acceptable exists**: `http://169.254.169.254/latest/meta-data/`,
 `http://192.168.1.1` and an internal hostname on your VPN are all valid `http` URLs and
 are all accepted. What is defended and what is deliberately not is set out per lane in
-[docs/threat-model.md](docs/threat-model.md); report a bypass through
-[docs/SECURITY.md](docs/SECURITY.md).
+[docs/threat-model.md](docs/threat-model.md).
 
 ## Using it as a library
 
