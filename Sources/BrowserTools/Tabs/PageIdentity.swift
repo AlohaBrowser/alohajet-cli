@@ -28,17 +28,20 @@ extension CDPTabHandle {
     /// settle: a page still committing reads as it is mid-way, and a later reading sees where it
     /// landed.
     public func pageIdentity() async -> PageIdentity {
-        // Inside the document, the way the page tools' receipts read it (`liveURL`, which also
-        // refreshes the cached `url`): nothing writes that cache on a click or on the page's own
-        // route change, and the frame tree's address is the Aloha browser's stored tab record,
-        // which can lag the live page.
-        let href = await AgentBrowserBridge(backend: CDPAgentBridgeBackend(tab: self)).liveURL()
+        // Inside the document, as the page tools' receipts read it: nothing writes the cached `url`
+        // on a click or on the page's own route change, and the frame tree's address is the Aloha
+        // browser's stored tab record, which can lag the live page. Read here, not through the
+        // receipts' `liveURL()`, which also stores what it read as the cached `url`. On a new tab
+        // still showing its blank placeholder, that store erases the address the tab's load wait
+        // expects — the overwrite `refreshTabMetadata` refuses — and the wait then passes the
+        // empty placeholder as the page.
+        let href = (try? await browserTab.getLayer().executeJavaScript("location.href"))?.stringValue
         let tree = try? await SessionScopedCDPTransport(session: session)
             .send(method: "Page.getFrameTree", params: [:])
         let loaderId = tree?["frameTree"]?["frame"]?["loaderId"]?.stringValue
+        // An empty value would make every page read as the same one.
         return PageIdentity(
-            address: href.map(droppingFragment),
-            // An empty id would make every document read as the same one.
+            address: href?.isEmpty == false ? href.map(droppingFragment) : nil,
             documentId: loaderId?.isEmpty == false ? loaderId : nil)
     }
 }

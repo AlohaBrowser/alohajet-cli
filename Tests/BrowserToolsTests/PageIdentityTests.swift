@@ -105,8 +105,8 @@ struct PageIdentityTests {
         let tab = try #require(fixture.tabsService.window?.tabs.tab(fixture.tabId) as? CDPTabHandle)
         fixture.cdp.locationHref = "https://example.com/a"
         fixture.cdp.mainFrameLoaderId = "loader-1"
-        // Read settled first, so the tab's cache holds this page, and so a `nil` below is not a
-        // reader that never reads anything.
+        // Read settled first, so a `nil` below is not a reader that never reads anything. The tab's
+        // cached url is this page, the one it was opened for, so a reader falling back to it lies.
         let settled = await tab.pageIdentity()
         #expect(settled.address == "https://example.com/a")
         #expect(settled.documentId == "loader-1")
