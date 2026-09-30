@@ -58,6 +58,20 @@ final class MockCDP {
     var pageUrl = "https://example.com"
     var pageTitle = "Example Domain"
 
+    /// What the page answers for `location.href`, the live address the page tools' receipts and
+    /// ``CDPTabHandle/pageIdentity()`` read. `nil` (the default) leaves that read falling through
+    /// to the plain `bodyText` catch-all, as every unscripted evaluate does.
+    var locationHref: String?
+
+    /// The document id (`loaderId`) `Page.getFrameTree` reports for the main frame. `nil` (the
+    /// default) keeps the empty `{}` every unscripted command gets.
+    var mainFrameLoaderId: String?
+
+    /// When true, every `Runtime.evaluate` fails the way Chromium fails one whose page navigated
+    /// under it: the document it would run in is gone. `Page.getFrameTree` still answers, since a
+    /// frame always names a document.
+    var navigationCommitting = false
+
     /// A scriptable navigation history for the history-back path: the entry urls
     /// and the index the fake page currently sits at. When `back` targets a prior
     /// entry the probe url advances to it so a real `goBack` reports the new url.
@@ -229,6 +243,17 @@ final class MockCDP {
         if method == "Runtime.evaluate", suppressEvaluateUntilNavigate, !didNavigate {
             return []
         }
+        // Chromium's wording, the one `AgentBrowserBridge.isBenignNavigationRace` matches.
+        if method == "Runtime.evaluate", navigationCommitting {
+            let response = JSValue.object([
+                ("id", .number(Double(id))),
+                ("error", .object([
+                    ("code", .number(-32000)),
+                    ("message", .string("Inspected target navigated or closed"))
+                ]))
+            ])
+            return [response.stringify()]
+        }
 
         // Keystrokes land in the focused field, the way they would on a real page, so the
         // type path's read-back has something true to find. `text` is only present on the
@@ -324,6 +349,14 @@ final class MockCDP {
             }
             return .object([("frameId", .string("frame-1"))])
 
+        case "Page.getFrameTree":
+            guard let loaderId = mainFrameLoaderId else { return .object([]) }
+            return .object([("frameTree", .object([("frame", .object([
+                ("id", .string("frame-1")),
+                ("loaderId", .string(loaderId)),
+                ("url", .string(pageUrl))
+            ]))]))])
+
         case "Network.getCookies":
             let entries = cookies.map { cookie in
                 JSValue.object([("name", .string(cookie.name)), ("value", .string(cookie.value))])
@@ -360,6 +393,12 @@ final class MockCDP {
                 return .object([("result", .object([
                     ("type", .string("string")),
                     ("value", .string("complete"))
+                ]))])
+            }
+            if expression == "location.href", let locationHref {
+                return .object([("result", .object([
+                    ("type", .string("string")),
+                    ("value", .string(locationHref))
                 ]))])
             }
             // The wake-path readyState probe expects an object back; report a
