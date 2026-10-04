@@ -151,4 +151,5 @@ in the agent repository's copy of this file.
 | 2026-10-01 | alohajet `85bc8e3` | anchor rule 0 writes `:rel-href` instead of `:sub-path` |
 | 2026-10-01 | alohajet `a9c4c17` | `[path=]`; exception 1 (`[selector=]` is the semantic anchor, `[matches=]` follows it, no `[index=]`) |
 | 2026-10-02 | alohajet `f6c3380` | exception 2's anchor half (a read with no list is addressed by its answer-free anchor) |
+| 2026-10-04 | alohajet-cli `fc182c5` | anchor rule 1a: an absolute or query-bearing href is an anchor candidate, verbatim, when it is the only link to that place |
 | 2026-10-04 | this package, PR `port/08-receipt-anchor` | the anchor rule, `[anchor=]`, `[anchor-nth=]`, `[path=]` and both exceptions move into `alohajet-cli` |
