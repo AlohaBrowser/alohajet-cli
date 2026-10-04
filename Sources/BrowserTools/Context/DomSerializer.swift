@@ -93,11 +93,19 @@ public struct OccluderRef: Sendable, Equatable {
     public var tag: String
     public var role: String?
     public var text: String?
-    public init(alohaId: String? = nil, tag: String, role: String? = nil, text: String? = nil) {
+    /// How many interactive nodes this cover hides (the walk counts them per cover).
+    public var coveredCount: Int?
+    /// How many controls the cover itself holds. A backdrop holds none and should be closed; a
+    /// panel, drawer or dialog holding controls is part of the page and should be USED.
+    public var controlCount: Int?
+    public init(alohaId: String? = nil, tag: String, role: String? = nil, text: String? = nil,
+                coveredCount: Int? = nil, controlCount: Int? = nil) {
         self.alohaId = alohaId
         self.tag = tag
         self.role = role
         self.text = text
+        self.coveredCount = coveredCount
+        self.controlCount = controlCount
     }
 }
 
@@ -814,15 +822,30 @@ public func occlusionLegend(_ nodes: [DomNode]) -> [String] {
         guard let occ = node.interactivity.occludedBy else { continue }
         let key = occlusionKey(occ)
         let marker = key.map { "[occ:\($0)]" } ?? "[occluded]"
-        var d = "\(marker) = overlay <\(occ.tag.isEmpty ? "element" : occ.tag.lowercased())>"
+        // A COVER THAT HOLDS CONTROLS IS A PANEL, NOT A LAYER TO DISMISS. Measured on a product
+        // page (2026-09-20): the sticky panel holding the colour swatches and the Add button was
+        // reported as an overlay to "dismiss/close"; the model clicked it four times trying to
+        // close it and never pressed Add. A backdrop or a cookie wall holds no controls and hides
+        // many nodes -- that one is closed. The two numbers the walk now records tell them apart.
+        let isPanel = (occ.controlCount ?? 0) > 0
+        var d = "\(marker) = \(isPanel ? "panel" : "overlay") <\(occ.tag.isEmpty ? "element" : occ.tag.lowercased())>"
         if let role = occ.role, !role.isEmpty { d += " role=\"\(role)\"" }
         if let raw = occ.text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
             let safe = raw.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\t", with: " ")
             d += " \"\(truncateText(safe, 60))\""
         }
-        d += key == nil
-            ? " — no aloha-id to address it by; dismiss it to interact with [occluded]-marked elements below"
-            : " — dismiss/close it to interact with \(marker)-marked elements below"
+        if isPanel {
+            let controls = occ.controlCount ?? 0
+            let covered = occ.coveredCount ?? 1
+            d += " — a panel with \(controls) control\(controls == 1 ? "" : "s") of its own, sitting in front of"
+                + " \(covered) element\(covered == 1 ? "" : "s") marked \(marker) below. It is part of the page,"
+                + " not something to dismiss: use ITS controls (listed under it), and only close it if the"
+                + " task needs what is beneath."
+        } else {
+            d += key == nil
+                ? " — no aloha-id to address it by; dismiss it to interact with [occluded]-marked elements below"
+                : " — dismiss/close it to interact with \(marker)-marked elements below"
+        }
         guard seen.insert(d).inserted else { continue }
         lines.append(d)
     }

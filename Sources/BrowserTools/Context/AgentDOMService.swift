@@ -1972,7 +1972,9 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
                 alohaId: occluder.string("alohaId"),
                 tag: occluder.string("tag") ?? "",
                 role: occluder.string("role"),
-                text: occluder.string("text")
+                text: occluder.string("text"),
+                coveredCount: occluder.number("coveredCount").map { Int($0) },
+                controlCount: occluder.number("controlCount").map { Int($0) }
             )
         }
     }
