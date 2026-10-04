@@ -405,8 +405,14 @@ final class MockCDP {
             // markers the probes carry for exactly this purpose.
             if expression.contains("/* receipt: focused element */")
                 || expression.contains("/* receipt: element text */")
-                || expression.contains("/* receipt: live selector */") {
+                || expression.contains("/* receipt: live selector */")
+                || expression.contains("/* receipt: anchor */") {
                 return .object([("result", .object([("type", .string("string")), ("value", .string(""))]))])
+            }
+            // The resolver is "already installed", so the anchor probe never ships the whole
+            // resolver source to the fake page.
+            if expression.contains("window.__snips.resolveAll === 'function'") {
+                return .object([("result", .object([("type", .string("string")), ("value", .string("y"))]))])
             }
             if expression.contains("/* receipt: main heading */") {
                 return .object([("result", .object([("type", .string("string")), ("value", .string("[]"))]))])

@@ -40,7 +40,7 @@ check('RECEIPTS.md lists no pseudo the resolver lacks', diff(docPseudos, resolve
 // Address builders may only write resolver pseudos or standard CSS ones.
 const CSS = new Set(['nth-of-type', 'nth-child', 'nth-last-of-type', 'nth-last-child', 'not', 'is', 'where', 'has']);
 const builders = ['Tabs/StepTraceSelector.swift', 'Tools/PageToolsSupport.swift', 'Tools/GetText.swift',
-  'Runtime/MainHeadingReceipt.swift', 'Runtime/ReceiptProbes.swift'];
+  'Runtime/MainHeadingReceipt.swift', 'Runtime/ReceiptProbes.swift', 'Runtime/ReceiptAnchor.swift'];
 const spelled = new Set();
 for (const f of builders) for (const m of read('Sources/BrowserTools/' + f).matchAll(/:([a-z][a-z-]*)\(/g)) spelled.add(m[1]);
 const unknown = [...spelled].filter(p => !resolverPseudos.has(p) && !CSS.has(p)).sort();
