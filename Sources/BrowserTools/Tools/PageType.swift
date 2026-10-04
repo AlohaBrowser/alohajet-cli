@@ -120,7 +120,7 @@ import ToolABI
             let urlBefore = bridge.currentPageURL()
             // Which element this was, in replayable terms — resolved before the action, since typing can
             // re-render the form and the snapshot would then hold a different node. See `PageToolReceipt`.
-            var selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
+            var selectorNote = await PageToolReceipt.liveNote(alohaId: alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_type")
             let typeResult = await bridge.type(alohaId, text, replace: replace)
             if typeResult.isError {
                 return resolved.tab.naming(RawToolResult(output: typeResult.output, isError: true))
@@ -132,7 +132,7 @@ import ToolABI
             let typedInto = "\"\(redirect?.id ?? alohaId)\""
             let redirectNote = Self.redirectNote(from: alohaId, to: redirect)
             if let redirect {
-                selectorNote = PageToolReceipt.selectorNote(alohaId: redirect.id, tab: resolved.cdpTab)
+                selectorNote = await PageToolReceipt.liveNote(alohaId: redirect.id, tab: resolved.cdpTab, bridge: bridge, tool: "page_type")
             }
             // Arms `page_click`'s duplicate-submit form read for THIS tab only -- a duplicate
             // submission needs a filled form, and a filled form needs typing. See `SubmittedForms`.
@@ -200,7 +200,7 @@ import ToolABI
             let receipt = RawToolResult(
                 output: "Typed into element \(typedInto) and pressed Enter to submit." + redirectNote
                     + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
-                    + selectorNote + hint,
+                    + selectorNote + PageToolReceipt.submittedNote + hint,
                 isError: nil)
             return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved))
         }
@@ -219,19 +219,41 @@ import ToolABI
         case let .success(resolved):
             let bridge = makePageBridge(resolved.cdpTab, context.signal)
             let urlBefore = bridge.currentPageURL()
+            // WHICH ELEMENT EACH FIELD WAS, in replayable terms, resolved BEFORE anything is typed:
+            // typing can re-render the form and the snapshot would then hold different nodes. The
+            // single-field path has carried this since `PageToolReceipt` existed; this path -- the
+            // one the batch hint tells the model to prefer -- carried only the ids, so a form
+            // filled the recommended way left the trace with no selector for any of its fields
+            // (measured on llmdex's mined trajectories, 2026-09-13: `page_type` receipts named a
+            // selector in 270 of 2120 results, `page_click` in 4370 of 8703).
+            var notes: [String: String] = [:]
+            for field in fields where notes[field.alohaId] == nil {
+                notes[field.alohaId] = await PageToolReceipt.liveNote(
+                    alohaId: field.alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_type", text: false)
+            }
             var filled: [String] = []
             var failures: [String] = []
+            // The ids the keystrokes actually went to, in order: a label's id becomes its field's.
+            var typedInto: [String] = []
             for field in fields {
                 let result = await bridge.type(field.alohaId, field.text, replace: field.replace)
                 if result.isError {
                     failures.append("\"\(field.alohaId)\": \(result.output)")
                 } else {
                     // The id the keystrokes went to, first; and when that is not the id the caller
-                    // passed, which one it was resolved from, so the next call passes the field.
+                    // passed, which one it was resolved from, so the next call passes the field. The
+                    // selector rides after it, per field, in the same bracket form the other
+                    // receipts use -- the field's own when the id named its label (the snapshot read
+                    // is still the pre-typing one here).
                     if let redirect = Self.redirect(in: result) {
-                        filled.append("\(redirect.id) (the <\(redirect.tag)> that \(field.alohaId) labels; use it from now on)")
+                        let note = await PageToolReceipt.liveNote(
+                            alohaId: redirect.id, tab: resolved.cdpTab, bridge: bridge, tool: "page_type", text: false)
+                        notes[redirect.id] = note
+                        typedInto.append(redirect.id)
+                        filled.append("\(redirect.id) (the <\(redirect.tag)> that \(field.alohaId) labels; use it from now on)" + note)
                     } else {
-                        filled.append(field.alohaId)
+                        typedInto.append(field.alohaId)
+                        filled.append(field.alohaId + (notes[field.alohaId] ?? ""))
                     }
                     submittedForms.noteTyped(resolved.tab.id, scope: context.sessionId)
                 }
@@ -270,9 +292,18 @@ import ToolABI
             // Settled, like the single-field submit above: the Enter is what navigates, and an
             // immediate read names the page the form was submitted from.
             let urlFinal = await bridge.settledPageURL(after: urlBefore)
+            // WHICH FIELD THE ENTER WENT INTO. With two or more `[selector=…]` groups in the fields
+            // list and one `[submitted=enter]` at the end, a mint could not bind the submit to a
+            // field (agent run osm-form-r2, 2026-09-23: it distilled `submit form` and refused
+            // itself). Enter is pressed where the caret is -- the field typed LAST -- so that
+            // field's selector is repeated right before the token, in the sentence the
+            // single-field and press-keys receipts already use.
+            let submitBinding = typedInto.last.map { " Pressed Enter in element \"\($0)\"." + (notes[$0] ?? "") } ?? ""
             let receipt = RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", ")) "
                                         + "and pressed Enter to submit."
-                                        + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlFinal),
+                                        + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlFinal)
+                                        + submitBinding
+                                        + PageToolReceipt.submittedNote,
                                         isError: nil)
             return await withPageSnapshot(receipt, context, resolved)
         }

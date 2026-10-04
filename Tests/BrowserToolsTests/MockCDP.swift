@@ -398,6 +398,19 @@ final class MockCDP {
             if expression.contains("collectDomTree("), let domTreeReply {
                 return .object([("result", .object([("type", .string("object")), ("value", .array(domTreeReply))]))])
             }
+            // THE ACTION RECEIPT PROBES (`ReceiptProbes.swift`, `MainHeadingReceipt.swift`) answer
+            // "nothing found": no element has focus, no text, no live path, no heading. Each treats
+            // a non-empty string as a finding -- the body text would become the focused element's
+            // aloha-id, or a `[text="Example Domain"]` on every receipt. Recognised by the comment
+            // markers the probes carry for exactly this purpose.
+            if expression.contains("/* receipt: focused element */")
+                || expression.contains("/* receipt: element text */")
+                || expression.contains("/* receipt: live selector */") {
+                return .object([("result", .object([("type", .string("string")), ("value", .string(""))]))])
+            }
+            if expression.contains("/* receipt: main heading */") {
+                return .object([("result", .object([("type", .string("string")), ("value", .string("[]"))]))])
+            }
             // THE CLICK RECEIPT PROBES answer "" -- nothing covered, nothing hidden, no control
             // state, no form values -- rather than the body-text default below. Each of them treats
             // a non-empty string as a finding ("a layer was hidden", "the click was delivered to
