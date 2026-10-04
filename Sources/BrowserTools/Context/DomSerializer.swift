@@ -21,11 +21,35 @@ public struct DomInputData: Sendable {
     public var placeholder: String?
     public var required: Bool
     public var disabled: Bool?
-    public init(type: String? = nil, placeholder: String? = nil, required: Bool = false, disabled: Bool? = nil) {
+    /// WHAT THE FIELD ACTUALLY CONTAINS. The in-page walker has always captured it
+    /// (`extractInputData`), `parseDomNode` never read `inputData` at all, and the serializer
+    /// therefore rendered `input("From")` whether the box was empty, held `01/01/2023`, or held
+    /// `1/1/23`.
+    ///
+    /// So an agent could not verify anything it typed, on any site. Measured on WebArena rows
+    /// 705-713, whose `program_html` gold is the field's exact value
+    /// (`document.querySelector('[id="sales_report_from"]').value`, exact_match "1/1/2023"): the
+    /// model was graded on a string it was structurally unable to read. Its context showed the
+    /// same `input("From")` line on steps 3 through 11 while it typed, saw no change, and typed
+    /// again. A taught rule in that same context instructs "THEN READ THE FIELD BACK AND LEAVE
+    /// WHAT IT SHOWS" -- an instruction the serializer made impossible to follow.
+    ///
+    /// `<select>` has always rendered its current selection. This is the same courtesy for the
+    /// controls whose whole purpose is to hold a value.
+    public var value: String?
+    /// Set at parse time for a field whose contents must never be serialized into a model's
+    /// context: a password box, or one a site marks as a credential/payment field. The value is
+    /// replaced by a marker, so the model still learns the field is FILLED without being handed
+    /// what is in it.
+    public var isSecret: Bool
+    public init(type: String? = nil, placeholder: String? = nil, required: Bool = false,
+                disabled: Bool? = nil, value: String? = nil, isSecret: Bool = false) {
         self.type = type
         self.placeholder = placeholder
         self.required = required
         self.disabled = disabled
+        self.value = value
+        self.isSecret = isSecret
     }
 }
 
@@ -781,6 +805,17 @@ private func interactiveLabel(_ node: DomNode) -> String {
     return text.isEmpty ? "" : truncateText(text, interactiveLabelCap)
 }
 
+/// How much of a field's contents to show. A date, a title or a search term fits; a 5,000-char
+/// post body would otherwise double the observation on its own. Past the cap the text is cut and
+/// the real length named, so the model can tell "my long body is in there" without paying for it.
+let inputValueCap = 120
+
+/// Compact, human-readable form of an `<input>` control, e.g. `input(date, placeholder="MM/DD/YYYY",
+/// "From", value="01/01/2023")`.
+///
+/// `value=` is rendered only when the field is NON-EMPTY, which is what keeps this from taxing
+/// every page: a form of blank boxes serializes exactly as it did before, and a field only earns
+/// its extra characters once it has contents worth confirming.
 private func renderInputControl(_ node: DomNode) -> String {
     var parts: [String] = []
     let data = node.content.inputData
@@ -791,7 +826,21 @@ private func renderInputControl(_ node: DomNode) -> String {
     if data?.required == true { parts.append("required") }
     let label = interactiveLabel(node)
     if !label.isEmpty { parts.append("\"\(label)\"") }
+    if let rendered = renderInputValue(data) { parts.append(rendered) }
     return "input(\(parts.joined(separator: ", ")))"
+}
+
+/// `value="..."` for a filled field, `value=(hidden)` for a secret one, nil for an empty one.
+func renderInputValue(_ data: DomInputData?) -> String? {
+    guard let data, let raw = data.value else { return nil }
+    let text = normalizeWhitespace(raw)
+    guard !text.isEmpty else { return nil }
+    if data.isSecret { return "value=(hidden)" }
+    if text.count > inputValueCap {
+        let head = String(text.prefix(inputValueCap))
+        return "value=\"\(head)\u{2026}\" (\(text.count) chars)"
+    }
+    return "value=\"\(text)\""
 }
 
 /// Renders an interactive element as compact markdown plus its actionable trailer, so the
@@ -831,7 +880,21 @@ func emitInViewportElement(_ node: DomNode, _ depth: Int, _ nodesById: [String: 
         c = current.isEmpty ? "select" : "select \"\(truncateLabel(current, 40))\""
     case "textarea":
         let label = interactiveLabel(node)
-        c = label.isEmpty ? "textarea" : "textarea(\"\(label)\")"
+        // A TEXTAREA'S CONTENTS. `<input>` renders `value=` and `<select>` always rendered its
+        // selection; the one control whose entire purpose is to hold a long piece of text was
+        // the one printing only its label, so an agent could not read back a single character
+        // of a post body it had just typed. Measured on run 34345778871: `textarea("Body")` was
+        // rendered 55 times, never once with its contents, while
+        // `unverified_write_share_of_answers` stood at 0.67.
+        //
+        // The walk has always carried the value (`extractInputData` has a `textarea` branch),
+        // so this reads what is already in hand. `renderInputValue` owns the whole policy --
+        // the cap, the "(N chars)" tail and `value=(hidden)` for a secret -- and an EMPTY
+        // textarea still renders exactly as it did before.
+        var textareaParts: [String] = []
+        if !label.isEmpty { textareaParts.append("\"\(label)\"") }
+        if let rendered = renderInputValue(node.content.inputData) { textareaParts.append(rendered) }
+        c = textareaParts.isEmpty ? "textarea" : "textarea(\(textareaParts.joined(separator: ", ")))"
     default:
         let label = interactiveLabel(node)
         c = "[\(label)]"

@@ -1810,6 +1810,36 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
             }
             content.optionData = DomOptionData(options: options, multiple: optionValue.bool("multiple") ?? false)
         }
+        // THE FIELD'S CONTENTS, which this function had been dropping since it was written. The
+        // walker sends `content.inputData` with a `value`; nothing read it, so every `<input>`
+        // serialized identically whether it was empty or full and no agent could confirm a thing
+        // it typed. See `DomInputData.value` for the measurement.
+        //
+        // DELIBERATELY PARTIAL. `type` is stored ONLY when it is not the default `text`: `date`
+        // (ISO by spec), `datetime-local`, `month`, `number`, `email`, `tel`, `url` each tell the
+        // agent what the field will accept, while printing `text` on every ordinary box would be
+        // noise on every page. `placeholder` is the format the page itself advertises (the greyed
+        // `MM/DD/YYYY` a human can see). `required` and `disabled` stay unparsed: storing
+        // `disabled` would silently change `isElementDisabled` across the whole serializer.
+        if let inputValue = contentValue["inputData"], case .object = inputValue {
+            let rawType = (inputValue.string("type") ?? "").lowercased()
+            let autocomplete = (inputValue.string("autocomplete") ?? "").lowercased()
+            let value = inputValue.string("value")
+            // Secrets never leave the page. A password type, a field the SITE marks as a
+            // credential or payment field via `autocomplete`, or a value the page-side predicate
+            // (`__alohaIsSensitiveField`) already replaced with its mask: all render as
+            // `value=(hidden)`, so the model learns the field is FILLED and nothing more.
+            let secret = rawType == "password"
+                || autocomplete.contains("password")
+                || autocomplete.hasPrefix("cc-")
+                || value == sensitiveFieldMaskText
+            let storedType = (rawType.isEmpty || rawType == "text") ? nil : rawType
+            content.inputData = DomInputData(
+                type: storedType,
+                placeholder: inputValue.string("placeholder"),
+                value: value,
+                isSecret: secret)
+        }
     }
 
     var interactivity = DomInteractivity()

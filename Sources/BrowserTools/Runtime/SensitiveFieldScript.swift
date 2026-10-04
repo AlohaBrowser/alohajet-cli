@@ -46,3 +46,8 @@ function __alohaIsSensitiveField(el) {
 /// string assumes the field is empty and types into it again; one that sees this knows
 /// the field has a value it is not allowed to read.
 nonisolated let sensitiveFieldMaskJS = "'[redacted: credential field]'"
+
+/// The same mask as the Swift side sees it once the page has sent it back: `parseDomNode` treats
+/// a field holding exactly this text as secret, so it renders `value=(hidden)` like a password
+/// rather than quoting the mask as if it were the field's contents.
+nonisolated let sensitiveFieldMaskText = "[redacted: credential field]"
