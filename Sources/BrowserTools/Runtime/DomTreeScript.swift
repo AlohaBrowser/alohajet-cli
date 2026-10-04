@@ -97,6 +97,56 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     return null;
   }
 
+  // THE NAME THE PAGE ALREADY GAVE THIS CONTROL. A form control has no text of its own, so
+  // `interactiveLabel` finds nothing for it and the serializer renders a bare `input()`; the
+  // control's `<label>` is emitted as its own line instead, leaving the model to pair the two by
+  // position. Measured on WebArena run 33868469638: across 371 Magento admin observations, 564
+  // unnamed `input()` against 1,159 named ones and 1,956 labels standing on their own line -- one
+  // guess per label, every read.
+  //
+  // Postmill's submit form is what that guessing costs. Its labels FOLLOW their controls (a CSS
+  // ordering choice), so on tasks 647/649 the model typed the title into `#submission_url` and the
+  // body into `#submission_title`, left the required title empty, and every submit was refused --
+  // 337 refusal notes naming `submission[title]`, and nothing ever posted.
+  //
+  // Resolution order is the accessible-name order the HTML spec already defines: an explicit
+  // `label[for=id]`, then a `<label>` wrapping the control, then `aria-labelledby`. Written into
+  // `aria-label` so ONE assignment fixes every consumer -- `input("Title")`, `findByText`, the
+  // click receipts -- rather than teaching each of them the lookup.
+  function findAssociatedLabelText(element) {
+    if (!element) return null;
+    const clean = (raw) => {
+      const text = (raw || "").replace(/\s+/g, " ").trim();
+      return text ? text : null;
+    };
+    try {
+      // `element.labels` IS the association the HTML spec defines: it covers an explicit
+      // `label[for=id]` AND a `<label>` wrapping the control, in one property, with no id
+      // escaping and no document query of our own. Undefined on anything that cannot be
+      // labelled, which the guard treats as "no name".
+      const own = element.labels;
+      if (own && own.length) {
+        for (let i = 0; i < own.length; i++) {
+          const text = clean(own[i].textContent);
+          if (text) return text;
+        }
+      }
+      const referenced = element.getAttribute ? element.getAttribute("aria-labelledby") : null;
+      if (referenced) {
+        const parts = [];
+        const tokens = referenced.split(/\s+/);
+        for (let i = 0; i < tokens.length; i++) {
+          if (!tokens[i]) continue;
+          const target = element.ownerDocument.getElementById(tokens[i]);
+          const text = target && clean(target.textContent);
+          if (text) parts.push(text);
+        }
+        if (parts.length) return clean(parts.join(" "));
+      }
+    } catch (e) {}
+    return null;
+  }
+
   function getElementData(element) {
     if (!element) return null;
     if (caches.elementData.has(element)) return caches.elementData.get(element) || null;
@@ -1728,7 +1778,10 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         }
       try {
         if (!descriptor.attributes["aria-label"] && !element.textContent) {
-          const inferred = findDescendantAriaLabel(element);
+          // The page's own association first; a descendant's aria-label is the weaker guess and
+          // stays as the fallback it always was.
+          const labelled = findAssociatedLabelText(element);
+          const inferred = labelled || findDescendantAriaLabel(element);
           if (inferred) descriptor.attributes["aria-label"] = inferred;
         }
       } catch {}
