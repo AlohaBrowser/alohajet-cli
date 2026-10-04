@@ -1278,6 +1278,80 @@ public final class AgentDOMService {
     /// a head-biased head+tail slice around a middle marker — top-of-page context plus
     /// the page's trailing interactive elements. Returns the (possibly truncated)
     /// markdown and the token count to report for it.
+    /// The page's typable fields, named with the id to type into.
+    ///
+    /// WHY THIS EXISTS. An agent that cannot see a field cannot fill it, and on Postmill's
+    /// submit form the body textarea is missing from the rendered markdown on 588 of 1355
+    /// observations (43%) -- measured on llmdex runs 34314082894 and 34276664037, on the SAME
+    /// urls that render it on the other 767, so it is not page structure. What the model sees
+    /// in its place is the neighbouring hint text:
+    ///
+    ///     Body                                     Body
+    ///     textarea("Body") {aloha-id=...}     vs    Markdown allowed.
+    ///
+    /// It then types the post body into the "Markdown allowed." span, `page_type` refuses it
+    /// correctly, and -- because the submit was issued in the same round -- the post is created
+    /// with an empty body. WebArena tasks 627 reps 0 and 1 lost their body exactly that way.
+    ///
+    /// THE WALK ALREADY HAD THE FIELD. In 14 of 14, 16 of 16 and 3 of 3 attempts across three
+    /// runs, an observation whose markdown lacked the body textarea coexisted with a `page_type`
+    /// refusal naming a body id FROM THE SAME RENDER (same generation prefix). So the walker
+    /// id'd the element and the SERIALIZER dropped it; widening the walker's visibility gate
+    /// could not have helped.
+    ///
+    /// SO THIS READS `nodes`, NOT THE DOM. It costs no query: the walk has already visited every
+    /// element and this is the array it returned. A document-wide `querySelectorAll` per call
+    /// turned nav-33 at concurrency 16 into 25 timed-out attempts with a median wall of 382 s
+    /// against 126 s; per observation would be the same mistake.
+    ///
+    /// `[not in the view above]` marks a field whose id does not appear in `view`, the rendered
+    /// markdown AFTER the token cap. That is the model's actual view, so the marker answers the
+    /// question it claims to -- "can you find this id above?" -- and covers both ways a field
+    /// goes missing: the serializer dropping its line (112 of 114 on run 34340506674) and the cap
+    /// trimming it (the other 2). An earlier version keyed the marker on the walker's
+    /// `isHighlighted` flag, which fired only on fields that are never highlighted at all and
+    /// never once on the body textarea the whole exercise is about.
+    ///
+    /// NO `<select>`. The heading says "pass one of these ids to page_type", and a select is a
+    /// page_select target. Listing them turned the inventory into a menu, and the model reached
+    /// for the only select Postmill's submit form offers -- `submission[userFlag]`, advertised
+    /// 215 and 308 times across two runs while the forum select rendered zero -- and tried to
+    /// choose the forum on it: `No option with label "sports"`, 160 and 193 times per run. If a
+    /// task ever needs a select the view does not show, the answer is a second line with the
+    /// right verb, not this one relabelled.
+    ///
+    /// Only text-accepting fields, matching `page_type`'s own `eligible()`: no hidden inputs, no
+    /// checkboxes or radios, no passwords -- which is also where honeypots and CSRF tokens live,
+    /// and Postmill's submit form carries a `submission[email]` trap.
+    ///
+    /// Bounded: at most one `contains` per emitted line, and the loop stops at twelve.
+    static func formFieldTrailer(_ nodes: [DomNode], renderedInto view: String) -> String {
+        let nonText: Set<String> = [
+            "hidden", "checkbox", "radio", "submit", "button", "reset",
+            "file", "image", "range", "color", "password",
+        ]
+        var lines: [String] = []
+        for node in nodes {
+            let tag = node.element.tagName.lowercased()
+            guard tag == "textarea" || tag == "input" else { continue }
+            if node.id.isEmpty { continue }
+            // `type` and `placeholder` are ATTRIBUTES: `DomElement` carries only tagName,
+            // attributes, textContent and childText, and the walker copies every attribute of
+            // an interactive element. `inputData.type` is deliberately partial (nil for `text`)
+            // and is not what `page_type`'s eligibility check looks at.
+            let attrs = node.element.attributes
+            if tag == "input", nonText.contains((attrs["type"] ?? "").lowercased()) { continue }
+            let raw = attrs["name"] ?? attrs["aria-label"] ?? attrs["placeholder"] ?? ""
+            let name = raw.isEmpty ? "" : " (" + String(raw.prefix(40)) + ")"
+            let hidden = view.contains(node.id) ? "" : "  [not in the view above]"
+            lines.append("  " + node.id + name + " " + tag + hidden)
+            if lines.count >= 12 { break }
+        }
+        if lines.isEmpty { return "" }
+        return "FORM FIELDS ON THIS PAGE \u{2014} pass one of these ids to page_type:\n"
+            + lines.joined(separator: "\n")
+    }
+
     static func cappedObservation(markdown: String, tokenCount: Int, cap: Int?) -> (markdown: String, tokenCount: Int) {
         guard let cap, cap > 0 else { return (markdown, tokenCount) }
         let estTokens = tokenCount > 0 ? tokenCount : (markdown.count + 3) / 4
@@ -1378,6 +1452,11 @@ public final class AgentDOMService {
                 markdown: markdown, tokenCount: tokenCount, cap: Self.maxObservationTokens())
             markdown = cappedObs.markdown
             tokenCount = cappedObs.tokenCount
+            // APPENDED AFTER THE CAP, deliberately. The trailer is the part of an observation
+            // a form task cannot proceed without, so it must not be what the cap trims; it is
+            // bounded at twelve lines instead. See `formFieldTrailer`.
+            let fields = Self.formFieldTrailer(nodes, renderedInto: markdown)
+            if !fields.isEmpty { markdown += "\n" + fields }
 
             var screenshot: String?
             var screenshotError: String?
