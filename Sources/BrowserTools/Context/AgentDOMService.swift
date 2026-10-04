@@ -1373,8 +1373,30 @@ public final class AgentDOMService {
         let tail = tailChars > 0 ? String(markdown.suffix(tailChars)) : ""
         let hiddenChars = markdown.count - head.count - tail.count
         guard hiddenChars > 0 else { return (markdown, tokenCount) }
+        // HOW MANY TABLE ROWS WENT MISSING, said outright.
+        //
+        // The cap keeps the head and the TAIL, so a truncated page still ends in its footer and
+        // reads as complete. On a grid that is exactly wrong: the head holds the first rows, the
+        // tail holds the footer, and the rows between them -- the answer -- are what is dropped.
+        // Run 33948730992, task 184 ("give me the name of the products that have 0 units left"):
+        // the model filtered the grid correctly in ONE navigation
+        // (filters[qty][from]=0, filters[qty][to]=0, paging[pageSize]=200), then answered from the
+        // 8-9 rows that survived the cap. Three reps truncated at slightly different points and
+        // returned three different product lists, none right, none aware it was reading part of a
+        // table. A row count is the one thing that turns "some text is hidden" into "your list is
+        // incomplete". Prose keeps the old wording, so a page that was merely long is not accused
+        // of hiding a list it never had.
+        let hiddenSlice = markdown.dropFirst(head.count).dropLast(tail.count)
+        let hiddenRows = hiddenSlice.split(separator: "\n")
+            .filter { $0.trimmingCharacters(in: .whitespaces).hasPrefix("|") }
+            .count
+        let rowNote = hiddenRows > 0
+            ? " INCLUDING \(hiddenRows) TABLE ROW\(hiddenRows == 1 ? "" : "S") \u{2014} the list you can see is INCOMPLETE,"
+              + " so do not answer from it: narrow the filter, sort so the rows you need come"
+              + " first, or reduce the page size until the whole table fits"
+            : " scroll or read a specific section for detail"
         let capped = head
-            + "\n\n… [observation truncated: ~\(estTokens - cap) tokens / \(hiddenChars) chars hidden to fit the context budget; scroll or read a specific section for detail] …\n\n"
+            + "\n\n… [observation truncated: ~\(estTokens - cap) tokens / \(hiddenChars) chars hidden to fit the context budget;\(rowNote)] …\n\n"
             + tail
         return (capped, cap)
     }
