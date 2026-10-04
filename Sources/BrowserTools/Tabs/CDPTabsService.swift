@@ -768,6 +768,17 @@ public final class CDPTabsModel: TabsModel {
         for info in infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
             let url = info["url"]?.stringValue ?? ""
+            // ONLY WEB PAGES ARE TABS THE AGENT MAY DRIVE. A browser's own screens — a passcode
+            // lock (`aloha://passcode_lock_screen`), settings, `chrome://` pages — are `page`
+            // targets too, and seeding them as "website" tabs put them in the tab list as if
+            // they were sites. MEASURED (hn-swift-r13/r14, 2026-09-23): the model listed the
+            // tabs, took the passcode screen into use, navigated it to Hacker News and searched
+            // there; the "98 comments" link then never navigated — three clicks in a row, in two
+            // runs — while the same click in an agent-opened tab navigates every time. The same
+            // rule the click-spawned adoption below already applies: an http(s) URL, or the
+            // initial `about:blank` (a blank tab is a tab, and a fresh browser starts on one).
+            let trimmedUrl = url.trimmingCharacters(in: .whitespaces)
+            if trimmedUrl != "about:blank", case .rejected = validateOpenUrl(url) { continue }
             let title = info["title"]?.stringValue
             let session = CDPTabSession(client: client, targetId: targetId, sessionId: nil, url: url, title: title)
             let handle = CDPTabHandle(
