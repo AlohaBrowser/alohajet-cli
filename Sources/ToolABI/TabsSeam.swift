@@ -88,6 +88,27 @@ public protocol PageReadRemediating: AnyObject {
     func remediateAfterRead(_ signal: AbortSignal?) async -> Bool
 }
 
+/// Remembering what a tab was ASKED to open, which is not where it ends up. Kept off
+/// ``TabHandle`` and probed with `as?`, like the seams above: a handle nobody opened through
+/// `manage_tabs open` has nothing to remember.
+///
+/// `manage_tabs open` reuses a tab of this session that already shows the requested page, and
+/// it compares the request against the tab's CURRENT url. That misses whenever the server moved
+/// the tab after it opened: measured over 260 opens on one run, 12% landed on a path differing
+/// only in CASE (`/submit/earthporn` -> `/submit/EarthPorn`), and once the trailing-slash case
+/// was folded, that became the dominant cause of duplicate tabs — the same page re-opened 12 and
+/// 9 times in one run. Case cannot be folded safely, because paths are case-sensitive by spec and
+/// a server where those are two pages is legal. Remembering the request removes the guess: a
+/// later ask for `/submit/earthporn` matches the tab that was OPENED for `/submit/earthporn`,
+/// exactly, whatever the server did to it afterwards.
+///
+/// On the handle rather than in a registry keyed by tab id, so the record lives and dies with
+/// the tab and two models in one process cannot see each other's entries.
+public protocol OpenRequestRemembering: AnyObject {
+    /// The URL `manage_tabs open` created this tab for; `nil` for a tab that was not.
+    var requestedOpenURL: String? { get set }
+}
+
 public protocol TabHandle: AgentControllableTab {
     var id: String { get }
     var title: String? { get }
@@ -164,6 +185,44 @@ public protocol TabsService: AnyObject {
     var window: TabsWindow? { get }
 }
 
+// MARK: - Tab housekeeping policy
+
+/// What `manage_tabs` does to the agent's OWN tabs beyond what it was asked, and what a turn
+/// may do to them when it ends. Every switch is OFF by default.
+///
+/// These are behaviours for a setting where the page the agent ENDS ON is what gets graded —
+/// the WebArena-style benches read `final_url` from an arbitrary CDP context, so each tab left
+/// standing is another way to be scored on a page the agent abandoned, and closing the tab the
+/// work is on throws the work away. An ordinary user's session has no such grader: a tab closed
+/// under the user is a tab lost, and a refusal to close one is a tool that does not do what it
+/// was told. So nothing here runs unless the host turns it on; the batch harness does.
+public nonisolated struct TabHousekeepingPolicy: Sendable, Equatable {
+    /// How many agent tabs this session may keep open at once; `open` closes the OLDEST
+    /// beyond it, never the active tab or the one just opened. `nil` means no cap.
+    public var maxAgentTabs: Int?
+    /// `close` refuses the most specific page this session has reached, and its last tab.
+    public var refuseClosingWorkPage: Bool
+    /// The caller may collapse this session's tabs to the one worth keeping when a turn ends
+    /// (`collapseAgentTabsAtTurnEnd`); the trigger itself lives in the host's turn runner.
+    public var collapseAtTurnEnd: Bool
+
+    public init(maxAgentTabs: Int? = nil, refuseClosingWorkPage: Bool = false, collapseAtTurnEnd: Bool = false) {
+        self.maxAgentTabs = maxAgentTabs
+        self.refuseClosingWorkPage = refuseClosingWorkPage
+        self.collapseAtTurnEnd = collapseAtTurnEnd
+    }
+
+    /// Nothing on: the default, and the right setting for a user's browser.
+    public static let off = TabHousekeepingPolicy()
+
+    /// Every switch on, with the cap measured for the final-URL benches: THREE, because a task
+    /// can legitimately need two pages at once (a source and a destination) and the cap has to
+    /// leave room for that working set plus one. Closing below it would trade a grading bug for
+    /// a capability loss.
+    public static let finalPageGraded = TabHousekeepingPolicy(
+        maxAgentTabs: 3, refuseClosingWorkPage: true, collapseAtTurnEnd: true)
+}
+
 // MARK: - Browser tool services
 
 /// The bundle of services a browser tool reads from its execution context. Both
@@ -173,21 +232,26 @@ public protocol TabsService: AnyObject {
 /// execution context it is threaded through.
 ///
 /// `open` rather than `final`: a host whose own bundle carries dozens of service
-/// handles subclasses this instead of either side widening — these three are the
+/// handles subclasses this instead of either side widening — these four are the
 /// only ones the tools in this package read.
 open class NativeToolServices {
     public let tabsService: TabsService?
     public let session: ChatModeSession?
     /// The toggleable web-extraction options read by the `manage_tabs` read path.
     public let webExtractionOptions: AgentWebExtractionOptions
+    /// What `manage_tabs` may do to the agent's own tabs unasked. `.off` unless the host
+    /// says otherwise — see ``TabHousekeepingPolicy``.
+    public let tabHousekeeping: TabHousekeepingPolicy
 
     public init(
         tabsService: TabsService? = nil,
         session: ChatModeSession? = nil,
-        webExtractionOptions: AgentWebExtractionOptions = .baseline
+        webExtractionOptions: AgentWebExtractionOptions = .baseline,
+        tabHousekeeping: TabHousekeepingPolicy = .off
     ) {
         self.tabsService = tabsService
         self.session = session
         self.webExtractionOptions = webExtractionOptions
+        self.tabHousekeeping = tabHousekeeping
     }
 }

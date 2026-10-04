@@ -46,7 +46,7 @@ final class CDPAgentDOMSnapshotting: AgentDOMSnapshotting {
 /// A ``TabHandle`` over a CDP page target. It owns the target session, an
 /// ``AgentDOMService`` (for interactive snapshots, click, type, etc.), and the
 /// agent-control flags the tab tools read and set.
-public final class CDPTabHandle: TabHandle, StepTraceTab {
+public final class CDPTabHandle: TabHandle, StepTraceTab, OpenRequestRemembering {
     let session: CDPTabSession
     let browserTab: CDPBrowserTab
     /// The tab's DOM driver. Public because a host's `onTabCreated` hook wires its own
@@ -69,6 +69,10 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// at construction: `true` for a target seeded from the browser, restored, or
     /// adopted live; `false` for one this session opened or a click spawned.
     public let openedByHuman: Bool
+    /// What `manage_tabs open` asked this tab to show — see ``OpenRequestRemembering``.
+    /// Written by the open path, never by a navigation: the point is to keep the ASK after
+    /// the server has moved the page.
+    public var requestedOpenURL: String?
 
     /// Fired after every ``setAIControlledTab`` with the flags as they now stand. The
     /// hook a host hangs a per-tab navigation guard off: the guard installs when the tab
@@ -463,6 +467,37 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         try await waitForTabLoad(timeoutMs: 10_000, signal: signal)
     }
 
+    /// Settles after a navigation a SCENARIO made, the way the agent's own navigation settles.
+    ///
+    /// `navigateToURL` awaits the main-frame load and returns. That is enough for a reader, and
+    /// not enough for a writer: a page whose scripts bind their handlers after load — an admin
+    /// console assembling its forms through a module loader is the ordinary case — answers a
+    /// click dispatched at that moment by doing nothing, and the step reports success because the
+    /// click WAS dispatched onto a resolved element.
+    ///
+    /// Measured on llmdex run 34853019475: a scenario that navigated to a report, typed both
+    /// dates and clicked Show Report finished in 24 seconds with every step dispatched clean, and
+    /// both attempts ended on the unsubmitted form. The agent doing the same work by hand took 52
+    /// to 89 seconds and submitted it, because `page_navigate` waits for network idle and DOM
+    /// stability (`CDPBrowserBacking.awaitReady`) and a scenario's navigate did not. Over that
+    /// run, 15 answers were given with a form in an invalid state; the control run with saved
+    /// automations switched off carried none.
+    ///
+    /// The tuning is the navigation path's own: a quiet network of at most two in-flight
+    /// requests for 500ms, 400ms without DOM mutation, never less than 500ms, and never more than
+    /// 12 seconds. Best-effort by contract — a timeout returns, it does not throw, because a page
+    /// that never goes quiet must still be typed into.
+    public func settleAfterScenarioNavigation(signal: AbortSignal?) async {
+        _ = await waitForReady(
+            PageReadinessOptions(
+                networkIdleThreshold: 2,
+                networkIdleTimeMs: 500,
+                domStableTimeMs: 400,
+                minWaitTimeMs: 500,
+                timeoutMs: 12_000),
+            signal: signal)
+    }
+
     /// Settles after a navigation: awaits the real main-frame load, refreshing the
     /// cached url/title, bounded by `timeoutMs`. Shares `waitForMainFrameLoad` with
     /// the read gate so both observe the *real* navigation lifecycle rather than
@@ -768,6 +803,17 @@ public final class CDPTabsModel: TabsModel {
         for info in infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
             let url = info["url"]?.stringValue ?? ""
+            // ONLY WEB PAGES ARE TABS THE AGENT MAY DRIVE. A browser's own screens — a passcode
+            // lock (`aloha://passcode_lock_screen`), settings, `chrome://` pages — are `page`
+            // targets too, and seeding them as "website" tabs put them in the tab list as if
+            // they were sites. MEASURED (hn-swift-r13/r14, 2026-09-23): the model listed the
+            // tabs, took the passcode screen into use, navigated it to Hacker News and searched
+            // there; the "98 comments" link then never navigated — three clicks in a row, in two
+            // runs — while the same click in an agent-opened tab navigates every time. The same
+            // rule the click-spawned adoption below already applies: an http(s) URL, or the
+            // initial `about:blank` (a blank tab is a tab, and a fresh browser starts on one).
+            let trimmedUrl = url.trimmingCharacters(in: .whitespaces)
+            if trimmedUrl != "about:blank", case .rejected = validateOpenUrl(url) { continue }
             let title = info["title"]?.stringValue
             let session = CDPTabSession(client: client, targetId: targetId, sessionId: nil, url: url, title: title)
             let handle = CDPTabHandle(
