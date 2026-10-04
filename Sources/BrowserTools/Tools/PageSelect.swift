@@ -46,6 +46,9 @@ import ToolABI
             // commonly re-renders dependent controls. See `PageToolReceipt`.
             let selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
             let result = await bridge.selectOptionById(alohaId, text: text, index: index)
+            // A select-only form is a filled form: arm `page_click`'s duplicate-submit read for this
+            // tab the way `page_type` does. See `SubmittedForms`.
+            if !result.isError { submittedForms.noteTyped(resolved.tab.id, scope: context.sessionId) }
             // Settled, not immediate. A select that fires an onchange navigation — Magento's
             // sort-order and page-size controls both do — commits after this line, so an immediate
             // read names the page the select just left.
@@ -65,8 +68,12 @@ import ToolABI
             // dependent controls or navigates voids the ids the model holds -- see `withPageSnapshot`.
             let fingerprintAfter = await bridge.pageFingerprint()
             let pageMoved = AgentBrowserBridge.pageMoved(before: fingerprintBefore, after: fingerprintAfter)
-            return resolved.tab.naming(
-                await withPageSnapshot(receipt, context, resolved, changed: pageMoved))
+            // Stamped AFTER `naming`, which skips a result that already carries metadata -- see
+            // `PageStructureChange` for what a host does with the mark.
+            return PageStructureChange.stamp(
+                resolved.tab.naming(
+                    await withPageSnapshot(receipt, context, resolved, changed: pageMoved)),
+                moved: pageMoved)
         }
     }
 }

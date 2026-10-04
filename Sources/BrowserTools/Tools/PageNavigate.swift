@@ -72,8 +72,11 @@ import ToolABI
             let result = await operation(bridge)
             let receipt = RawToolResult(output: result.output, isError: result.isError ? true : nil)
             // A navigation that landed replaced the page by definition, so the page it landed on
-            // rides in the receipt unconditionally -- see `withPageSnapshot`.
-            return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved))
+            // rides in the receipt unconditionally -- see `withPageSnapshot` -- and every id the
+            // round chose before it is stale, which `PageStructureChange` tells the host.
+            return PageStructureChange.stamp(
+                resolved.tab.naming(await withPageSnapshot(receipt, context, resolved)),
+                moved: !result.isError)
         }
     }
 }
