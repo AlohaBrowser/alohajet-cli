@@ -39,7 +39,7 @@ private final class FakeBackend: AgentBridgeBackend, @unchecked Sendable {
     let after = await bridge.settledPageURL(after: "https://example.com/")
     #expect(after == "https://www.iana.org/help/example-domains")
     #expect(PageDelta.describe(urlBefore: "https://example.com/", urlAfter: after)
-        == " Navigated to https://www.iana.org/help/example-domains.")
+        == " Navigated to https://www.iana.org/help/example-domains")
     // and the stale cache is refreshed, so the next `manage_tabs list` stops printing the old URL
     #expect(backend.noted.contains("https://www.iana.org/help/example-domains"))
 }

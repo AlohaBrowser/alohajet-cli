@@ -22,13 +22,19 @@ public nonisolated enum PageDelta {
     /// Silent when the URL is unknown (the backend's navigation seam is optional and some layers return
     /// ""), because a receipt that claims "URL unchanged" when it simply could not read the URL would be
     /// worse than the bare one it replaces.
+    ///
+    /// A URL IS NEVER FOLLOWED BY PUNCTUATION. A receipt is read by programs as well as by the
+    /// model: the mint that turns a run into a scenario copied `Navigated to https://…/search/home.`
+    /// full stop included, the replay navigated to `…/search/home.`, the site answered "Access
+    /// Denied", and the scenario was over at step 2 (agent run jacket-bag-luna-ge43, 2026-09-21).
+    /// Every URL here ends its sentence, and the sentence ends without a mark.
     public static func describe(urlBefore: String, urlAfter: String) -> String {
         guard !urlAfter.isEmpty else { return "" }
-        if urlBefore.isEmpty { return " Now at \(urlAfter)." }
+        if urlBefore.isEmpty { return " Now at \(urlAfter)" }
         if urlBefore == urlAfter {
-            return " The page did NOT navigate — still at \(urlAfter). If you expected a new page, the "
-                + "action did not do what you assumed: read the page before acting again."
+            return " The page did NOT navigate — if you expected a new page, the action did not do what "
+                + "you assumed: read the page before acting again. The URL is still \(urlAfter)"
         }
-        return " Navigated to \(urlAfter)."
+        return " Navigated to \(urlAfter)"
     }
 }
