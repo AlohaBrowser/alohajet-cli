@@ -233,11 +233,11 @@ import JavaScriptCore
 
     /// Without a window there is no document to scope to and the bare hash is kept — the path
     /// every other test in this suite runs on, asserted rather than assumed.
-    @Test func noWindowMeansNoPrefix() {
-        let value = evaluate("""
+    @Test func noWindowMeansNoPrefix() throws {
+        let value = try evaluate("""
         [alohaIdFor({ xpath: "/body/div", contextPath: [] }, null), hashString("|/body/div")].join("|")
         """)
-        let parts = (value ?? "").split(separator: "|").map(String.init)
+        let parts = value.split(separator: "|").map(String.init)
         #expect(parts.count == 2)
         #expect(parts.first == parts.last)
     }
