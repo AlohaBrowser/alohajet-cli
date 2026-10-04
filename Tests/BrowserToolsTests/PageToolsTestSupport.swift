@@ -131,7 +131,10 @@ final class PageToolsStubTabsService: TabsService {
 
 /// The session pointer and nothing else: `manage_tabs use` writes it, the page tools and the
 /// tab housekeeping read it. Shared so the housekeeping tests do not each grow a copy.
-final class PageToolsStubSession: ChatModeSession {
+///
+/// `@MainActor` spelled out, like the other `ChatModeSession` fakes in this target: the
+/// protocol is `Sendable`, and without the attribute the compiler asks why `active` is mutable.
+@MainActor final class PageToolsStubSession: ChatModeSession {
     var active: String?
     private(set) var unregistered: [String] = []
     func sessionNetworkDir() -> String? { nil }
