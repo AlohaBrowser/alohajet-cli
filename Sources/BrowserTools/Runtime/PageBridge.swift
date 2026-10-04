@@ -1318,29 +1318,154 @@ public final class AgentBrowserBridge {
             // the focus actually TOOK (`document.activeElement`, descended through shadow
             // roots). The second is not redundant: a hidden or readonly input passes the
             // kind check and still swallows everything, which reported a false success.
+            //
+            // AND WHEN THE ID NAMES A LABEL, THE PROBE RESOLVES IT instead of only refusing.
+            // The refusal used to say "re-read the page and pass the aloha-id of the text field
+            // itself", and that is advice the model demonstrably cannot act on: on WebArena run
+            // 34104601895 it fired in 4 of 5 t625 reps, every time on the same `<span>` inside the
+            // Body label, the model re-read and sent the same id again, and the post went in with
+            // an empty body. A label's control is already where a click goes; typing is no
+            // different. `resolveTypeTarget` (between the markers, so the Node harness runs the
+            // bytes that ship) follows the associations HTML itself defines, and redirects only to
+            // EXACTLY ONE candidate: two is a guess, and a guess here types the body into the title.
             let probe = try await backend.evaluateViaCdp("""
             (function() {
               var el = document.querySelector('[aloha-id="\(escaped)"]');
               if (!el) return { found: false };
-              var tag = el.tagName;
-              var inputType = (el.getAttribute('type') || 'text').toLowerCase();
-              var nonText = ['button','checkbox','color','file','hidden','image','radio','range','reset','submit'];
-              var accepts = (tag === 'TEXTAREA'
-                  || (tag === 'INPUT' && nonText.indexOf(inputType) === -1)
-                  || el.isContentEditable === true)
-                && el.disabled !== true && el.readOnly !== true;
-              if (accepts) { el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.focus(); }
-              var active = document.activeElement;
-              while (active && active.shadowRoot && active.shadowRoot.activeElement) {
-                active = active.shadowRoot.activeElement;
+              \(sensitiveFieldPredicateJS)
+              // BEGIN type-probe js
+              function resolveTypeTarget(el, document) {
+                var nonText = ['button','submit','reset','checkbox','radio','file','image','range','color','hidden'];
+                function attr(n, name) { return (n && n.getAttribute && n.getAttribute(name)) || ''; }
+                function kindOf(n) { return (attr(n, 'type') || 'text').toLowerCase(); }
+                function typable(n) {
+                  if (!n || !n.tagName) return false;
+                  var tag = n.tagName, ty = kindOf(n);
+                  var ok = (tag === 'TEXTAREA'
+                      || (tag === 'INPUT' && nonText.indexOf(ty) === -1)
+                      || n.isContentEditable === true);
+                  if (!ok || n.disabled === true || n.readOnly === true) return false;
+                  // THE EFFECTIVE STATE, not only the element's own properties: a field inside a
+                  // `<fieldset disabled>` has `disabled === false` and still takes nothing, and a
+                  // custom field says so through ARIA. The same rules the DOM serializer applies.
+                  try { if (n.matches && n.matches(':disabled')) return false; } catch (e) {}
+                  if (attr(n, 'aria-disabled') === 'true' || attr(n, 'aria-readonly') === 'true') return false;
+                  return true;
+                }
+                // A REDIRECT MUST NEVER ROUTE AROUND THE CREDENTIAL REFUSAL, which is keyed on the id
+                // the model passed. The page-side predicate the DOM walker ships answers what the
+                // Swift classifier answers (a password type, or a password-like name, id,
+                // placeholder or label), so a resolved field is only ever a non-secret one -- and
+                // the bridge classifies the resolved field again before any key is sent.
+                function secret(n) {
+                  if (kindOf(n) === 'password') return true;
+                  try { return typeof __alohaIsSensitiveField === 'function' && __alohaIsSensitiveField(n) === true; }
+                  catch (e) { return false; }
+                }
+                function eligible(n) { return typable(n) && !secret(n); }
+                function eachEligible(list, into) {
+                  for (var i = 0; i < list.length; i++) { if (eligible(list[i])) into.push(list[i]); }
+                }
+                var target = el;
+                var redirected = '';
+                var redirectedTag = '';
+                var ambiguous = 0;
+                if (!typable(el)) {
+                  var cands = [];
+                  // 1. THE RELATIONSHIP HTML ITSELF DEFINES. A label's control is where a click
+                  //    already goes; typing should be no different. An explicit `for` names one
+                  //    control. An IMPLICIT label (one that wraps) is walked for every field it
+                  //    holds rather than read through `label.control`, which returns only the first
+                  //    labelable descendant and would hide a second field from the count below.
+                  var label = el.closest ? el.closest('label') : null;
+                  if (label) {
+                    if (label.htmlFor) {
+                      var ctl = document.getElementById(label.htmlFor);
+                      if (eligible(ctl)) cands.push(ctl);
+                    } else if (label.querySelectorAll) {
+                      eachEligible(label.querySelectorAll('input, textarea, [contenteditable]'), cands);
+                    }
+                  }
+                  // 2. An explicit association carried by the element the model named.
+                  //    `aria-controls` is a whitespace-separated list of ids; every token counts.
+                  var refs = (attr(el, 'for') + ' ' + attr(el, 'aria-controls')).split(/\\s+/);
+                  for (var r = 0; r < refs.length; r++) {
+                    if (!refs[r]) continue;
+                    var byId = document.getElementById(refs[r]);
+                    if (eligible(byId)) cands.push(byId);
+                  }
+                  // 3. The fields WRAPPED by it -- a div or span around one input.
+                  if (!cands.length && el.querySelectorAll) {
+                    eachEligible(el.querySelectorAll('input, textarea, [contenteditable]'), cands);
+                  }
+                  // 4. The field it sits immediately before, which is how most labels are placed.
+                  if (!cands.length && eligible(el.nextElementSibling)) {
+                    cands.push(el.nextElementSibling);
+                  }
+                  var uniq = [];
+                  for (var j = 0; j < cands.length; j++) {
+                    if (uniq.indexOf(cands[j]) === -1) uniq.push(cands[j]);
+                  }
+                  // EXACTLY ONE, or nothing. Two candidate fields is a guess, and a guess here types
+                  // the body into the title. And the one must carry an aloha-id: a field added since
+                  // the last walk has none, the receipt could not name it, and the redirect would be
+                  // silent -- the very failure this probe exists to prevent.
+                  if (uniq.length === 1 && attr(uniq[0], 'aloha-id')) {
+                    target = uniq[0];
+                    redirected = attr(target, 'aloha-id');
+                    redirectedTag = target.tagName;
+                  } else if (uniq.length > 1) {
+                    ambiguous = uniq.length;
+                  }
+                }
+                var accepts = typable(target);
+                // THE PAGE'S TYPABLE FIELDS, enumerated so the refusal can NAME them instead of
+                // telling the model to go and look -- and ONLY when about to refuse. Computed
+                // unconditionally, every successful page_type paid for a document-wide
+                // querySelectorAll and up to twelve label lookups it never read: nav-33 at
+                // concurrency 16 turned that into 25 timed-out attempts and a median wall of
+                // 382s against 126s. Twelve are named; the total is counted so the refusal can
+                // say the list is partial when it is.
+                var fields = [];
+                var fieldsTotal = 0;
+                if (!accepts) {
+                  try {
+                    var all = document.querySelectorAll('input, textarea, [contenteditable]');
+                    for (var k = 0; k < all.length; k++) {
+                      var f = all[k];
+                      if (!eligible(f)) continue;
+                      var fid = attr(f, 'aloha-id');
+                      if (!fid) continue;
+                      fieldsTotal++;
+                      if (fields.length >= 12) continue;
+                      var name = (attr(f, 'aria-label') || attr(f, 'placeholder') || attr(f, 'name')).slice(0, 40);
+                      if (!name && f.labels && f.labels.length) {
+                        name = String(f.labels[0].textContent || '').trim().slice(0, 40);
+                      }
+                      fields.push(fid + (name ? ' (' + name + ')' : '') + ' ' + f.tagName.toLowerCase());
+                    }
+                  } catch (e) { fields = []; fieldsTotal = 0; }
+                }
+                if (accepts) { target.scrollIntoView({ block: 'center', behavior: 'instant' }); target.focus(); }
+                var active = document.activeElement;
+                while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+                  active = active.shadowRoot.activeElement;
+                }
+                return {
+                  found: true,
+                  acceptsText: accepts,
+                  focused: active === target,
+                  tag: el.tagName,
+                  inputType: el.tagName === 'INPUT' ? kindOf(el) : '',
+                  redirectedTo: redirected,
+                  redirectedTag: redirectedTag,
+                  ambiguous: String(ambiguous),
+                  fields: fields.join(' | '),
+                  fieldsTotal: String(fieldsTotal)
+                };
               }
-              return {
-                found: true,
-                acceptsText: accepts,
-                focused: active === el,
-                tag: tag,
-                inputType: tag === 'INPUT' ? inputType : ''
-              };
+              // END type-probe js
+              return resolveTypeTarget(el, document);
             })()
             """)
             guard probe?.bool("found") == true else {
@@ -1349,10 +1474,37 @@ public final class AgentBrowserBridge {
             let tag = (probe?.string("tag") ?? "unknown").lowercased()
             let inputType = probe?.string("inputType") ?? ""
             let kind = inputType.isEmpty ? "<\(tag)>" : "<\(tag) type=\(inputType)>"
+            // WHERE THE KEYSTROKES ACTUALLY WENT, when the id named a label or a wrapper.
+            let redirectedTo = probe?.string("redirectedTo") ?? ""
+            let redirectedTag = (probe?.string("redirectedTag") ?? "").lowercased()
+            // Crosses as a STRING: `JSValue` offers string(_:) and bool(_:) here, nothing numeric.
+            let ambiguous = Int(probe?.string("ambiguous") ?? "") ?? 0
             guard probe?.bool("acceptsText") == true else {
+                // NAME THE FIELDS rather than telling the model to go and look. On run 34110975237
+                // t625 r0 was told "re-read the page", re-read, and then typed into the
+                // "Formatting help" CHECKBOX and a span, while `textarea("Body")` was listed in
+                // the very observation it was holding. The ids below come from the live page, so
+                // the alternative offered is a fact, not advice -- and when the page has more
+                // fields than the list names, the list says so rather than posing as the whole.
+                let fields = probe?.string("fields") ?? ""
+                let total = Int(probe?.string("fieldsTotal") ?? "") ?? 0
+                let listed = fields.isEmpty ? 0 : fields.components(separatedBy: " | ").count
+                let offer: String
+                if fields.isEmpty {
+                    offer = "This page has no text field that can take typing."
+                } else if total > listed {
+                    offer = "The first \(listed) of this page's \(total) text fields are: \(fields). "
+                        + "Pass one of THOSE ids, or read the page for the rest."
+                } else {
+                    offer = "The text fields on this page are: \(fields). Pass one of THOSE ids."
+                }
+                let why = ambiguous > 1
+                    ? "It wraps \(ambiguous) different text fields, so which one you meant cannot be "
+                        + "guessed. "
+                    : ""
                 return AgentActionResult(
                     output: "Element with aloha-id \(alohaId) cannot accept typed text (it is \(kind)). "
-                        + "No keystrokes were sent. Re-read the page and pass the aloha-id of the text field itself.",
+                        + "No keystrokes were sent. \(why)\(offer)",
                     isError: true)
             }
             guard probe?.bool("focused") == true else {
@@ -1362,7 +1514,31 @@ public final class AgentBrowserBridge {
                         + "sent. Re-read the page and pass the aloha-id of the VISIBLE field.",
                     isError: true)
             }
+            if !redirectedTo.isEmpty, credentialGuardEnabled() {
+                // THE RESOLVED FIELD IS CLASSIFIED AGAIN. The refusal at the top was keyed on the
+                // id the model passed; the page-side probe excludes what it can see, but the
+                // classifier here is the policy, so it runs on the field the keys would actually
+                // go to. The field has been focused and nothing has been sent.
+                let redirectedEscaped = redirectedTo.replacingOccurrences(of: "\"", with: "\\\"")
+                if let snapshot = try await resolveElementSnapshot(redirectedEscaped), isPasswordField(snapshot) {
+                    return AgentActionResult(output: credentialFieldRefusalMessage, isError: true)
+                }
+            }
             try await typeCDP(text, replace: replace)
+            if !redirectedTo.isEmpty {
+                // SAY SO. A silent redirect is the mis-type this whole probe exists to prevent: the
+                // model has to be able to see that its next id is a different one. The sentence is
+                // for a direct caller; `page_type` composes its own receipt and reads the target
+                // off `rawResult`, so the redirect reaches the model either way.
+                return AgentActionResult(
+                    output: "Element \(alohaId) is \(kind), which holds no text, so the keystrokes went "
+                        + "to the <\(redirectedTag)> it labels: aloha-id \(redirectedTo). Use THAT id for "
+                        + "this field from now on.",
+                    rawResult: .object([
+                        ("redirectedTo", .string(redirectedTo)),
+                        ("redirectedTag", .string(redirectedTag)),
+                    ]))
+            }
             return AgentActionResult(output: "Typed text into element \(alohaId)")
         } catch {
             if isAbortError(error) {
