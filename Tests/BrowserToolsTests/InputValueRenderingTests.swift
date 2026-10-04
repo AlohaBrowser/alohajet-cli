@@ -246,6 +246,46 @@ import ToolABI
         #expect(!line.contains("redacted"))
     }
 
+    /// `autocomplete="one-time-code"` is the spec's token for an SMS or authenticator code: a
+    /// credential by the page's own marking, like `current-password` and `cc-number`.
+    @Test func aOneTimeCodeIsACredential() {
+        #expect(inputNode(type: "text", value: "482913",
+                          autocomplete: "one-time-code")?.content.inputData?.isSecret == true)
+    }
+
+    /// Most sites set no `autocomplete` on a card's security code; they name the box. A short
+    /// numeric field named CVV, CVC, OTP, PIN, SSN, "security code" or "verification code" is as
+    /// secret as the card number beside it.
+    @Test func aShortNumericCodeNamedAsOneIsSecret() {
+        func secret(type: String = "text", value: String = "123", _ attributes: [(String, JSValue)]) -> Bool? {
+            inputNode(type: type, value: value, attributes: attributes)?.content.inputData?.isSecret
+        }
+        #expect(secret(type: "tel", [("name", .string("card[cvv]"))]) == true)
+        #expect(secret([("id", .string("cvc")), ("maxlength", .string("4"))]) == true)
+        #expect(secret(type: "number", [("aria-label", .string("Security code"))]) == true)
+        #expect(secret(value: "482913", [("placeholder", .string("Enter OTP"))]) == true)
+        #expect(secret(value: "1234", [("inputmode", .string("numeric")), ("name", .string("pin_code"))]) == true)
+        #expect(secret(value: "123-45-6789", [("name", .string("applicant.ssn"))]) == true)
+        #expect(secret(value: "77 44 11", [("aria-label", .string("Verification code"))]) == true)
+        #expect(secret(value: "", [("name", .string("one-time passcode")), ("maxlength", .string("6"))]) == true)
+        // The placeholder the walker sends in `inputData` counts as a name too.
+        #expect(inputNode(type: "tel", value: "321", placeholder: "CVV")?.content.inputData?.isSecret == true)
+    }
+
+    /// A secret is withheld, never invented: a field that merely mentions a code word in a
+    /// longer word, or that is not numeric and short, stays readable.
+    @Test func anOrdinaryFieldIsNotMistakenForACode() {
+        func secret(type: String = "text", value: String = "hello there", _ attributes: [(String, JSValue)]) -> Bool? {
+            inputNode(type: type, value: value, attributes: attributes)?.content.inputData?.isSecret
+        }
+        #expect(secret([("name", .string("pinterest_handle"))]) == false)
+        #expect(secret([("name", .string("shipping[address]"))]) == false)
+        #expect(secret([("name", .string("otp-search"))]) == false)
+        #expect(secret(type: "search", value: "pin", [("name", .string("q"))]) == false)
+        #expect(secret(type: "number", value: "3", [("name", .string("quantity"))]) == false)
+        #expect(secret(type: "tel", value: "+1 555 0100", [("name", .string("phone"))]) == false)
+    }
+
     @Test func aNodeWithNoInputDataStillParses() {
         let node = parseDomNode(.object([
             ("id", .string("n1")),

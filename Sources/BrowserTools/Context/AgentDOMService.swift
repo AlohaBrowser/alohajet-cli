@@ -1912,20 +1912,20 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
         // `disabled` would silently change `isElementDisabled` across the whole serializer.
         if let inputValue = contentValue["inputData"], case .object = inputValue {
             let rawType = (inputValue.string("type") ?? "").lowercased()
-            let autocomplete = (inputValue.string("autocomplete") ?? "").lowercased()
             let value = inputValue.string("value")
-            // Secrets never leave the page. A password type, a field the SITE marks as a
-            // credential or payment field via `autocomplete`, or a value the page-side predicate
-            // (`__alohaIsSensitiveField`) already replaced with its mask: all render as
+            let placeholder = inputValue.string("placeholder")
+            // Secrets never leave the page: see `isSecretInputField`. A secret renders as
             // `value=(hidden)`, so the model learns the field is FILLED and nothing more.
-            let secret = rawType == "password"
-                || autocomplete.contains("password")
-                || autocomplete.hasPrefix("cc-")
-                || value == sensitiveFieldMaskText
+            let secret = isSecretInputField(
+                type: rawType,
+                autocomplete: inputValue.string("autocomplete") ?? "",
+                attributes: attributes,
+                placeholder: placeholder,
+                value: value)
             let storedType = (rawType.isEmpty || rawType == "text") ? nil : rawType
             content.inputData = DomInputData(
                 type: storedType,
-                placeholder: inputValue.string("placeholder"),
+                placeholder: placeholder,
                 value: value,
                 isSecret: secret)
         }
@@ -1978,6 +1978,52 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
         positioning: positioning,
         children: (value.array("children") ?? []).compactMap(\.stringValue)
     )
+}
+
+/// Whether a field's contents may never be serialized into a model's context.
+///
+/// Three kinds of field qualify. A credential or payment field by the page's OWN marking:
+/// `type=password`, an `autocomplete` token naming a password or a `cc-` payment detail, or
+/// `autocomplete="one-time-code"` -- the token the HTML spec assigns to an SMS or authenticator
+/// code, which is as much a credential as the password it stands in for. A field the page-side
+/// predicate (`__alohaIsSensitiveField`) already masked before the value crossed the wire. And a
+/// SHORT NUMERIC CODE named as one: a field whose name, id, aria-label or placeholder says CVV,
+/// CVC, OTP, PIN, SSN, "security code" or "verification code", when the field is also numeric in
+/// kind (`type=number|tel`, `inputmode=numeric|tel|decimal`), short (`maxlength` of twelve or
+/// fewer) or holding a short run of digits. Sites that do not set `autocomplete` on a card's
+/// security code -- most of them -- name the box one of these, and a three-digit CVV in a model's
+/// context is a leaked card detail however the box was declared.
+///
+/// The name match is on whole words (`[]_-./:` count as separators), so "Pinterest" and
+/// "shipping" do not match `pin`, while `card[cvv]` and `pin_code` do. The numeric gate is what
+/// keeps a text box that merely MENTIONS a code -- a search field named `otp-search` holding a
+/// sentence -- readable: a secret is withheld, never invented.
+func isSecretInputField(type rawType: String, autocomplete rawAutocomplete: String,
+                        attributes: [String: String], placeholder: String?, value: String?) -> Bool {
+    let type = rawType.lowercased()
+    if type == "password" { return true }
+    let autocomplete = rawAutocomplete.lowercased()
+    if autocomplete.contains("password") || autocomplete.hasPrefix("cc-") || autocomplete == "one-time-code" {
+        return true
+    }
+    if value == sensitiveFieldMaskText { return true }
+    let joined = [attributes["name"], attributes["id"], attributes["aria-label"], placeholder, attributes["placeholder"]]
+        .compactMap { $0 }
+        .joined(separator: " ")
+        .lowercased()
+    let hay = String(joined.map { "[]_-./:".contains($0) ? Character(" ") : $0 })
+    let codeWords = #"\b(cvv2?|cvc2?|otp|pin|ssn)\b|security code|verification code|one[ -]?time (code|password|passcode)"#
+    guard hay.range(of: codeWords, options: .regularExpression) != nil else { return false }
+    let inputMode = (attributes["inputmode"] ?? "").lowercased()
+    let numericKind = type == "number" || type == "tel" || ["numeric", "tel", "decimal"].contains(inputMode)
+    let short = (Int(attributes["maxlength"] ?? "") ?? Int.max) <= 12
+    let digitsOnly: Bool = {
+        guard let value else { return false }
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty && trimmed.count <= 12
+            && trimmed.allSatisfy { $0.isNumber || $0 == " " || $0 == "-" }
+    }()
+    return numericKind || short || digitsOnly
 }
 
 // MARK: - Shared small types
