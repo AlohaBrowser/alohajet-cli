@@ -32,7 +32,7 @@ import ToolABI
 /// Whether the mock saw the DOM walker run -- the one `Runtime.evaluate` a page read cannot
 /// avoid. Recognised the way `MockCDP` itself recognises it, by the walker's entry point.
 @MainActor private func pageWasRead(_ cdp: MockCDP) -> Bool {
-    cdp.commands(for: "Runtime.evaluate").contains { $0.params["expression"]?.stringValue?.contains("buildDomTree(") == true }
+    cdp.commands(for: "Runtime.evaluate").contains { $0.params["expression"]?.stringValue?.contains("collectDomTree(") == true }
 }
 
 private let clickReply: JSValue = .object([
@@ -59,7 +59,7 @@ struct PageFingerprintTests {
         // One evaluate, no DOM walk, no agent-code wrapper: this is meant to be cheap.
         #expect(backend.capturedScripts.count == 1)
         #expect(backend.capturedScripts[0].contains("__alohaDocGeneration"))
-        #expect(!backend.capturedScripts[0].contains("buildDomTree("))
+        #expect(!backend.capturedScripts[0].contains("collectDomTree("))
     }
 
     @Test func isNilWhenThePageCannotAnswer() async {
