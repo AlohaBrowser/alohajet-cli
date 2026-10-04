@@ -463,6 +463,37 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         try await waitForTabLoad(timeoutMs: 10_000, signal: signal)
     }
 
+    /// Settles after a navigation a SCENARIO made, the way the agent's own navigation settles.
+    ///
+    /// `navigateToURL` awaits the main-frame load and returns. That is enough for a reader, and
+    /// not enough for a writer: a page whose scripts bind their handlers after load — an admin
+    /// console assembling its forms through a module loader is the ordinary case — answers a
+    /// click dispatched at that moment by doing nothing, and the step reports success because the
+    /// click WAS dispatched onto a resolved element.
+    ///
+    /// Measured on llmdex run 34853019475: a scenario that navigated to a report, typed both
+    /// dates and clicked Show Report finished in 24 seconds with every step dispatched clean, and
+    /// both attempts ended on the unsubmitted form. The agent doing the same work by hand took 52
+    /// to 89 seconds and submitted it, because `page_navigate` waits for network idle and DOM
+    /// stability (`CDPBrowserBacking.awaitReady`) and a scenario's navigate did not. Over that
+    /// run, 15 answers were given with a form in an invalid state; the control run with saved
+    /// automations switched off carried none.
+    ///
+    /// The tuning is the navigation path's own: a quiet network of at most two in-flight
+    /// requests for 500ms, 400ms without DOM mutation, never less than 500ms, and never more than
+    /// 12 seconds. Best-effort by contract — a timeout returns, it does not throw, because a page
+    /// that never goes quiet must still be typed into.
+    public func settleAfterScenarioNavigation(signal: AbortSignal?) async {
+        _ = await waitForReady(
+            PageReadinessOptions(
+                networkIdleThreshold: 2,
+                networkIdleTimeMs: 500,
+                domStableTimeMs: 400,
+                minWaitTimeMs: 500,
+                timeoutMs: 12_000),
+            signal: signal)
+    }
+
     /// Settles after a navigation: awaits the real main-frame load, refreshing the
     /// cached url/title, bounded by `timeoutMs`. Shares `waitForMainFrameLoad` with
     /// the read gate so both observe the *real* navigation lifecycle rather than
