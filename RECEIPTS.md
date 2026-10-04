@@ -111,4 +111,5 @@ in the agent repository's copy of this file.
 | 2026-10-01 | alohajet `80b929c` | a position path that matches nothing is rebuilt from the live element (no format change) |
 | 2026-10-01 | alohajet `85bc8e3` | resolver `:rel-href` |
 | 2026-10-02 | alohajet `f6c3380` | the read exception (a read's `[selector=]` is its list when the selector held the value) |
+| 2026-10-04 | alohajet-cli `03d2e47` | every rung is verified on the live page before it is written; `[index=none]` marks an unverified address; a `data-testid` is screened by the generated-id rule |
 | 2026-10-04 | this package, PR `port/07-receipts-and-ladder` | the brackets above, the ladder, the resolver and this file move into `alohajet-cli`; the anchor rule (`[anchor=]`, `[anchor-nth=]`, `[path=]`) follows in `port/08-receipt-anchor` |
