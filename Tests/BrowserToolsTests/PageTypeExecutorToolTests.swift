@@ -143,6 +143,7 @@ struct PageTypeExecutorToolTests {
 
         #expect(result.isError != true, "\(result.output)")
         #expect(result.output.contains("Navigated to https://example.com/step2"), "\(result.output)")
+    }
 
     // MARK: - The id named a label, not a field
 
