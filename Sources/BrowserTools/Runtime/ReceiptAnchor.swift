@@ -26,6 +26,8 @@ import ToolABI
 ///      absolute or query-bearing href (a Hacker News result, its comments link). Rung 4b takes
 ///      only a relative query-free path and rule 0 only a link relative to this page, so such a
 ///      link had no reportable address (2026-10-04 audit). Only when no other link leads there;
+///      a bare fragment (`#release-v3.8.5`, a spot in this document that carries its content)
+///      and a `javascript:` URL are not destinations and are never offered;
 ///   1b. `<tag>[aria-label="…"]`, then `<tag>[title="…"]` -- the element's own accessible name,
 ///      when it has no digit (the ladder cannot carry it: a `[selector]` holds no whitespace);
 ///   2. the `[list]` selector + `:has-text("<label>")`;
@@ -94,7 +96,10 @@ enum ReceiptAnchorProbe {
             if (tagName === 'a') {
               var href = String(el.getAttribute('href') || '');
               var rung4b = href.charAt(0) === '/' && href.indexOf('//') !== 0 && href.indexOf('?') === -1 && href.indexOf('#') === -1;
-              if (href && href.length <= 120 && !/[\s"'\\`\u0000-\u001f\u007f]/.test(href) && !rung4b) cands.push({ s: 'a[href=' + quote(href) + ']' });
+              // A bare fragment (`#release-v3.8.5`) names a spot in THIS document, not a place, and
+              // carries the content it points at; a script URL is not a destination at all.
+              var notAPlace = href.charAt(0) === '#' || /^\s*javascript:/i.test(href);
+              if (href && href.length <= 120 && !/[\s"'\\`\u0000-\u001f\u007f]/.test(href) && !rung4b && !notAPlace) cands.push({ s: 'a[href=' + quote(href) + ']' });
             }
             // 1b. What the element SAYS it is: its aria-label, else its title -- written for people
             // and screen readers, so it outlives a redeploy that renames every class. The search

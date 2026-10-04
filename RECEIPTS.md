@@ -78,7 +78,8 @@ are tried in this order, and the first one that resolves back to the element win
 - **1:** the ladder's stable selector, when it is not a position path.
 - **1a:** `a[href="…"]` verbatim, for a link whose href is absolute or carries a query (rung 4b
   takes only a relative query-free path, rule 0 only a link relative to this page), when the
-  value is quotable and no other link on the page leads there (since 2026-10-04).
+  value is quotable and no other link on the page leads there (since 2026-10-04). A bare
+  fragment (`#release-v3.8.5`) and a `javascript:` URL are not destinations and are never offered.
 - **1b:** `tag[aria-label="…"]` or `tag[title="…"]`, when the label has no digit (since 2026-09-30).
 - **2:** `<list>:has-text("…")`.
 - **3:** `<list>` with `[anchor-nth=]`.

@@ -273,6 +273,13 @@ function check(name, cond, detail) { console.log((cond ? 'ok   ' : 'FAIL ') + na
   const odd = makeDoc([el('div', {}, [el('a', { href: 'https://x.example/a"b', 'aloha-id': 'q' }, [], 'Q')])]);
   const oq = run(odd, 'q', 'body>div>a', false, '', false, at);
   check('an href with a quote is not offered', oq && !/href/.test(oq.s), oq);
+  // A bare fragment names a spot in this document and carries its content (case 9's release
+  // link, `#release-v3.8.5`); a script URL is no destination. Neither is offered.
+  const frag = makeDoc([el('div', {}, [el('a', { href: '#release-v3.8.5', 'aloha-id': 'f' }, [], 'Jump'), el('a', { href: 'javascript:void(0)', 'aloha-id': 'j' }, [], 'Open')])]);
+  const fr = run(frag, 'f', 'body>div>a:nth-of-type(1)', false, 'body>div>a', false, at);
+  check('a bare fragment href is not offered', fr && !/href/.test(fr.s), fr);
+  const jr = run(frag, 'j', 'body>div>a:nth-of-type(2)', false, 'body>div>a', false, at);
+  check('a javascript: href is not offered', jr && !/href/.test(jr.s), jr);
 }
 
 console.log(failures ? `${failures} FAILED` : 'all receipt-anchor checks passed');
