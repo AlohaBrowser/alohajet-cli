@@ -72,11 +72,13 @@ import ToolABI
                 // Named like every other resolved return: a refused click still happened on a page.
                 return resolved.tab.naming(RawToolResult(output: refusal, isError: true))
             }
-            // POLICY: NO NEW COOKIES. A click aimed at a consent prompt's own control -- Accept,
-            // Reject, Manage -- is not delivered. The prompt is hidden instead and the receipt says
-            // so, with the fresh page attached so the model sees the site without the banner.
-            // Not an error: the model wanted past the prompt, and it is past it. See
-            // hideConsentLayerContaining.
+            // POLICY: NO NEW COOKIES. A click aimed at a control inside a consent prompt -- Accept,
+            // Reject, Manage, Close -- is not delivered. The prompt is hidden instead and the receipt
+            // says so, with the fresh page attached so the model sees the site without the banner.
+            // Not an error: the model wanted past the prompt, and it is past it. The prompt is
+            // recognised as a CONTAINER (the page's CMP API, a known CMP's own markup, or shape plus
+            // cookie vocabulary in its name), never by the control's label alone: a login dialog
+            // whose small print mentions privacy keeps its Continue. See hideConsentLayerContaining.
             if let refusal = await bridge.hideConsentLayerContaining(alohaId: alohaId) {
                 let receipt = RawToolResult(output: refusal + selectorNote)
                 return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved))
