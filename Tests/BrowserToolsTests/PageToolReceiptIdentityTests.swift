@@ -80,13 +80,17 @@ struct PageToolReceiptIdentityTests {
         #expect(!expression.contains("\\#("))
     }
 
-    @Test func theBridgeAsksOnceAndParses() async {
-        let backend = ReceiptProbeBackend([.string(#"{"index":2,"attrs":[["aria-label","M"]]}"#)])
+    /// The identity in one round trip, then the resolver check and the anchor probe (here: the
+    /// resolver is present and no candidate verified, so the identity carries no anchor).
+    @Test func theBridgeAsksForTheIdentityThenTheAnchor() async {
+        let backend = ReceiptProbeBackend([.string(#"{"index":2,"attrs":[["aria-label","M"]]}"#), .string("y"), .string("")])
         let bridge = AgentBrowserBridge(backend: backend)
         let identity = await bridge.elementIdentity(selector: "button.size", alohaId: "a2")
         #expect(identity == ElementIdentity(index: 2, attributes: [.init(name: "aria-label", value: "M")]))
-        #expect(backend.asked == 1)
+        #expect(backend.asked == 3)
         #expect(backend.scripts[0].contains("getAttributeNames"))
+        #expect(backend.scripts[1] == SelectorResolverScript.isInstalledProbe)
+        #expect(backend.scripts[2].contains("/* receipt: anchor */"))
     }
 
     /// A page that throws, a non-string reply, or an empty id yield nil -- and the receipt then
@@ -149,12 +153,13 @@ struct PageToolReceiptIdentityTests {
     @Test func theLiveNoteComposesEveryProbe() async {
         let node = DomNode(id: "a2", element: DomElement(tagName: "button", attributes: ["class": "size"]))
         let tab = ReceiptFakeTab(nodes: ["a2": node])
-        // The live-selector probe (count included), then the text, then the identity.
+        // The live-selector probe (count included), then the text, then the identity, then the
+        // resolver check and the anchor probe (no candidate verified here).
         let backend = ReceiptProbeBackend([.string(#"{"n":3,"has":true,"path":"","pathN":0}"#), .string("M"),
-                                           .string(#"{"index":2,"attrs":[["aria-label","M"]]}"#)])
+                                           .string(#"{"index":2,"attrs":[["aria-label","M"]]}"#), .string("y"), .string("")])
         let note = await PageToolReceipt.liveNote(alohaId: "a2", tab: tab, bridge: AgentBrowserBridge(backend: backend), tool: "page_click")
         #expect(note == " [selector=button.size] [tool=page_click] [matches=3] [index=2/3] [text=\"M\"] [attrs=aria-label=\"M\"]")
-        #expect(backend.asked == 3)
+        #expect(backend.asked == 5)
         let none = await PageToolReceipt.liveNote(alohaId: "zz", tab: tab, bridge: AgentBrowserBridge(backend: ReceiptProbeBackend([.number(1)])), tool: "page_click")
         #expect(none == "")
     }
@@ -184,7 +189,7 @@ struct PageToolReceiptIdentityTests {
         let tab = ReceiptFakeTab(nodes: ["q1": node])
         let backend = ReceiptProbeBackend([
             .string(#"{"n":1,"has":false,"path":"body>form>input:nth-of-type(2)","pathN":1}"#), .string(""),
-            .string(#"{"index":1,"attrs":[["name","q"]]}"#)])
+            .string(#"{"index":1,"attrs":[["name","q"]]}"#), .string("y"), .string("")])
         let note = await PageToolReceipt.liveNote(alohaId: "q1", tab: tab, bridge: AgentBrowserBridge(backend: backend), tool: "page_type")
         #expect(note == " [selector=body>form>input:nth-of-type(2)] [tool=page_type] [matches=1] [attrs=name=\"q\"]")
         // The identity probe is asked about the REBUILT selector, not the stale one.
