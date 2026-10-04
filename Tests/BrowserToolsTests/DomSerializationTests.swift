@@ -389,6 +389,35 @@ private func node(
         #expect(legend.contains { $0.contains("dismiss/close it to interact") })
     }
 
+    /// A cookie wall holds controls too -- Accept, Reject, Manage -- and by the control count
+    /// alone it would be called a panel whose controls the model should use. This agent answers
+    /// no consent prompt: the click tool hides it on contact, so the legend says that instead.
+    @Test func aConsentWallWithControlsIsNotAPanelToUse() {
+        let n = occludedButton(occludedBy: OccluderRef(
+            alohaId: "cw", tag: "div", role: "dialog",
+            text: "We use cookies to improve your experience. Accept all Reject all Manage",
+            coveredCount: 38, controlCount: 3))
+        let legend = occlusionLegend([n])
+        #expect(legend.contains { $0.contains("[occ:cw] = consent prompt <div> role=\"dialog\"") })
+        #expect(legend.contains { $0.contains("hides it on contact") })
+        #expect(legend.contains { $0.contains("[occ:cw]-marked element beneath it") })
+        #expect(!legend.contains { $0.contains("use ITS controls") })
+        #expect(!legend.contains { $0.contains("= panel") })
+    }
+
+    /// The consent vocabulary is the hider's: German, French, Spanish and Russian notices are
+    /// recognised too, and a product panel is not.
+    @Test func theConsentVocabularyMatchesTheHiders() {
+        #expect(readsLikeConsentNotice("Diese Website verwendet Cookies. Datenschutz"))
+        #expect(readsLikeConsentNotice("Gestion du consentement"))
+        #expect(readsLikeConsentNotice("Мы используем куки"))
+        #expect(readsLikeConsentNotice("Your privacy choices · GDPR"))
+        #expect(!readsLikeConsentNotice("BELTED FAUX SUEDE JACKET 219 GEL Dark mink"))
+        #expect(!readsLikeConsentNotice("Privacy preferences"))
+        #expect(!readsLikeConsentNotice(nil))
+        #expect(!readsLikeConsentNotice(""))
+    }
+
     /// A walker that sends no counts (an older script, a cover resolved to the page root) reads
     /// exactly as before.
     @Test func aCoverWithoutCountsKeepsTheOldWording() {

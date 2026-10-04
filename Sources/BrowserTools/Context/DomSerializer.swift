@@ -812,6 +812,20 @@ public func reattachOpenPopups(_ nodes: [DomNode]) -> [DomNode] {
     return out
 }
 
+/// The topic words the click tool's consent hider keys on (`CONSENT_TOPIC` in
+/// `ClickReceipts.swift`, seven languages), so the legend and the hider agree on what a consent
+/// prompt is. "privacy" alone qualifies for neither: a settings modal reading "privacy
+/// preferences" is a panel.
+let consentTopicPattern = "cookie|cookies|consent|gdpr|tracking|we value your privacy|datenschutz"
+    + "|einwilligung|confidentialit|privacidad"
+    + "|\u{043A}\u{0443}\u{043A}\u{0438}|\u{0441}\u{043E}\u{0433}\u{043B}\u{0430}\u{0441}"
+
+/// Whether a cover's text reads like a cookie or consent notice.
+func readsLikeConsentNotice(_ text: String?) -> Bool {
+    guard let text, !text.isEmpty else { return false }
+    return text.range(of: consentTopicPattern, options: [.regularExpression, .caseInsensitive]) != nil
+}
+
 /// One legend line per distinct overlay covering the page, built from the same
 /// `occludedBy` data the per-node `[occ:id]` markers reference. Empty when nothing is
 /// occluded. Lets the model see "one banner covers everything → dismiss it" at a glance.
@@ -827,14 +841,27 @@ public func occlusionLegend(_ nodes: [DomNode]) -> [String] {
         // reported as an overlay to "dismiss/close"; the model clicked it four times trying to
         // close it and never pressed Add. A backdrop or a cookie wall holds no controls and hides
         // many nodes -- that one is closed. The two numbers the walk now records tell them apart.
-        let isPanel = (occ.controlCount ?? 0) > 0
-        var d = "\(marker) = \(isPanel ? "panel" : "overlay") <\(occ.tag.isEmpty ? "element" : occ.tag.lowercased())>"
+        // EXCEPT A COOKIE OR CONSENT WALL. It holds controls too -- Accept, Reject, Manage -- and
+        // by the control count alone it would be described as a panel whose controls the model
+        // should use. This agent answers no consent prompt (policy: no new cookies): the click
+        // tool hides the prompt on contact, whether the click lands on one of its controls or on
+        // an element it covers, and nothing is accepted or rejected. The legend says that, so
+        // the model neither hunts for a close button nor presses Accept.
+        let isConsent = (occ.controlCount ?? 0) > 0 && readsLikeConsentNotice(occ.text)
+        let isPanel = (occ.controlCount ?? 0) > 0 && !isConsent
+        let kind = isConsent ? "consent prompt" : (isPanel ? "panel" : "overlay")
+        var d = "\(marker) = \(kind) <\(occ.tag.isEmpty ? "element" : occ.tag.lowercased())>"
         if let role = occ.role, !role.isEmpty { d += " role=\"\(role)\"" }
         if let raw = occ.text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
             let safe = raw.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\t", with: " ")
             d += " \"\(truncateText(safe, 60))\""
         }
-        if isPanel {
+        if isConsent {
+            d += " — a cookie/consent prompt, not a panel to use: this agent answers none of them (policy: no new"
+                + " cookies). The click tool hides it on contact — click any \(marker)-marked element beneath it,"
+                + " or any of its own controls, and the prompt is hidden without accepting or rejecting anything."
+                + " Do not look for a close button; continue with the task."
+        } else if isPanel {
             let controls = occ.controlCount ?? 0
             let covered = occ.coveredCount ?? 1
             d += " — a panel with \(controls) control\(controls == 1 ? "" : "s") of its own, sitting in front of"
