@@ -37,13 +37,21 @@ extension AgentBrowserBridge {
     }
 
     /// The element's identity for the receipt -- its index among the selector's matches, its real
-    /// attributes and the repeating list it sits in -- in one round trip. nil when the page cannot
-    /// answer.
-    func elementIdentity(selector: String?, alohaId: String) async -> ElementIdentity? {
+    /// attributes and the repeating list it sits in -- in one round trip, then its verified anchor
+    /// (see ``ReceiptAnchorProbe``). nil when the page cannot answer.
+    /// `forRead`: the element is being READ, so its anchor may not be built from its own text
+    /// (that text is the value read).
+    func elementIdentity(selector: String?, alohaId: String, forRead: Bool = false) async -> ElementIdentity? {
         guard !alohaId.isEmpty else { return nil }
         let script = ReceiptIdentityProbe.expression(selector: selector, alohaId: alohaId)
-        guard let value = try? await backend.evaluateViaCdp(script), let json = value.stringValue else { return nil }
-        return ReceiptIdentityProbe.parse(json)
+        guard let value = try? await backend.evaluateViaCdp(script), let json = value.stringValue,
+              var identity = ReceiptIdentityProbe.parse(json) else { return nil }
+        // THE ONE ADDRESS A STEP SHOULD USE, verified with the replay's resolver.
+        if let anchor = await receiptAnchor(
+            alohaId: alohaId, selector: selector, list: identity.list?.selector, forRead: forRead) {
+            identity.anchor = anchor
+        }
+        return identity
     }
 
     /// The `aloha-id` of the element that has keyboard focus -- the one `pressKeys` will type

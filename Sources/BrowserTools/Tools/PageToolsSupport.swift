@@ -284,7 +284,22 @@ enum PageToolReceipt {
         selector: String?, matches: Int?, text: String? = nil, identity: ElementIdentity? = nil,
         tool: String? = nil, source: String? = nil
     ) -> String {
-        guard let selector else { return "" }
+        guard let ladder = selector else { return "" }
+        // A POSITION PATH IS THE LAST RESORT, so when the ladder fell to one and the anchor is a
+        // semantic, non-positional address (an accessible name, a relative link, a test hook) the
+        // ANCHOR is reported as the selector and the path moves to `[path=…]`. Agent runs
+        // github-ss-r81/r83: the search button's receipt carried `[anchor=button[aria-label="Search
+        // or jump to, type / to search"]]` while its `[selector]` was a 13-segment position path,
+        // and the mint, which builds steps from `[selector]`, made the positional step. The anchor
+        // may hold spaces; receipt tokens end at the bracket that closes them, never at a space.
+        var selector = ladder, matches = matches
+        var path: String? = nil
+        if ladder == "body" || ladder.hasPrefix("body>"), let anchor = identity?.anchor,
+           anchor.nth == nil, !anchor.selector.hasPrefix("body>") {
+            path = ladder
+            selector = anchor.selector
+            matches = anchor.count ?? 1
+        }
         var note = " [selector=\(selector)]"
         // WHO WROTE THIS RECEIPT, inside the receipt itself: `[tool=get_text]` from a tool,
         // `[source=main-heading]` for the heading line a page read carries. The result already
@@ -293,6 +308,7 @@ enum PageToolReceipt {
         // and could not tell a read's receipt from a click's.
         if let tool, !tool.isEmpty { note += " [tool=\(tool)]" }
         if let source, !source.isEmpty { note += " [source=\(source)]" }
+        if let path { note += " [path=\(path)]" }
         if let matches { note += " [matches=\(matches)]" }
         // WHICH of the N matches this was. Only when there were several: with one match the
         // selector already names the element, and the token would be noise on every receipt.
@@ -301,7 +317,9 @@ enum PageToolReceipt {
         // from it, or the selector matches nothing now and no path could be rebuilt. The address
         // is still written, and `[index=none]` marks it unverified, so a mint does not build a
         // step on it when `[list=]`, `[path=]` or `[anchor=]` offer a checked one (2026-10-04 audit).
-        if let matches, let identity {
+        // Neither token when the anchor replaced the path: the index counted the PATH's matches,
+        // and the anchor was verified to resolve to exactly this element.
+        if let matches, let identity, path == nil {
             if let index = identity.index, matches > 1, index >= 1, index <= matches {
                 note += " [index=\(index)/\(matches)]"
             } else if identity.index == nil {
@@ -325,6 +343,11 @@ enum PageToolReceipt {
         // rung won `[selector=…]`, and written only when the list has two or more members.
         if let list = identity?.list {
             note += " [list=\(list.selector) \(list.index)/\(list.count)]"
+        }
+        // The address to replay with: one rule, checked on the live page (`ReceiptAnchorProbe`).
+        if let anchor = identity?.anchor {
+            note += " [anchor=\(anchor.selector)]"
+            if let nth = anchor.nth { note += " [anchor-nth=\(nth)]" }
         }
         return note
     }
@@ -387,6 +410,9 @@ struct ElementIdentity: Equatable, Sendable {
         let count: Int
     }
     var list: ListPosition? = nil
+    /// The address a scenario step should use, chosen by one rule and verified on the live page
+    /// with the replay's resolver (`[anchor=…]`, plus `[anchor-nth=N]` when it is an ordinal).
+    var anchor: ReceiptAnchorProbe.Anchor? = nil
 }
 
 /// One page round trip that reads an element's identity for the receipt. The expression is a

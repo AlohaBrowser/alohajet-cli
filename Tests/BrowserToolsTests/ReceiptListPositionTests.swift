@@ -65,4 +65,21 @@ struct ReceiptListPositionTests {
         #expect(GetTextExecutorTool.answerFreeReadAddress(selector: "a[href=\"/x/v3.8.5\"]", text: nil, identity: id) == nil)
         #expect(GetTextExecutorTool.answerFreeReadAddress(selector: "a[href=\"/x/v3.8.5\"]", text: "v3.8.5", identity: ElementIdentity(index: 1, attributes: [])) == nil)
     }
+
+    /// With no list, a read whose selector holds the value falls to its answer-free anchor; an
+    /// anchor that holds the value too, or an ordinal one, is no better and the selector stays.
+    @Test func withNoListTheAnswerFreeAnchorIsUsed() {
+        var id = ElementIdentity(index: nil, attributes: [])
+        id.anchor = .init(selector: "a:rel-href(\"releases/latest\")", nth: nil, count: 1)
+        #expect(GetTextExecutorTool.answerFreeReadAddress(selector: "a[href=\"/r/latest\"]", text: "Latest", identity: id) == nil)
+        id.anchor = .init(selector: "h2[title=\"Release name\"]", nth: nil, count: 1)
+        let free = GetTextExecutorTool.answerFreeReadAddress(selector: "a[href=\"/r/tag/v1.2.3\"]", text: "v1.2.3", identity: id)
+        #expect(free?.selector == "h2[title=\"Release name\"]")
+        #expect(free?.matches == 1)
+        #expect(free?.identity?.anchor == id.anchor)
+        let note = PageToolReceipt.selectorNote(selector: free!.selector, matches: free!.matches, text: "v1.2.3", identity: free!.identity, tool: "get_text")
+        #expect(note == " [selector=h2[title=\"Release name\"]] [tool=get_text] [matches=1] [text=\"v1.2.3\"] [anchor=h2[title=\"Release name\"]]")
+        id.anchor = .init(selector: "body>ul>li>a", nth: 2, count: 1)
+        #expect(GetTextExecutorTool.answerFreeReadAddress(selector: "a[href=\"/r/tag/v1.2.3\"]", text: "v1.2.3", identity: id) == nil)
+    }
 }

@@ -145,6 +145,10 @@ jobs:
         run: node Tests/BrowserToolsTests/receipt_identity.js
       - name: Live selector verification (fake DOM)
         run: node Tests/BrowserToolsTests/live_selector.js
+      # The anchor rule, run against the REAL resolver (both extracted from their Swift files), so
+      # an anchor this harness accepts is one a replay resolves.
+      - name: Receipt anchor rule (fake DOM, real resolver)
+        run: node Tests/BrowserToolsTests/receipt_anchor.js
       - name: Receipt list position (fake DOM)
         run: node Tests/BrowserToolsTests/list_position.js
       - name: Main heading probe (fake DOM)

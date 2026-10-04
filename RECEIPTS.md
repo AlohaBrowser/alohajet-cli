@@ -42,21 +42,49 @@ Writer: `PageToolReceipt.selectorNote` (`Sources/BrowserTools/Tools/PageToolsSup
 | `[selector=]` | the address to replay with: the selector ladder's pick (`Tabs/StepTraceSelector.swift`): id, data-testid, name, input type, `a[href="/path"]`, role, classes, else a position path `body>…`. **Verified on the live page before it is written** (every rung, since 2026-10-04): a selector whose live matches do not include the element is replaced by a position path rebuilt from the live element, or, when none can be built, written as it is with `[index=none]`. **One exception** follows this table | 2026-08-11 | 2026-10-04 |
 | `[tool=]` | the tool that wrote the receipt: `page_click`, `page_type`, `page_select`, `page_press_keys`, `get_text` | 2026-09-30 | — |
 | `[source=]` | where a non-tool line came from: `main-heading` (the heading line a page read carries) | 2026-09-30 | — |
+| `[path=]` | the ladder's position path, present **only** when exception 1 moved it out of `[selector=]` | 2026-10-01 | — |
 | `[matches=]` | how many elements `[selector=]` matches on the page now | 2026-09-21 | 2026-10-01 (it follows `[selector=]`) |
 | `[index=]` | `i/n`: which of the `n` matches this element is, 1-based, document order. Only when `n > 1`. **`none`**: `[selector=]` matched `n` elements (`[matches=]`, possibly 0) and this element was not among them, and no live path could be rebuilt -- the address is UNVERIFIED; replay by `[list=]`, `[path=]` or `[anchor=]` instead, never by this selector | 2026-09-21 | 2026-10-04 (`none`) |
 | `[text=]` | the element's own rendered text, quoted, whitespace collapsed | 2026-09-21 | — |
 | `[attrs=]` | the element's real attributes as `name="value"` pairs (aria-label, href, role, name, data-*…) | 2026-09-21 | — |
 | `[list=]` | `<list selector> i/n`: the repeating list the element sits in, and its place there. Only when the list has 2+ members | 2026-09-23 | — |
+| `[anchor=]` | the address chosen by the anchor rule (below) and checked on the live page with the resolver | 2026-09-23 | 2026-10-01 (rule 0 is `:rel-href`) |
+| `[anchor-nth=]` | `n`: the anchor is an ordinal, so replay it with `nth=n` (`:nth-match(n)`) | 2026-09-23 | — |
 | `[submitted=enter]` | the type or press-keys call pressed Enter | 2026-09-22 | — |
 
-**Exception (2026-10-02, reads only): a read's `[selector=]` never contains what it read.**
+**Exception 1 (2026-10-01): a semantic anchor beats a position path.** When the ladder fell to a
+position path (`body` or `body>…`) and the anchor is not positional and has no
+`[anchor-nth=]`:
+- `[selector=]` is the anchor;
+- `[path=]` holds the position path;
+- `[matches=]` is the anchor's match count;
+- `[index=]` is left out (neither `i/n` nor `none`: the anchor was verified).
+
+`[anchor=]` is still written, and it is the same string as `[selector=]`.
+
+**Exception 2 (2026-10-02, reads only): a read's `[selector=]` never contains what it read.**
 When the ladder's selector contains the text a `get_text` read (3+ characters, any case), for
 example `a[href="/…/releases/tag/v3.8.5"]` for the read `v3.8.5`:
 - `[selector=]` becomes the element's `[list=]` selector, with `[matches=]` the list's size and
-  `[index=]` its place.
+  `[index=]` its place;
+- with no list, `[selector=]` becomes the answer-free `[anchor=]`, with `[matches=]` its count.
 
-The old selector is dropped. A read with no list keeps the ladder's selector (the anchor-based
-alternative lands with the anchor rule, in the next PR).
+The old selector is dropped. No `[path=]` is added. `[anchor=]` is still written.
+
+**Anchor rule** (`ReceiptAnchorProbe`, `Sources/BrowserTools/Runtime/ReceiptAnchor.swift`). Candidates
+are tried in this order, and the first one that resolves back to the element wins:
+- **0:** `tag:rel-href("ref")`, when the element is a link relative to the current page. Up to
+  2026-10-01 this rule wrote `tag:sub-path("/tail")`.
+- **1:** the ladder's stable selector, when it is not a position path.
+- **1b:** `tag[aria-label="…"]` or `tag[title="…"]`, when the label has no digit (since 2026-09-30).
+- **2:** `<list>:has-text("…")`.
+- **3:** `<list>` with `[anchor-nth=]`.
+- **4:** `<selector>:has-text("…")`.
+
+A label containing a digit never becomes a text anchor (since 2026-10-01). For reads, rules 2
+and 4 are skipped, and so is any candidate that contains the value read. The check runs
+`window.__snips.resolveAll` (`Runtime/SelectorResolverScript.swift`, installed on the page when
+absent), so a reported anchor is one the replay's resolver picks.
 
 **Live verification (2026-10-04).** The ladder's selector comes from the page snapshot the agent
 last read, and a page that keeps rendering after that can move the element (github.com inserted
@@ -112,4 +140,12 @@ in the agent repository's copy of this file.
 | 2026-10-01 | alohajet `85bc8e3` | resolver `:rel-href` |
 | 2026-10-02 | alohajet `f6c3380` | the read exception (a read's `[selector=]` is its list when the selector held the value) |
 | 2026-10-04 | alohajet-cli `03d2e47` | every rung is verified on the live page before it is written; `[index=none]` marks an unverified address; a `data-testid` is screened by the generated-id rule |
-| 2026-10-04 | this package, PR `port/07-receipts-and-ladder` | the brackets above, the ladder, the resolver and this file move into `alohajet-cli`; the anchor rule (`[anchor=]`, `[anchor-nth=]`, `[path=]`) follows in `port/08-receipt-anchor` |
+| 2026-10-04 | this package, PR `port/07-receipts-and-ladder` | the brackets above, the ladder, the resolver and this file move into `alohajet-cli` |
+| 2026-09-23 | alohajet `b41dda1` | `[anchor=]`, `[anchor-nth=]`; the anchor rule |
+| 2026-09-28 | alohajet `49d1d1e` | anchor rule 0 writes `:sub-path`; a read never anchors on its own value |
+| 2026-09-30 | alohajet `e1f4c09` | anchor rule 1b (accessible name) |
+| 2026-10-01 | alohajet `c8e4388` | a label with a digit is never a text anchor |
+| 2026-10-01 | alohajet `85bc8e3` | anchor rule 0 writes `:rel-href` instead of `:sub-path` |
+| 2026-10-01 | alohajet `a9c4c17` | `[path=]`; exception 1 (`[selector=]` is the semantic anchor, `[matches=]` follows it, no `[index=]`) |
+| 2026-10-02 | alohajet `f6c3380` | exception 2's anchor half (a read with no list is addressed by its answer-free anchor) |
+| 2026-10-04 | this package, PR `port/08-receipt-anchor` | the anchor rule, `[anchor=]`, `[anchor-nth=]`, `[path=]` and both exceptions move into `alohajet-cli` |

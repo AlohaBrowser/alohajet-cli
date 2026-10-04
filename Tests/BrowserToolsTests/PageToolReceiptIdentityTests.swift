@@ -97,6 +97,35 @@ struct PageToolReceiptIdentityTests {
         #expect(await AgentBrowserBridge(backend: ReceiptProbeBackend([.string("{}")])).elementIdentity(selector: "a", alohaId: "") == nil)
     }
 
+    /// A position path is the last resort: when the ladder fell to one and the anchor is semantic
+    /// and not positional, the anchor IS the selector and the path moves to `[path=…]`
+    /// (agent runs github-ss-r81/r83: the search button's mint step was the 13-segment path).
+    @Test func aSemanticAnchorReplacesAPositionPathAsTheSelector() {
+        let path = "body>div:nth-of-type(1)>header>div>button"
+        var id = ElementIdentity(index: 2, attributes: [])
+        id.anchor = .init(selector: "button[aria-label=\"Search or jump to, type / to search\"]", nth: nil, count: 1)
+        let note = PageToolReceipt.selectorNote(selector: path, matches: 3, text: "Search/", identity: id, tool: "page_click")
+        #expect(note.hasPrefix(" [selector=button[aria-label=\"Search or jump to, type / to search\"]] [tool=page_click] [path=\(path)] [matches=1]"))
+        #expect(!note.contains("[index="))       // the index was among the PATH's matches
+        #expect(note.hasSuffix(" [anchor=button[aria-label=\"Search or jump to, type / to search\"]]"))
+
+        // A rule-0 link anchor reports how many links lead to the same place; the unverified
+        // path's missing index is not `[index=none]` either, the anchor WAS verified.
+        var rel = ElementIdentity(index: nil, attributes: [])
+        rel.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 3)
+        #expect(PageToolReceipt.selectorNote(selector: path, matches: 0, identity: rel).hasPrefix(" [selector=a:rel-href(\"releases\")] [path=\(path)] [matches=3] [anchor="))
+
+        // No swap: an anchor that is itself an ordinal or a path, or a ladder selector that is not
+        // a position path.
+        var ordinal = ElementIdentity(index: 2, attributes: [])
+        ordinal.anchor = .init(selector: "body>ul>li>a", nth: 2)
+        #expect(PageToolReceipt.selectorNote(selector: path, matches: 3, identity: ordinal).hasPrefix(" [selector=\(path)] [matches=3] [index=2/3]"))
+        var named = ElementIdentity(index: 1, attributes: [])
+        named.anchor = .init(selector: "button[aria-label=\"Sort\"]", nth: nil, count: 1)
+        #expect(PageToolReceipt.selectorNote(selector: "[data-testid=\"sort-button\"]", matches: 1, identity: named)
+                == " [selector=[data-testid=\"sort-button\"]] [matches=1] [anchor=button[aria-label=\"Sort\"]]")
+    }
+
     /// The receipt names who wrote it, right after its selector (llmdex, 2026-09-30: receipts lifted
     /// out of `<tool_result tool="…">` reached the mint as `receipt :`, a read indistinguishable
     /// from a click). No label, no token -- every older receipt shape is unchanged.
