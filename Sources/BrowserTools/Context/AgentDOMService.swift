@@ -1278,6 +1278,90 @@ public final class AgentDOMService {
     /// a head-biased head+tail slice around a middle marker — top-of-page context plus
     /// the page's trailing interactive elements. Returns the (possibly truncated)
     /// markdown and the token count to report for it.
+    /// The page's typable fields, named with the id to type into.
+    ///
+    /// WHY THIS EXISTS. An agent that cannot see a field cannot fill it, and on Postmill's
+    /// submit form the body textarea is missing from the rendered markdown on 588 of 1355
+    /// observations (43%) -- measured on llmdex runs 34314082894 and 34276664037, on the SAME
+    /// urls that render it on the other 767, so it is not page structure. What the model sees
+    /// in its place is the neighbouring hint text:
+    ///
+    ///     Body                                     Body
+    ///     textarea("Body") {aloha-id=...}     vs    Markdown allowed.
+    ///
+    /// It then types the post body into the "Markdown allowed." span, `page_type` refuses it
+    /// correctly, and -- because the submit was issued in the same round -- the post is created
+    /// with an empty body. WebArena tasks 627 reps 0 and 1 lost their body exactly that way.
+    ///
+    /// THE WALK ALREADY HAD THE FIELD. In 14 of 14, 16 of 16 and 3 of 3 attempts across three
+    /// runs, an observation whose markdown lacked the body textarea coexisted with a `page_type`
+    /// refusal naming a body id FROM THE SAME RENDER (same generation prefix). So the walker
+    /// id'd the element and the SERIALIZER dropped it; widening the walker's visibility gate
+    /// could not have helped.
+    ///
+    /// SO THIS READS `nodes`, NOT THE DOM. It costs no query: the walk has already visited every
+    /// element and this is the array it returned. A document-wide `querySelectorAll` per call
+    /// turned nav-33 at concurrency 16 into 25 timed-out attempts with a median wall of 382 s
+    /// against 126 s; per observation would be the same mistake.
+    ///
+    /// `[not in the view above]` marks a field whose id does not appear in `view`, the rendered
+    /// markdown AFTER the token cap. That is the model's actual view, so the marker answers the
+    /// question it claims to -- "can you find this id above?" -- and covers both ways a field
+    /// goes missing: the serializer dropping its line (112 of 114 on run 34340506674) and the cap
+    /// trimming it (the other 2). An earlier version keyed the marker on the walker's
+    /// `isHighlighted` flag, which fired only on fields that are never highlighted at all and
+    /// never once on the body textarea the whole exercise is about.
+    ///
+    /// NO `<select>`. The heading says "pass one of these ids to page_type", and a select is a
+    /// page_select target. Listing them turned the inventory into a menu, and the model reached
+    /// for the only select Postmill's submit form offers -- `submission[userFlag]`, advertised
+    /// 215 and 308 times across two runs while the forum select rendered zero -- and tried to
+    /// choose the forum on it: `No option with label "sports"`, 160 and 193 times per run. If a
+    /// task ever needs a select the view does not show, the answer is a second line with the
+    /// right verb, not this one relabelled.
+    ///
+    /// Only text-accepting fields, matching `page_type`'s own `eligible()`: no hidden inputs, no
+    /// checkboxes or radios, no passwords -- which is also where honeypots and CSRF tokens live,
+    /// and Postmill's submit form carries a `submission[email]` trap.
+    ///
+    /// AND NOTHING THE PAGE HAS HIDDEN WITH CSS. `type=hidden` is only the honest kind of hidden;
+    /// `submission[email]` is a visible-type `<input>` that the page's stylesheet removes from the
+    /// layout, and listing it under "pass one of these ids to page_type" is an invitation to fill
+    /// the trap. The walker's `isVisible` (offsetWidth and offsetHeight above zero, not
+    /// `display: none`, not `visibility: hidden`, not `aria-hidden`) is the same test the
+    /// serializer applies before it renders a control, so a field this trailer names is one a
+    /// human could see too. A field that is merely below the fold keeps `isVisible` and is still
+    /// listed -- being out of the viewport is the case the trailer exists for.
+    ///
+    /// Bounded: at most one `contains` per emitted line, and the loop stops at twelve.
+    static func formFieldTrailer(_ nodes: [DomNode], renderedInto view: String) -> String {
+        let nonText: Set<String> = [
+            "hidden", "checkbox", "radio", "submit", "button", "reset",
+            "file", "image", "range", "color", "password",
+        ]
+        var lines: [String] = []
+        for node in nodes {
+            let tag = node.element.tagName.lowercased()
+            guard tag == "textarea" || tag == "input" else { continue }
+            if node.id.isEmpty { continue }
+            // `type` and `placeholder` are ATTRIBUTES: `DomElement` carries only tagName,
+            // attributes, textContent and childText, and the walker copies every attribute of
+            // an interactive element. `inputData.type` is deliberately partial (nil for `text`)
+            // and is not what `page_type`'s eligibility check looks at.
+            let attrs = node.element.attributes
+            if tag == "input", nonText.contains((attrs["type"] ?? "").lowercased()) { continue }
+            if !node.positioning.isVisible { continue }
+            let raw = attrs["name"] ?? attrs["aria-label"] ?? attrs["placeholder"] ?? ""
+            let name = raw.isEmpty ? "" : " (" + String(raw.prefix(40)) + ")"
+            let hidden = view.contains(node.id) ? "" : "  [not in the view above]"
+            lines.append("  " + node.id + name + " " + tag + hidden)
+            if lines.count >= 12 { break }
+        }
+        if lines.isEmpty { return "" }
+        return "FORM FIELDS ON THIS PAGE \u{2014} pass one of these ids to page_type:\n"
+            + lines.joined(separator: "\n")
+    }
+
     static func cappedObservation(markdown: String, tokenCount: Int, cap: Int?) -> (markdown: String, tokenCount: Int) {
         guard let cap, cap > 0 else { return (markdown, tokenCount) }
         let estTokens = tokenCount > 0 ? tokenCount : (markdown.count + 3) / 4
@@ -1378,6 +1462,11 @@ public final class AgentDOMService {
                 markdown: markdown, tokenCount: tokenCount, cap: Self.maxObservationTokens())
             markdown = cappedObs.markdown
             tokenCount = cappedObs.tokenCount
+            // APPENDED AFTER THE CAP, deliberately. The trailer is the part of an observation
+            // a form task cannot proceed without, so it must not be what the cap trims; it is
+            // bounded at twelve lines instead. See `formFieldTrailer`.
+            let fields = Self.formFieldTrailer(nodes, renderedInto: markdown)
+            if !fields.isEmpty { markdown += "\n" + fields }
 
             var screenshot: String?
             var screenshotError: String?
@@ -1810,6 +1899,36 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
             }
             content.optionData = DomOptionData(options: options, multiple: optionValue.bool("multiple") ?? false)
         }
+        // THE FIELD'S CONTENTS, which this function had been dropping since it was written. The
+        // walker sends `content.inputData` with a `value`; nothing read it, so every `<input>`
+        // serialized identically whether it was empty or full and no agent could confirm a thing
+        // it typed. See `DomInputData.value` for the measurement.
+        //
+        // DELIBERATELY PARTIAL. `type` is stored ONLY when it is not the default `text`: `date`
+        // (ISO by spec), `datetime-local`, `month`, `number`, `email`, `tel`, `url` each tell the
+        // agent what the field will accept, while printing `text` on every ordinary box would be
+        // noise on every page. `placeholder` is the format the page itself advertises (the greyed
+        // `MM/DD/YYYY` a human can see). `required` and `disabled` stay unparsed: storing
+        // `disabled` would silently change `isElementDisabled` across the whole serializer.
+        if let inputValue = contentValue["inputData"], case .object = inputValue {
+            let rawType = (inputValue.string("type") ?? "").lowercased()
+            let value = inputValue.string("value")
+            let placeholder = inputValue.string("placeholder")
+            // Secrets never leave the page: see `isSecretInputField`. A secret renders as
+            // `value=(hidden)`, so the model learns the field is FILLED and nothing more.
+            let secret = isSecretInputField(
+                type: rawType,
+                autocomplete: inputValue.string("autocomplete") ?? "",
+                attributes: attributes,
+                placeholder: placeholder,
+                value: value)
+            let storedType = (rawType.isEmpty || rawType == "text") ? nil : rawType
+            content.inputData = DomInputData(
+                type: storedType,
+                placeholder: placeholder,
+                value: value,
+                isSecret: secret)
+        }
     }
 
     var interactivity = DomInteractivity()
@@ -1859,6 +1978,52 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
         positioning: positioning,
         children: (value.array("children") ?? []).compactMap(\.stringValue)
     )
+}
+
+/// Whether a field's contents may never be serialized into a model's context.
+///
+/// Three kinds of field qualify. A credential or payment field by the page's OWN marking:
+/// `type=password`, an `autocomplete` token naming a password or a `cc-` payment detail, or
+/// `autocomplete="one-time-code"` -- the token the HTML spec assigns to an SMS or authenticator
+/// code, which is as much a credential as the password it stands in for. A field the page-side
+/// predicate (`__alohaIsSensitiveField`) already masked before the value crossed the wire. And a
+/// SHORT NUMERIC CODE named as one: a field whose name, id, aria-label or placeholder says CVV,
+/// CVC, OTP, PIN, SSN, "security code" or "verification code", when the field is also numeric in
+/// kind (`type=number|tel`, `inputmode=numeric|tel|decimal`), short (`maxlength` of twelve or
+/// fewer) or holding a short run of digits. Sites that do not set `autocomplete` on a card's
+/// security code -- most of them -- name the box one of these, and a three-digit CVV in a model's
+/// context is a leaked card detail however the box was declared.
+///
+/// The name match is on whole words (`[]_-./:` count as separators), so "Pinterest" and
+/// "shipping" do not match `pin`, while `card[cvv]` and `pin_code` do. The numeric gate is what
+/// keeps a text box that merely MENTIONS a code -- a search field named `otp-search` holding a
+/// sentence -- readable: a secret is withheld, never invented.
+func isSecretInputField(type rawType: String, autocomplete rawAutocomplete: String,
+                        attributes: [String: String], placeholder: String?, value: String?) -> Bool {
+    let type = rawType.lowercased()
+    if type == "password" { return true }
+    let autocomplete = rawAutocomplete.lowercased()
+    if autocomplete.contains("password") || autocomplete.hasPrefix("cc-") || autocomplete == "one-time-code" {
+        return true
+    }
+    if value == sensitiveFieldMaskText { return true }
+    let joined = [attributes["name"], attributes["id"], attributes["aria-label"], placeholder, attributes["placeholder"]]
+        .compactMap { $0 }
+        .joined(separator: " ")
+        .lowercased()
+    let hay = String(joined.map { "[]_-./:".contains($0) ? Character(" ") : $0 })
+    let codeWords = #"\b(cvv2?|cvc2?|otp|pin|ssn)\b|security code|verification code|one[ -]?time (code|password|passcode)"#
+    guard hay.range(of: codeWords, options: .regularExpression) != nil else { return false }
+    let inputMode = (attributes["inputmode"] ?? "").lowercased()
+    let numericKind = type == "number" || type == "tel" || ["numeric", "tel", "decimal"].contains(inputMode)
+    let short = (Int(attributes["maxlength"] ?? "") ?? Int.max) <= 12
+    let digitsOnly: Bool = {
+        guard let value else { return false }
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        return !trimmed.isEmpty && trimmed.count <= 12
+            && trimmed.allSatisfy { $0.isNumber || $0 == " " || $0 == "-" }
+    }()
+    return numericKind || short || digitsOnly
 }
 
 // MARK: - Shared small types

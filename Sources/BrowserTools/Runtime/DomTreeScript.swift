@@ -1452,6 +1452,10 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         type: input.type || "text",
         value: __alohaIsSensitiveField(input) ? \#(sensitiveFieldMaskJS) : (input.value || ""),
         placeholder: input.placeholder || "",
+        // Read on the Swift side to decide whether the value may be serialized at all. A site
+        // marks its own credential and payment fields here, and that marking is worth more than
+        // any guess we could make from the name or the placeholder.
+        autocomplete: (input.getAttribute && input.getAttribute("autocomplete")) || "",
         required: input.required || false,
         disabled: input.disabled || false,
         readonly: input.readOnly || false,
@@ -1466,6 +1470,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         type: "textarea",
         value: __alohaIsSensitiveField(textarea) ? \#(sensitiveFieldMaskJS) : (textarea.value || ""),
         placeholder: textarea.placeholder || "",
+        autocomplete: (textarea.getAttribute && textarea.getAttribute("autocomplete")) || "",
         required: textarea.required || false,
         disabled: textarea.disabled || false,
         readonly: textarea.readOnly || false,
