@@ -1408,7 +1408,13 @@ public final class AgentDOMService {
             var serializeError: String?
             do {
                 try throwIfAborted(signal)
-                let serializeNodes = serializeOptions.cleanDom ? cleanDomTree(nodes) : nodes
+                // AN OPEN POPUP BELONGS WHERE ITS OWNER IS. A portal-rendering widget appends
+                // its dropdown to the end of `<body>`, so the options the model must choose from
+                // land after the footer instead of under the combobox that opened them; see
+                // `reattachOpenPopups`. Before `cleanDomTree` so the popup travels with its owner
+                // through pruning, and a no-op on a page with nothing open.
+                let placedNodes = reattachOpenPopups(nodes)
+                let serializeNodes = serializeOptions.cleanDom ? cleanDomTree(placedNodes) : placedNodes
                 markdown = serializeFullMarkdown(serializeNodes, serializeOptions)
                 try throwIfAborted(signal)
             } catch {

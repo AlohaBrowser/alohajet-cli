@@ -716,6 +716,94 @@ func occlusionMarker(_ node: DomNode) -> String {
     return " [occ:\(key)]"
 }
 
+/// At most this many popups are reattached per page. A page with more open dropdowns than this
+/// is either pathological or mid-animation, and moving dozens of subtrees would reorder the
+/// document more than it clarifies it.
+public let maxReattachedPopups = 4
+
+/// Renders an OPEN POPUP where its owner is, not where the DOM happens to keep it.
+///
+/// Serialization follows the tree, so an element's place in the text is its place in the document.
+/// Every portal-rendering widget breaks that correspondence: it appends its dropdown to the end of
+/// `<body>`, so a list that sits directly under a combobox ON SCREEN lands hundreds of lines away
+/// in the text, after the footer, reading as unrelated page furniture.
+///
+/// MEASURED, on WebArena run 33889241270 tasks 647/649. Postmill's submit form has
+/// `<select id="submission_forum" name="submission[forum]" required>` whose first option is
+/// `<option value="">Choose one...</option>` -- empty -- and select2 hides that select behind a
+/// span. The model filled the title and body correctly, clicked the combobox (which opened the
+/// dropdown), never picked a forum, then clicked `[Create submission]` five times. Each click
+/// LANDED: HTML5 validation refused the submit because the required select was empty, and a
+/// validation refusal is drawn as a NATIVE BUBBLE, not a DOM node -- so the page came back
+/// byte-identical and the receipt truthfully said the page had not navigated. Nothing was posted.
+///
+/// The options were in the snapshot the whole time, with ids, 500 lines below the form:
+///
+///     [footer]
+///     [Postmill] {aloha-id="3f5c-47f776b" a}
+///     [Choose one? allentown arlingtonva Art...] [aria: EXPANDED] {aloha-id="3f5c-79af7df5" ul}
+///       [Choose one?] {aloha-id="3f5c-49adca1f" li}
+///       [allentown]   {aloha-id="3f5c-49adca3e" li}
+///
+/// OWNERSHIP IS TAKEN FROM ARIA, not from a library's class names: an element with
+/// `aria-expanded="true"` naming another element in `aria-controls`/`aria-owns` IS the
+/// relationship, and it is what select2, Radix, Headless UI and every hand-rolled combobox already
+/// publish for screen readers. So this fixes the class, not Postmill.
+///
+/// Pure, and a no-op on any page with no open popup: without an `aria-expanded="true"` owner that
+/// names a resolvable target, the input array is returned unchanged.
+public func reattachOpenPopups(_ nodes: [DomNode]) -> [DomNode] {
+    var nodeIdByDomId: [String: String] = [:]
+    for node in nodes {
+        guard let domId = node.element.attributes["id"], !domId.isEmpty else { continue }
+        if nodeIdByDomId[domId] == nil { nodeIdByDomId[domId] = node.id }
+    }
+    guard !nodeIdByDomId.isEmpty else { return nodes }
+
+    var indexById: [String: Int] = [:]
+    for (offset, node) in nodes.enumerated() { indexById[node.id] = offset }
+    var parentOf: [String: String] = [:]
+    for node in nodes {
+        for child in node.children { parentOf[child] = node.id }
+    }
+    // Bounded: a malformed tree that made `parentOf` cyclic must not hang a page read.
+    func isAncestor(_ candidate: String, of start: String) -> Bool {
+        var cursor = parentOf[start]
+        var hops = 0
+        while let current = cursor, hops < 256 {
+            if current == candidate { return true }
+            cursor = parentOf[current]
+            hops += 1
+        }
+        return false
+    }
+
+    var out = nodes
+    var moved = 0
+    for owner in nodes {
+        if moved >= maxReattachedPopups { break }
+        guard owner.element.attributes["aria-expanded"] == "true" else { continue }
+        let named = owner.element.attributes["aria-controls"] ?? owner.element.attributes["aria-owns"] ?? ""
+        // `aria-controls` is a token LIST; the popup is the first token that resolves.
+        let target = named.split(separator: " ").map(String.init)
+            .first(where: { nodeIdByDomId[$0] != nil })
+        guard let target, let popupId = nodeIdByDomId[target], popupId != owner.id,
+              let ownerIndex = indexById[owner.id] else { continue }
+        // Already inside its owner: the DOM and the screen agree, nothing to do.
+        if isAncestor(owner.id, of: popupId) { continue }
+        // And never pull an ANCESTOR of the owner underneath it -- that builds a cycle and the
+        // serializer would walk it forever.
+        if isAncestor(popupId, of: owner.id) { continue }
+        if let currentParent = parentOf[popupId], let parentIndex = indexById[currentParent] {
+            out[parentIndex].children.removeAll { $0 == popupId }
+        }
+        out[ownerIndex].children.append(popupId)
+        parentOf[popupId] = owner.id
+        moved += 1
+    }
+    return out
+}
+
 /// One legend line per distinct overlay covering the page, built from the same
 /// `occludedBy` data the per-node `[occ:id]` markers reference. Empty when nothing is
 /// occluded. Lets the model see "one banner covers everything → dismiss it" at a glance.
