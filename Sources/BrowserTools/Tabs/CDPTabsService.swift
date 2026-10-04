@@ -46,7 +46,7 @@ final class CDPAgentDOMSnapshotting: AgentDOMSnapshotting {
 /// A ``TabHandle`` over a CDP page target. It owns the target session, an
 /// ``AgentDOMService`` (for interactive snapshots, click, type, etc.), and the
 /// agent-control flags the tab tools read and set.
-public final class CDPTabHandle: TabHandle, StepTraceTab {
+public final class CDPTabHandle: TabHandle, StepTraceTab, OpenRequestRemembering {
     let session: CDPTabSession
     let browserTab: CDPBrowserTab
     /// The tab's DOM driver. Public because a host's `onTabCreated` hook wires its own
@@ -69,6 +69,10 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// at construction: `true` for a target seeded from the browser, restored, or
     /// adopted live; `false` for one this session opened or a click spawned.
     public let openedByHuman: Bool
+    /// What `manage_tabs open` asked this tab to show — see ``OpenRequestRemembering``.
+    /// Written by the open path, never by a navigation: the point is to keep the ASK after
+    /// the server has moved the page.
+    public var requestedOpenURL: String?
 
     /// Fired after every ``setAIControlledTab`` with the flags as they now stand. The
     /// hook a host hangs a per-tab navigation guard off: the guard installs when the tab

@@ -14,7 +14,7 @@ import CDP
 // every one of the seven tools shares (`resolveActivePageTab` in
 // `PageToolsSupport.swift`) without needing a live CDP connection.
 
-final class PageToolsStubTabHandle: TabHandle {
+final class PageToolsStubTabHandle: TabHandle, OpenRequestRemembering {
     let id: String
     var title: String?
     var url: String
@@ -22,6 +22,9 @@ final class PageToolsStubTabHandle: TabHandle {
     var tabType: String
     var faviconUrl: String?
     var userTookOver: Bool
+    /// What `manage_tabs open` asked for (see `OpenRequestRemembering`); tests move `url`
+    /// away from it to stand in for a server that rewrote the path.
+    var requestedOpenURL: String?
 
     private var _chatSessionId: String?
     private var _aiControlled = false
@@ -124,6 +127,19 @@ final class PageToolsStubTabsService: TabsService {
     let stubWindow: PageToolsStubTabsWindow?
     init(_ window: PageToolsStubTabsWindow?) { self.stubWindow = window }
     var window: TabsWindow? { stubWindow }
+}
+
+/// The session pointer and nothing else: `manage_tabs use` writes it, the page tools and the
+/// tab housekeeping read it. Shared so the housekeeping tests do not each grow a copy.
+final class PageToolsStubSession: ChatModeSession {
+    var active: String?
+    private(set) var unregistered: [String] = []
+    func sessionNetworkDir() -> String? { nil }
+    func registerNetworkRecordingTab(_ tab: TabHandle) {}
+    func unregisterNetworkRecordingTab(_ tabId: String) { unregistered.append(tabId) }
+    func setActiveBrowserTab(_ tabId: String?) { active = tabId }
+    func getActiveBrowserTabId() -> String? { active }
+    func clearActiveBrowserTabIfMatches(_ tabId: String) { if active == tabId { active = nil } }
 }
 
 // MARK: - Recording AgentBridgeBackend (driver-level tests)

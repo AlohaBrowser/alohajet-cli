@@ -87,6 +87,10 @@ public struct AgentOwnedTabs: Sendable {
     public let client: CDPClient
     public let sessionId: String
     public let webExtractionOptions: AgentWebExtractionOptions
+    /// What `manage_tabs` may do to the agent's own tabs unasked, and whether a turn may
+    /// collapse them when it ends. `.off` — a user's browser gets no housekeeping — unless the
+    /// host sets it before the first call; a benchmark harness sets `.finalPageGraded`.
+    public var tabHousekeeping: TabHousekeepingPolicy = .off
     public let webSocketEndpoint: String
 
     /// The launched browser, or `nil` when this session attached to one it does not own.
@@ -298,7 +302,8 @@ public struct AgentOwnedTabs: Sendable {
             services: NativeToolServices(
                 tabsService: tabsService,
                 session: self,
-                webExtractionOptions: webExtractionOptions),
+                webExtractionOptions: webExtractionOptions,
+                tabHousekeeping: tabHousekeeping),
             suspend: { _ in nil }))
 
         do {
