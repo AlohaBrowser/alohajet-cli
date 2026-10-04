@@ -2102,7 +2102,13 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         children,
         element: {
           tagName,
-          xpath: nodeData.xpath || '',
+          // THE PATH ONLY WHERE IT RESOLVES IN THIS DOCUMENT. The walker paths an iframe's
+          // content from that frame's own body, and a shadow child from its HOST's path, so
+          // either path handed to `document.querySelector` on the top document finds nothing
+          // or -- worse -- finds a different element. The consumer is the receipt's selector
+          // ladder, which records a selector for a replayer that has only the top document, so
+          // a scoped node reports no path and the ladder falls back to saying nothing.
+          xpath: (nodeData.contextPath && nodeData.contextPath.length) ? '' : (nodeData.xpath || ''),
           attributes: nodeData.attributes || {},
           href,
           textContent,
