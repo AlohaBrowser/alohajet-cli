@@ -97,6 +97,56 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     return null;
   }
 
+  // THE NAME THE PAGE ALREADY GAVE THIS CONTROL. A form control has no text of its own, so
+  // `interactiveLabel` finds nothing for it and the serializer renders a bare `input()`; the
+  // control's `<label>` is emitted as its own line instead, leaving the model to pair the two by
+  // position. Measured on WebArena run 33868469638: across 371 Magento admin observations, 564
+  // unnamed `input()` against 1,159 named ones and 1,956 labels standing on their own line -- one
+  // guess per label, every read.
+  //
+  // Postmill's submit form is what that guessing costs. Its labels FOLLOW their controls (a CSS
+  // ordering choice), so on tasks 647/649 the model typed the title into `#submission_url` and the
+  // body into `#submission_title`, left the required title empty, and every submit was refused --
+  // 337 refusal notes naming `submission[title]`, and nothing ever posted.
+  //
+  // Resolution order is the accessible-name order the HTML spec already defines: an explicit
+  // `label[for=id]`, then a `<label>` wrapping the control, then `aria-labelledby`. Written into
+  // `aria-label` so ONE assignment fixes every consumer -- `input("Title")`, `findByText`, the
+  // click receipts -- rather than teaching each of them the lookup.
+  function findAssociatedLabelText(element) {
+    if (!element) return null;
+    const clean = (raw) => {
+      const text = (raw || "").replace(/\s+/g, " ").trim();
+      return text ? text : null;
+    };
+    try {
+      // `element.labels` IS the association the HTML spec defines: it covers an explicit
+      // `label[for=id]` AND a `<label>` wrapping the control, in one property, with no id
+      // escaping and no document query of our own. Undefined on anything that cannot be
+      // labelled, which the guard treats as "no name".
+      const own = element.labels;
+      if (own && own.length) {
+        for (let i = 0; i < own.length; i++) {
+          const text = clean(own[i].textContent);
+          if (text) return text;
+        }
+      }
+      const referenced = element.getAttribute ? element.getAttribute("aria-labelledby") : null;
+      if (referenced) {
+        const parts = [];
+        const tokens = referenced.split(/\s+/);
+        for (let i = 0; i < tokens.length; i++) {
+          if (!tokens[i]) continue;
+          const target = element.ownerDocument.getElementById(tokens[i]);
+          const text = target && clean(target.textContent);
+          if (text) parts.push(text);
+        }
+        if (parts.length) return clean(parts.join(" "));
+      }
+    } catch (e) {}
+    return null;
+  }
+
   function getElementData(element) {
     if (!element) return null;
     if (caches.elementData.has(element)) return caches.elementData.get(element) || null;
@@ -1059,6 +1109,20 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       if (!rects || rects.length === 0) return null;
       const rect = rects[Math.floor(rects.length / 2)];
       if (rect.width <= 0 || rect.height <= 0) return null;
+      // NOT A CLICK TARGET, NOT "COVERED". A visually-hidden control -- a skip link clipped to a
+      // pixel, an sr-only input -- sits under whatever is drawn at its corner, and reporting THAT
+      // as an occlusion named the page's own product panel as an overlay to dismiss (Zara,
+      // 2026-09-20). Anything a pointer could not land on is left out of the probe.
+      if (rect.width < 4 || rect.height < 4) return null;
+      try {
+        const cs = getComputedStyleCached(element);
+        if (cs) {
+          const clip = String(cs.clip || "");
+          const clipPath = String(cs.clipPath || "");
+          if (/rect\(\s*0px,?\s*0px,?\s*0px,?\s*0px\s*\)/.test(clip)) return null;
+          if (/inset\(\s*(50|100)%/.test(clipPath) || /circle\(\s*0/.test(clipPath)) return null;
+        }
+      } catch {}
       const pad = 5;
       const points = [
         [rect.left + rect.width / 2, rect.top + rect.height / 2],
@@ -1728,7 +1792,10 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         }
       try {
         if (!descriptor.attributes["aria-label"] && !element.textContent) {
-          const inferred = findDescendantAriaLabel(element);
+          // The page's own association first; a descendant's aria-label is the weaker guess and
+          // stays as the fallback it always was.
+          const labelled = findAssociatedLabelText(element);
+          const inferred = labelled || findDescendantAriaLabel(element);
           if (inferred) descriptor.attributes["aria-label"] = inferred;
         }
       } catch {}
@@ -1914,11 +1981,29 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   const rootId = walkNode(document.body);
   // Resolve each occluded node's covering element to a compact reference now that every node
   // has its aloha-id assigned (so the occluder can be named, and made actionable when tracked).
+  // HOW MANY NODES EACH COVER HIDES, and whether the cover is itself full of controls. A
+  // backdrop or a cookie wall hides many nodes and holds no controls -- close it. A sticky
+  // product panel, a drawer, a dialog with a form hides a few nodes and holds the controls the
+  // task needs -- use it. The legend needs both numbers to say which is which.
+  const coveredCountByEl = new Map();
+  for (const occId in nodeMap) {
+    const occNode = nodeMap[occId];
+    if (!occNode || !occNode.__occluderEl) continue;
+    coveredCountByEl.set(occNode.__occluderEl, (coveredCountByEl.get(occNode.__occluderEl) || 0) + 1);
+  }
+  const controlCountOf = (el) => {
+    try {
+      return Math.min(99, el.querySelectorAll(
+        "a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=link], [role=tab], [role=menuitem], [role=option]"
+      ).length);
+    } catch { return 0; }
+  };
   for (const occId in nodeMap) {
     const occNode = nodeMap[occId];
     if (!occNode || !occNode.__occluderEl) continue;
     const cover = occNode.__occluderEl;
     delete occNode.__occluderEl;
+    const coveredCount = coveredCountByEl.get(cover) || 1;
     try {
       const isPageRoot = (el) =>
         !el || el === document.body || el === document.documentElement ||
@@ -1932,13 +2017,15 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       if (isPageRoot(named)) {
         // Covered by a bare/anonymous overlay that resolves up to the page root — name it
         // generically rather than quoting the entire page's text back to the model.
-        occNode.occludedBy = { alohaId: null, tag: "overlay", role: null, text: null };
+        occNode.occludedBy = { alohaId: null, tag: "overlay", role: null, text: null, coveredCount: coveredCount, controlCount: 0 };
       } else {
         occNode.occludedBy = {
           alohaId: (named.getAttribute && named.getAttribute("aloha-id")) || null,
           tag: (named.tagName || "").toLowerCase() || "overlay",
           role: (named.getAttribute && named.getAttribute("role")) || null,
-          text: ((named.getAttribute && named.getAttribute("aria-label")) || named.textContent || "").trim().slice(0, 60) || null
+          text: ((named.getAttribute && named.getAttribute("aria-label")) || named.textContent || "").trim().slice(0, 60) || null,
+          coveredCount: coveredCount,
+          controlCount: controlCountOf(named)
         };
       }
     } catch {}

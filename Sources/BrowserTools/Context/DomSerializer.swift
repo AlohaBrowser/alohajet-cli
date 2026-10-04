@@ -93,11 +93,19 @@ public struct OccluderRef: Sendable, Equatable {
     public var tag: String
     public var role: String?
     public var text: String?
-    public init(alohaId: String? = nil, tag: String, role: String? = nil, text: String? = nil) {
+    /// How many interactive nodes this cover hides (the walk counts them per cover).
+    public var coveredCount: Int?
+    /// How many controls the cover itself holds. A backdrop holds none and should be closed; a
+    /// panel, drawer or dialog holding controls is part of the page and should be USED.
+    public var controlCount: Int?
+    public init(alohaId: String? = nil, tag: String, role: String? = nil, text: String? = nil,
+                coveredCount: Int? = nil, controlCount: Int? = nil) {
         self.alohaId = alohaId
         self.tag = tag
         self.role = role
         self.text = text
+        self.coveredCount = coveredCount
+        self.controlCount = controlCount
     }
 }
 
@@ -716,6 +724,108 @@ func occlusionMarker(_ node: DomNode) -> String {
     return " [occ:\(key)]"
 }
 
+/// At most this many popups are reattached per page. A page with more open dropdowns than this
+/// is either pathological or mid-animation, and moving dozens of subtrees would reorder the
+/// document more than it clarifies it.
+public let maxReattachedPopups = 4
+
+/// Renders an OPEN POPUP where its owner is, not where the DOM happens to keep it.
+///
+/// Serialization follows the tree, so an element's place in the text is its place in the document.
+/// Every portal-rendering widget breaks that correspondence: it appends its dropdown to the end of
+/// `<body>`, so a list that sits directly under a combobox ON SCREEN lands hundreds of lines away
+/// in the text, after the footer, reading as unrelated page furniture.
+///
+/// MEASURED, on WebArena run 33889241270 tasks 647/649. Postmill's submit form has
+/// `<select id="submission_forum" name="submission[forum]" required>` whose first option is
+/// `<option value="">Choose one...</option>` -- empty -- and select2 hides that select behind a
+/// span. The model filled the title and body correctly, clicked the combobox (which opened the
+/// dropdown), never picked a forum, then clicked `[Create submission]` five times. Each click
+/// LANDED: HTML5 validation refused the submit because the required select was empty, and a
+/// validation refusal is drawn as a NATIVE BUBBLE, not a DOM node -- so the page came back
+/// byte-identical and the receipt truthfully said the page had not navigated. Nothing was posted.
+///
+/// The options were in the snapshot the whole time, with ids, 500 lines below the form:
+///
+///     [footer]
+///     [Postmill] {aloha-id="3f5c-47f776b" a}
+///     [Choose one? allentown arlingtonva Art...] [aria: EXPANDED] {aloha-id="3f5c-79af7df5" ul}
+///       [Choose one?] {aloha-id="3f5c-49adca1f" li}
+///       [allentown]   {aloha-id="3f5c-49adca3e" li}
+///
+/// OWNERSHIP IS TAKEN FROM ARIA, not from a library's class names: an element with
+/// `aria-expanded="true"` naming another element in `aria-controls`/`aria-owns` IS the
+/// relationship, and it is what select2, Radix, Headless UI and every hand-rolled combobox already
+/// publish for screen readers. So this fixes the class, not Postmill.
+///
+/// Pure, and a no-op on any page with no open popup: without an `aria-expanded="true"` owner that
+/// names a resolvable target, the input array is returned unchanged.
+public func reattachOpenPopups(_ nodes: [DomNode]) -> [DomNode] {
+    var nodeIdByDomId: [String: String] = [:]
+    for node in nodes {
+        guard let domId = node.element.attributes["id"], !domId.isEmpty else { continue }
+        if nodeIdByDomId[domId] == nil { nodeIdByDomId[domId] = node.id }
+    }
+    guard !nodeIdByDomId.isEmpty else { return nodes }
+
+    var indexById: [String: Int] = [:]
+    for (offset, node) in nodes.enumerated() { indexById[node.id] = offset }
+    var parentOf: [String: String] = [:]
+    for node in nodes {
+        for child in node.children { parentOf[child] = node.id }
+    }
+    // Bounded: a malformed tree that made `parentOf` cyclic must not hang a page read.
+    func isAncestor(_ candidate: String, of start: String) -> Bool {
+        var cursor = parentOf[start]
+        var hops = 0
+        while let current = cursor, hops < 256 {
+            if current == candidate { return true }
+            cursor = parentOf[current]
+            hops += 1
+        }
+        return false
+    }
+
+    var out = nodes
+    var moved = 0
+    for owner in nodes {
+        if moved >= maxReattachedPopups { break }
+        guard owner.element.attributes["aria-expanded"] == "true" else { continue }
+        let named = owner.element.attributes["aria-controls"] ?? owner.element.attributes["aria-owns"] ?? ""
+        // `aria-controls` is a token LIST; the popup is the first token that resolves.
+        let target = named.split(separator: " ").map(String.init)
+            .first(where: { nodeIdByDomId[$0] != nil })
+        guard let target, let popupId = nodeIdByDomId[target], popupId != owner.id,
+              let ownerIndex = indexById[owner.id] else { continue }
+        // Already inside its owner: the DOM and the screen agree, nothing to do.
+        if isAncestor(owner.id, of: popupId) { continue }
+        // And never pull an ANCESTOR of the owner underneath it -- that builds a cycle and the
+        // serializer would walk it forever.
+        if isAncestor(popupId, of: owner.id) { continue }
+        if let currentParent = parentOf[popupId], let parentIndex = indexById[currentParent] {
+            out[parentIndex].children.removeAll { $0 == popupId }
+        }
+        out[ownerIndex].children.append(popupId)
+        parentOf[popupId] = owner.id
+        moved += 1
+    }
+    return out
+}
+
+/// The topic words the click tool's consent hider keys on (`CONSENT_TOPIC` in
+/// `ClickReceipts.swift`, seven languages), so the legend and the hider agree on what a consent
+/// prompt is. "privacy" alone qualifies for neither: a settings modal reading "privacy
+/// preferences" is a panel.
+let consentTopicPattern = "cookie|cookies|consent|gdpr|tracking|we value your privacy|datenschutz"
+    + "|einwilligung|confidentialit|privacidad"
+    + "|\u{043A}\u{0443}\u{043A}\u{0438}|\u{0441}\u{043E}\u{0433}\u{043B}\u{0430}\u{0441}"
+
+/// Whether a cover's text reads like a cookie or consent notice.
+func readsLikeConsentNotice(_ text: String?) -> Bool {
+    guard let text, !text.isEmpty else { return false }
+    return text.range(of: consentTopicPattern, options: [.regularExpression, .caseInsensitive]) != nil
+}
+
 /// One legend line per distinct overlay covering the page, built from the same
 /// `occludedBy` data the per-node `[occ:id]` markers reference. Empty when nothing is
 /// occluded. Lets the model see "one banner covers everything → dismiss it" at a glance.
@@ -726,15 +836,43 @@ public func occlusionLegend(_ nodes: [DomNode]) -> [String] {
         guard let occ = node.interactivity.occludedBy else { continue }
         let key = occlusionKey(occ)
         let marker = key.map { "[occ:\($0)]" } ?? "[occluded]"
-        var d = "\(marker) = overlay <\(occ.tag.isEmpty ? "element" : occ.tag.lowercased())>"
+        // A COVER THAT HOLDS CONTROLS IS A PANEL, NOT A LAYER TO DISMISS. Measured on a product
+        // page (2026-09-20): the sticky panel holding the colour swatches and the Add button was
+        // reported as an overlay to "dismiss/close"; the model clicked it four times trying to
+        // close it and never pressed Add. A backdrop or a cookie wall holds no controls and hides
+        // many nodes -- that one is closed. The two numbers the walk now records tell them apart.
+        // EXCEPT A COOKIE OR CONSENT WALL. It holds controls too -- Accept, Reject, Manage -- and
+        // by the control count alone it would be described as a panel whose controls the model
+        // should use. This agent answers no consent prompt (policy: no new cookies): the click
+        // tool hides the prompt on contact, whether the click lands on one of its controls or on
+        // an element it covers, and nothing is accepted or rejected. The legend says that, so
+        // the model neither hunts for a close button nor presses Accept.
+        let isConsent = (occ.controlCount ?? 0) > 0 && readsLikeConsentNotice(occ.text)
+        let isPanel = (occ.controlCount ?? 0) > 0 && !isConsent
+        let kind = isConsent ? "consent prompt" : (isPanel ? "panel" : "overlay")
+        var d = "\(marker) = \(kind) <\(occ.tag.isEmpty ? "element" : occ.tag.lowercased())>"
         if let role = occ.role, !role.isEmpty { d += " role=\"\(role)\"" }
         if let raw = occ.text?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
             let safe = raw.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\t", with: " ")
             d += " \"\(truncateText(safe, 60))\""
         }
-        d += key == nil
-            ? " — no aloha-id to address it by; dismiss it to interact with [occluded]-marked elements below"
-            : " — dismiss/close it to interact with \(marker)-marked elements below"
+        if isConsent {
+            d += " — a cookie/consent prompt, not a panel to use: this agent answers none of them (policy: no new"
+                + " cookies). The click tool hides it on contact — click any \(marker)-marked element beneath it,"
+                + " or any of its own controls, and the prompt is hidden without accepting or rejecting anything."
+                + " Do not look for a close button; continue with the task."
+        } else if isPanel {
+            let controls = occ.controlCount ?? 0
+            let covered = occ.coveredCount ?? 1
+            d += " — a panel with \(controls) control\(controls == 1 ? "" : "s") of its own, sitting in front of"
+                + " \(covered) element\(covered == 1 ? "" : "s") marked \(marker) below. It is part of the page,"
+                + " not something to dismiss: use ITS controls (listed under it), and only close it if the"
+                + " task needs what is beneath."
+        } else {
+            d += key == nil
+                ? " — no aloha-id to address it by; dismiss it to interact with [occluded]-marked elements below"
+                : " — dismiss/close it to interact with \(marker)-marked elements below"
+        }
         guard seen.insert(d).inserted else { continue }
         lines.append(d)
     }

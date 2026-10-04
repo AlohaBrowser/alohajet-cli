@@ -364,6 +364,69 @@ private func node(
         #expect(legend.contains { $0.contains("dismiss/close it to interact") })
     }
 
+    /// A cover that holds controls is the page's own panel (a sticky product card, a drawer, a
+    /// dialog with a form): the legend calls it a panel and tells the model to USE its controls,
+    /// never to dismiss it. Measured: a product panel with six controls "covering" one skip link
+    /// was reported as an overlay to close, and the Add button inside it was never pressed.
+    @Test func aControlHoldingCoverIsAPanelToUseNotALayerToDismiss() {
+        let n = occludedButton(occludedBy: OccluderRef(
+            alohaId: "p1", tag: "div", role: nil, text: "BELTED FAUX SUEDE JACKET 219 GEL Dark mink",
+            coveredCount: 1, controlCount: 6))
+        let legend = occlusionLegend([n])
+        #expect(legend.contains { $0.contains("[occ:p1] = panel <div>") })
+        #expect(legend.contains { $0.contains("6 controls of its own") })
+        #expect(legend.contains { $0.contains("in front of 1 element marked [occ:p1]") })
+        #expect(legend.contains { $0.contains("use ITS controls") })
+        #expect(!legend.contains { $0.contains("dismiss/close it") })
+    }
+
+    /// A cover with no controls -- a backdrop, a presentation layer -- keeps the dismiss wording.
+    @Test func aControlLessCoverIsStillSomethingToDismiss() {
+        let n = occludedButton(occludedBy: OccluderRef(
+            alohaId: "bd", tag: "div", role: "presentation", text: nil, coveredCount: 40, controlCount: 0))
+        let legend = occlusionLegend([n])
+        #expect(legend.contains { $0.contains("[occ:bd] = overlay <div>") })
+        #expect(legend.contains { $0.contains("dismiss/close it to interact") })
+    }
+
+    /// A cookie wall holds controls too -- Accept, Reject, Manage -- and by the control count
+    /// alone it would be called a panel whose controls the model should use. This agent answers
+    /// no consent prompt: the click tool hides it on contact, so the legend says that instead.
+    @Test func aConsentWallWithControlsIsNotAPanelToUse() {
+        let n = occludedButton(occludedBy: OccluderRef(
+            alohaId: "cw", tag: "div", role: "dialog",
+            text: "We use cookies to improve your experience. Accept all Reject all Manage",
+            coveredCount: 38, controlCount: 3))
+        let legend = occlusionLegend([n])
+        #expect(legend.contains { $0.contains("[occ:cw] = consent prompt <div> role=\"dialog\"") })
+        #expect(legend.contains { $0.contains("hides it on contact") })
+        #expect(legend.contains { $0.contains("[occ:cw]-marked element beneath it") })
+        #expect(!legend.contains { $0.contains("use ITS controls") })
+        #expect(!legend.contains { $0.contains("= panel") })
+    }
+
+    /// The consent vocabulary is the hider's: German, French, Spanish and Russian notices are
+    /// recognised too, and a product panel is not.
+    @Test func theConsentVocabularyMatchesTheHiders() {
+        #expect(readsLikeConsentNotice("Diese Website verwendet Cookies. Datenschutz"))
+        #expect(readsLikeConsentNotice("Gestion du consentement"))
+        #expect(readsLikeConsentNotice("Мы используем куки"))
+        #expect(readsLikeConsentNotice("Your privacy choices · GDPR"))
+        #expect(!readsLikeConsentNotice("BELTED FAUX SUEDE JACKET 219 GEL Dark mink"))
+        #expect(!readsLikeConsentNotice("Privacy preferences"))
+        #expect(!readsLikeConsentNotice(nil))
+        #expect(!readsLikeConsentNotice(""))
+    }
+
+    /// A walker that sends no counts (an older script, a cover resolved to the page root) reads
+    /// exactly as before.
+    @Test func aCoverWithoutCountsKeepsTheOldWording() {
+        let n = occludedButton(occludedBy: OccluderRef(alohaId: "ov1", tag: "div", text: "Sign up"))
+        let legend = occlusionLegend([n])
+        #expect(legend.contains { $0.contains("[occ:ov1] = overlay <div> \"Sign up\"") })
+        #expect(legend.contains { $0.contains("dismiss/close it to interact") })
+    }
+
     @Test func unoccludedInteractiveHasNoMarker() {
         let n = node(
             "b1", tag: "button", textContent: "Buy now", comprehensiveText: "Buy now",
