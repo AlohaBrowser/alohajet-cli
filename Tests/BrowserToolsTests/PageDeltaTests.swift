@@ -12,14 +12,27 @@ struct PageDeltaTests {
 
     @Test func anUnchangedUrlIsSaidOutLoud() {
         #expect(PageDelta.describe(urlBefore: "http://host/a", urlAfter: "http://host/a") == """
-             The page did NOT navigate — still at http://host/a. If you expected a new page, \
-            the action did not do what you assumed: read the page before acting again.
+             The page did NOT navigate — if you expected a new page, the action did not do what \
+            you assumed: read the page before acting again. The URL is still http://host/a
             """)
     }
 
     @Test func aChangedUrlIsNamed() {
         #expect(PageDelta.describe(urlBefore: "http://host/a", urlAfter: "http://host/b")
-                == " Navigated to http://host/b.")
+                == " Navigated to http://host/b")
+    }
+
+    /// A URL is never followed by punctuation: a program that copies the receipt's URL verbatim
+    /// navigated to `…/search/home.` (agent run jacket-bag-luna-ge43) and got "Access Denied".
+    @Test func aUrlEndsItsSentenceWithoutAMark() throws {
+        let url = "http://host/search/home"
+        for receipt in [PageDelta.describe(urlBefore: "", urlAfter: url),
+                        PageDelta.describe(urlBefore: "http://host/", urlAfter: url),
+                        PageDelta.describe(urlBefore: url, urlAfter: url)] {
+            let range = try #require(receipt.range(of: url))
+            let after = receipt[range.upperBound...]
+            #expect(after.isEmpty || after.first == " ", "\(receipt)")
+        }
     }
 
     /// The seam is optional and some backends return "". A confident "did not navigate" that really meant
@@ -30,7 +43,7 @@ struct PageDeltaTests {
     }
 
     @Test func withNoBeforeUrlItStatesTheCurrentPageOnly() {
-        #expect(PageDelta.describe(urlBefore: "", urlAfter: "http://host/b") == " Now at http://host/b.")
+        #expect(PageDelta.describe(urlBefore: "", urlAfter: "http://host/b") == " Now at http://host/b")
     }
 
     /// One wording, three tools. Three tools saying the same thing three slightly different ways is how a

@@ -239,6 +239,13 @@ enum PageToolInput {
 // APPENDED, NEVER SUBSTITUTED, so a parser keyed on the leading receipt text is unaffected. The id
 // stays in the receipt because it is what the caller must reuse this turn; the selector is for whoever
 // reads the transcript afterwards.
+//
+// THE BRACKETS. Every receipt a page tool writes ends in the same bracket groups, in the order
+// `RECEIPTS.md` at the package root documents: `[selector=…] [tool=…] [matches=N] [index=i/N]
+// [text="…"] [attrs=…] [list=<selector> i/n]`, plus `[submitted=enter]` on a type that submitted.
+// A value can contain spaces and brackets, so a token ends at the `]` that closes its `[`, never
+// at a space. `Tests/BrowserToolsTests/receipt_registry.js` fails when a bracket is written that
+// the document does not list, or the other way round.
 enum PageToolReceipt {
 
     /// ` [selector=#search-input]`, or `""` when nothing durable can be derived.
@@ -250,12 +257,253 @@ enum PageToolReceipt {
         return " [selector=\(selector)]"
     }
 
+    /// THE WHOLE NOTE FOR AN ELEMENT, read from the LIVE page before the action: the ladder's
+    /// selector (a dead position path rebuilt, see `liveSelector`), how many elements it matches,
+    /// the element's own text, and its identity (index, attributes, list). One seam for every
+    /// tool, so click, type, select, press_keys and get_text cannot drift into five receipts.
+    /// `""` when the element has no durable selector: the note never guesses.
+    static func liveNote(alohaId: String, tab: StepTraceTab?, bridge: AgentBrowserBridge, tool: String,
+                         text: Bool = true) async -> String {
+        guard let live = await bridge.liveSelector(durableSelector(alohaId: alohaId, tab: tab), alohaId: alohaId)
+        else { return "" }
+        return selectorNote(
+            selector: live.selector, matches: live.matches,
+            text: text ? await bridge.elementText(alohaId: alohaId) : nil,
+            identity: await bridge.elementIdentity(selector: live.selector, alohaId: alohaId),
+            tool: tool)
+    }
+
+    /// ` [selector=…] [matches=N]` and the rest: the durable selector AND how many elements it
+    /// matched on the live page when the action ran. The count is what lets a mint decide between
+    /// keeping the selector as is (one match) and anchoring it (many): `a.product-link._item`
+    /// matches every card on a results page, `button.size-selector-sizes-size__button` every size.
+    /// Without it the server had to reason "ask it of every click"; with it the anchor is
+    /// evidence-based (agent run jacket-bag-luna-ge32: five receipts, no count on any). The count
+    /// is omitted, not invented, when the page could not be asked.
+    static func selectorNote(
+        selector: String?, matches: Int?, text: String? = nil, identity: ElementIdentity? = nil,
+        tool: String? = nil, source: String? = nil
+    ) -> String {
+        guard let selector else { return "" }
+        var note = " [selector=\(selector)]"
+        // WHO WROTE THIS RECEIPT, inside the receipt itself: `[tool=get_text]` from a tool,
+        // `[source=main-heading]` for the heading line a page read carries. The result already
+        // opens with `<tool_result tool="…">`, but a consumer that lifts the bracket groups out of
+        // that wrapper lost it (llmdex, 2026-09-30: every receipt reached the mint as `receipt :`),
+        // and could not tell a read's receipt from a click's.
+        if let tool, !tool.isEmpty { note += " [tool=\(tool)]" }
+        if let source, !source.isEmpty { note += " [source=\(source)]" }
+        if let matches { note += " [matches=\(matches)]" }
+        // WHICH of the N matches this was. Only when there were several: with one match the
+        // selector already names the element, and the token would be noise on every receipt.
+        // AND WHETHER IT NAMES THIS ELEMENT AT ALL. The identity probe reports no index when the
+        // selector's live matches do not include the element -- the snapshot's class or id is gone
+        // from it, or the selector matches nothing now and no path could be rebuilt. The address
+        // is still written, and `[index=none]` marks it unverified, so a mint does not build a
+        // step on it when `[list=]`, `[path=]` or `[anchor=]` offer a checked one (2026-10-04 audit).
+        if let matches, let identity {
+            if let index = identity.index, matches > 1, index >= 1, index <= matches {
+                note += " [index=\(index)/\(matches)]"
+            } else if identity.index == nil {
+                note += " [index=none]"
+            }
+        }
+        // The element's OWN words, so an anchor for a many-match selector is built from what
+        // was on the element rather than from the task's phrasing (which may reorder them).
+        if let text, !text.isEmpty {
+            note += " [text=\"\(tokenSafe(text))\"]"
+        }
+        // The element's REAL attributes, as the page wrote them. A scenario replays on this one
+        // site, so the receipt may be exactly as site-specific as the element: `data-qa-action`,
+        // `aria-label`, `name`, `role`, `href` are all anchors the resolver can use
+        // (`[attr="v"]`, `:matches-attr(...)`) and text is not the only one any more.
+        if let attributes = identity?.attributes, !attributes.isEmpty {
+            let pairs = attributes.map { "\($0.name)=\"\(tokenSafe($0.value))\"" }
+            note += " [attrs=\(pairs.joined(separator: " "))]"
+        }
+        // The repeating list the element sits in, and its place there -- independent of which
+        // rung won `[selector=…]`, and written only when the list has two or more members.
+        if let list = identity?.list {
+            note += " [list=\(list.selector) \(list.index)/\(list.count)]"
+        }
+        return note
+    }
+
+    /// ` [submitted=enter]`: the type call pressed Enter after typing. A mint that turns a run into
+    /// a scenario reads bracketed tokens; the sentence "and pressed Enter to submit" is prose it
+    /// dropped (agent run github-ss-r4, 2026-09-22: the scenario typed the query and looked for a
+    /// results-page filter on the home page). Present only when a submit actually happened.
+    static let submittedNote = " [submitted=enter]"
+
+    /// A value inside a `[key=…]` token: no `"` (the token's own quote), no `]` (its close),
+    /// no line breaks (the receipt is one line). A consumer tokenizes without quoting rules.
+    static func tokenSafe(_ value: String) -> String {
+        value.replacingOccurrences(of: "\"", with: "'")
+            .replacingOccurrences(of: "]", with: ")")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+    }
+
     /// `nil` at every gap — no tab, unknown id, or nothing stable on the node. Best-effort by
     /// contract: a guessed selector is worse than none, because a script replayed against one
     /// fails silently.
     static func durableSelector(alohaId: String, tab: StepTraceTab?) -> String? {
         guard let tab, !alohaId.isEmpty, let node = tab.traceDomNode(forAlohaId: alohaId) else { return nil }
         return stableCSSSelector(for: node)
+    }
+}
+
+// MARK: - The control's identity, on the same receipt
+
+/// What the live page said about the element a page tool acted on, beyond its durable selector:
+/// which of the selector's matches it was, the attributes it actually carries, and the repeating
+/// list it sits in.
+///
+/// Why: a scenario replays on the one site it was minted from, so the receipt may be exactly as
+/// site-specific as the element. Until this rode along a mint had the selector, the count and the
+/// element's text -- text was the ONLY anchor, and text is fragile (localised labels, reordered
+/// words: agent run jacket-bag-luna-ge34 anchored 'FAUX SUEDE BELTED JACKET' on a card that read
+/// 'BELTED FAUX SUEDE JACKET'). The mechanism is general; the content is whatever the page wrote.
+struct ElementIdentity: Equatable, Sendable {
+    struct Attribute: Equatable, Sendable {
+        let name: String
+        let value: String
+    }
+    /// 1-based position of the element among `querySelectorAll(selector)`; nil when the selector
+    /// was absent, did not parse, or did not contain the element.
+    let index: Int?
+    /// The element's attributes in page order, minus the ones that identify nothing
+    /// (`class`, `style`, `aloha-id`, `tabindex`, event handlers, `data:` URIs) and minus a form
+    /// field's `value` (user data, never identity). Values are capped at 80 characters.
+    let attributes: [Attribute]
+    /// WHICH ITEM OF A REPEATING LIST the element sits in: a selector that matches the same
+    /// control in every item (the position path with the repeating ancestor's index dropped),
+    /// and the element's 1-based place among those matches. Nil when nothing above the element
+    /// repeats. It is what lets a mint say "the first result" as `list selector` + `nth`
+    /// instead of the path that uniquely names today's first result.
+    struct ListPosition: Equatable, Sendable {
+        let selector: String
+        let index: Int
+        let count: Int
+    }
+    var list: ListPosition? = nil
+}
+
+/// One page round trip that reads an element's identity for the receipt. The expression is a
+/// template (`\#(selectorLiteral)`, `\#(alohaIdLiteral)`) so a harness can run the shipped bytes
+/// against a fake document: `Tests/BrowserToolsTests/receipt_identity.js` and `list_position.js`.
+enum ReceiptIdentityProbe {
+    /// Attributes are capped by count and by total length so a receipt stays one readable line.
+    static let maxAttributes = 12
+    static let maxValueLength = 80
+    static let maxTotalLength = 600
+    /// The longest list path emitted, in segments -- the selector ladder's own bound.
+    static let maxListSegments = StepTraceSelector.maxPathSegments
+
+    static func expression(selector: String?, alohaId: String) -> String {
+        let selectorLiteral = JSValue.string(selector ?? "").stringify()
+        let alohaIdLiteral = JSValue.string(alohaId).stringify()
+        return #"""
+        (function (sel, id) { /* receipt: identity */
+          var out = { index: -1, attrs: [] };
+          try {
+            var el = null;
+            var tagged = document.querySelectorAll('[aloha-id]');
+            for (var k = 0; k < tagged.length; k++) if (tagged[k].getAttribute('aloha-id') === id) { el = tagged[k]; break; }
+            if (!el) return JSON.stringify(out);
+            if (sel) {
+              try {
+                var all = document.querySelectorAll(sel);
+                for (var i = 0; i < all.length; i++) if (all[i] === el) { out.index = i + 1; break; }
+              } catch (e) {}
+            }
+            var skip = { 'class': 1, 'style': 1, 'aloha-id': 1, 'tabindex': 1 };
+            var tag = String(el.tagName || '').toUpperCase();
+            var formField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+            var names = el.getAttributeNames ? el.getAttributeNames() : [];
+            var total = 0;
+            for (var j = 0; j < names.length && out.attrs.length < \#(maxAttributes); j++) {
+              var n = names[j], ln = n.toLowerCase();
+              if (skip[ln] || ln.indexOf('on') === 0) continue;
+              if (ln === 'value' && formField) continue;
+              var v = String(el.getAttribute(n) == null ? '' : el.getAttribute(n));
+              if (v.indexOf('data:') === 0) continue;
+              v = v.replace(/\s+/g, ' ').trim();
+              if (v.length > \#(maxValueLength)) v = v.slice(0, \#(maxValueLength) - 3) + '...';
+              total += n.length + v.length + 4;
+              if (total > \#(maxTotalLength)) break;
+              out.attrs.push([n, v]);
+            }
+            // THE LIST THE ELEMENT BELONGS TO. An ancestor-or-self with a sibling of the same tag
+            // and the same class string is a repeating item; the element's position path (the
+            // ladder's format: an index only where same-tag siblings exist) with ONLY that item's
+            // index dropped matches the same control in every item.
+            try {
+              var chain = [];
+              for (var cur = el; cur && cur !== document.body; cur = cur.parentElement) chain.push(cur);
+              var reachedBody = chain.length > 0 && chain[chain.length - 1].parentElement === document.body;
+              if (reachedBody && chain.length + 1 <= \#(maxListSegments)) {
+                var segOf = function (node, bare) {
+                  var t = String(node.tagName || '').toLowerCase();
+                  if (!/^[a-z][a-z0-9-]*$/.test(t)) return null;
+                  if (bare) return t;
+                  var p = node.parentElement, same = 0, pos = 0;
+                  var kids = p ? p.children : [];
+                  for (var q = 0; q < kids.length; q++) if (kids[q].tagName === node.tagName) { same++; if (kids[q] === node) pos = same; }
+                  return same > 1 ? t + ':nth-of-type(' + pos + ')' : t;
+                };
+                // Every level that repeats is a candidate list; the one with the MOST members
+                // wins (nearest on a tie). The nearest alone is wrong: HN's comments link sits among
+                // five sibling links in one story's subline, while the story list above it has 30.
+                var best = null;
+                for (var a = 0; a < chain.length; a++) {
+                  var nd = chain[a], par = nd.parentElement, cls = nd.getAttribute('class') || '';
+                  var kin = par ? par.children : [], repeats = false;
+                  for (var b = 0; b < kin.length; b++) {
+                    if (kin[b] !== nd && kin[b].tagName === nd.tagName && (kin[b].getAttribute('class') || '') === cls) { repeats = true; break; }
+                  }
+                  if (!repeats) continue;
+                  var segs = ['body'], ok = true;
+                  for (var s = chain.length - 1; s >= 0; s--) {
+                    var sg = segOf(chain[s], s === a);
+                    if (sg == null) { ok = false; break; }
+                    segs.push(sg);
+                  }
+                  if (!ok) continue;
+                  var listSel = segs.join('>');
+                  var members = document.querySelectorAll(listSel);
+                  var at = -1;
+                  for (var m = 0; m < members.length; m++) if (members[m] === el) { at = m + 1; break; }
+                  if (members.length >= 2 && at >= 1 && (!best || members.length > best.count)) best = { selector: listSel, index: at, count: members.length };
+                }
+                if (best) out.list = best;
+              }
+            } catch (e) {}
+          } catch (e) {}
+          return JSON.stringify(out);
+        })(\#(selectorLiteral), \#(alohaIdLiteral))
+        """#
+    }
+
+    /// The probe's JSON reply -> identity; nil when the reply is not the probe's shape.
+    static func parse(_ json: String) -> ElementIdentity? {
+        guard let value = JSValue.parse(json), case .object = value else { return nil }
+        let rawIndex = value["index"]?.intValue ?? -1
+        var attributes: [ElementIdentity.Attribute] = []
+        if case let .array(pairs)? = value["attrs"] {
+            for pair in pairs {
+                guard case let .array(kv) = pair, kv.count == 2,
+                      let name = kv[0].stringValue, !name.isEmpty, let val = kv[1].stringValue else { continue }
+                attributes.append(.init(name: name, value: val))
+            }
+        }
+        var list: ElementIdentity.ListPosition? = nil
+        if let l = value["list"], case .object = l, let sel = l.string("selector"), !sel.isEmpty,
+           let i = l["index"]?.intValue, let n = l["count"]?.intValue, n >= 2, i >= 1, i <= n,
+           !sel.contains(" "), !sel.contains("]") {
+            list = .init(selector: sel, index: i, count: n)
+        }
+        return ElementIdentity(index: rawIndex >= 1 ? rawIndex : nil, attributes: attributes, list: list)
     }
 }
 

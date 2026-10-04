@@ -8,11 +8,25 @@ public struct DomElement: Sendable {
     public var attributes: [String: String]
     public var textContent: String?
     public var childText: String?
-    public init(tagName: String, attributes: [String: String] = [:], textContent: String? = nil, childText: String? = nil) {
+    /// WHERE THE ELEMENT STANDS, as the in-page walker computed it against the LIVE document:
+    /// `/body/div[3]/form/input[2]`, one segment per ancestor, an index only where the parent
+    /// has several children of that tag (`getSiblingIndex` in the walker counts same-tag
+    /// siblings, so the index is `nth-of-type`). Top-document only: the walker sends none for a
+    /// node inside an iframe or a shadow root, whose path would not resolve on this document.
+    ///
+    /// The walker has always shipped this (`element.xpath` in its payload); `parseDomNode`
+    /// dropped it, so the receipt's durable selector could only ever be an id, a test hook, a
+    /// name, an input type or a stable class -- and measured over 273 mined WebArena
+    /// trajectories (llmdex, 2026-09-13) that left most clicks with no selector at all. `nil`
+    /// when the walker gave none, so nothing else changes.
+    public var xpath: String?
+    public init(tagName: String, attributes: [String: String] = [:], textContent: String? = nil, childText: String? = nil,
+                xpath: String? = nil) {
         self.tagName = tagName
         self.attributes = attributes
         self.textContent = textContent
         self.childText = childText
+        self.xpath = xpath
     }
 }
 

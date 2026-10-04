@@ -23,6 +23,48 @@ import ToolABI
     /// one capped nowhere.
     static let defaultMaxChars = 20_000
 
+    /// WHAT WAS READ, in replayable terms -- the same `[selector=…] [tool=get_text] [matches=N]
+    /// [index] [text] [attrs] [list]` note a click or type receipt carries, resolved BEFORE the
+    /// read from the same ladder. Until 2026-09-23 a read reported no selector at all (llmdex's
+    /// CLIENT-CONTRACT §4: zero of every `get_text` receipt held one), so a scenario ending in
+    /// "…and tell me what it says" had no evidence for its read step: the mint invented one and
+    /// refused it (agent run github-ss-r25, `h1.d-flex span`), or read an element the run had
+    /// clicked and returned the link's label. Empty when the element has no durable selector --
+    /// the note never guesses.
+    static func readNote(_ alohaId: String, _ tab: StepTraceTab?, _ bridge: AgentBrowserBridge) async -> String {
+        guard let live = await bridge.liveSelector(PageToolReceipt.durableSelector(alohaId: alohaId, tab: tab), alohaId: alohaId)
+        else { return "" }
+        let text = await bridge.elementText(alohaId: alohaId)
+        let identity = await bridge.elementIdentity(selector: live.selector, alohaId: alohaId)
+        if let free = answerFreeReadAddress(selector: live.selector, text: text, identity: identity) {
+            return PageToolReceipt.selectorNote(
+                selector: free.selector, matches: free.matches, text: text, identity: free.identity, tool: "get_text")
+        }
+        return PageToolReceipt.selectorNote(
+            selector: live.selector, matches: live.matches, text: text, identity: identity, tool: "get_text")
+    }
+
+    /// A READ'S `[selector]` NEVER CARRIES WHAT IT READS. The ladder can put the read text into the
+    /// selector itself -- its link rung writes the link's own address, and the address holds the
+    /// value: agent run github-ss-r82 read v3.8.5 through `a[href="/MHSanaei/3x-ui/releases/tag/v3.8.5"]`,
+    /// github-ss-r84 read "Latest" through `a[href="/MHSanaei/3x-ui/releases/latest"]` (the mint
+    /// refused it: "a selector that CONTAINS THE ANSWER"). When the ladder's selector contains the
+    /// text read (3+ characters, any case), the element is addressed by its place in its LIST
+    /// (`[selector]` = the list, `[matches]` its size, `[index]` the place). nil when the selector
+    /// is already free of the text, or there is nothing better to offer.
+    static func answerFreeReadAddress(selector: String, text: String?, identity: ElementIdentity?)
+        -> (selector: String, matches: Int?, identity: ElementIdentity?)? {
+        guard let text, text.count >= 3 else { return nil }
+        let needle = text.lowercased()
+        guard selector.lowercased().contains(needle) else { return nil }
+        if let list = identity?.list, !list.selector.lowercased().contains(needle) {
+            var placed = ElementIdentity(index: list.index, attributes: identity?.attributes ?? [])
+            placed.list = list
+            return (list.selector, list.count, placed)
+        }
+        return nil
+    }
+
     public func execute(_ input: WorkflowValue?, _ context: ToolExecutionContext) async throws -> RawToolResult {
         guard let raw = PageToolInput.string(input, "aloha_id"), !raw.isEmpty else {
             return RawToolResult(output: "get_text requires an \"aloha_id\" naming the element to read.", isError: true)
@@ -57,8 +99,10 @@ import ToolABI
         case let .success(resolved):
             let bridge = makePageBridge(resolved.cdpTab, context.signal)
             if capped.count == 1 {
+                // The read's receipt note, resolved BEFORE the read like every action's.
+                let note = await Self.readNote(capped[0], resolved.cdpTab, bridge)
                 let result = await bridge.getTextById(capped[0])
-                let text = result.isError ? result.output : Self.truncate(result.output, perId)
+                let text = result.isError ? result.output : Self.truncate(result.output, perId) + note
                 // ONE OPTIONAL LINE, at the moment a round was spent on one element. The schema has advertised
                 // the list form since this tool learned it, and a corpus row still spent EIGHT of thirteen
                 // calls reading one id at a time before timing out — a description is read far from the
@@ -73,9 +117,11 @@ import ToolABI
             var blocks: [String] = []
             var failures = 0
             for id in capped {
+                let note = await Self.readNote(id, resolved.cdpTab, bridge)
                 let result = await bridge.getTextById(id)
                 if result.isError { failures += 1 }
-                blocks.append("[\(id)] \(result.isError ? result.output : Self.truncate(result.output, perId))")
+                // A failed read gets no note: there is nothing replayable about it.
+                blocks.append("[\(id)] \(result.isError ? result.output : Self.truncate(result.output, perId) + note)")
             }
             if capped.count < unique.count {
                 blocks.append("(read \(capped.count) of \(unique.count) ids — \(Self.maxBatch) per call is the "

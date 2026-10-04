@@ -137,6 +137,21 @@ jobs:
       - name: Page-side selector resolver (fake DOM)
         run: node Tests/BrowserToolsTests/selector_resolver.js
 
+      # The receipt probes are Swift strings too. Each harness runs the shipped bytes against fake
+      # documents: the identity probe (`[index=i/N]`, `[attrs=…]`), its list half (`[list=… i/n]`),
+      # the main-heading probe a whole-page read carries, and the registry check that keeps
+      # RECEIPTS.md equal to what the client writes and the resolver understands.
+      - name: Receipt identity probe (fake DOM)
+        run: node Tests/BrowserToolsTests/receipt_identity.js
+      - name: Live selector verification (fake DOM)
+        run: node Tests/BrowserToolsTests/live_selector.js
+      - name: Receipt list position (fake DOM)
+        run: node Tests/BrowserToolsTests/list_position.js
+      - name: Main heading probe (fake DOM)
+        run: node Tests/BrowserToolsTests/main_heading.js
+      - name: RECEIPTS.md matches the code
+        run: node Tests/BrowserToolsTests/receipt_registry.js
+
   linux:
     name: Linux (Swift 6.2.3, Ubuntu 24.04)
     runs-on: ubuntu-24.04

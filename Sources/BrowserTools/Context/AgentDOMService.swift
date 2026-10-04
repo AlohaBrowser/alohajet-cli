@@ -1792,11 +1792,15 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
             if let stringValue = attr.stringValue { attributes[key] = stringValue }
         }
     }
+    // The walker's position for the element (see `DomElement.xpath`); an empty string is what it
+    // sends for a node it could not path, and that is `nil` here.
+    let xpath = elementValue?.string("xpath").flatMap { $0.isEmpty ? nil : $0 }
     let element = DomElement(
         tagName: elementValue?.string("tagName") ?? "",
         attributes: attributes,
         textContent: elementValue?.string("textContent"),
-        childText: elementValue?.string("childText"))
+        childText: elementValue?.string("childText"),
+        xpath: xpath)
 
     var content = DomContent()
     if let contentValue = value["content"] {
