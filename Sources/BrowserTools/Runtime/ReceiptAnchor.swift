@@ -22,6 +22,10 @@ import ToolABI
 ///      another tab). Only for a link that shares path with the page. Every match leads to the
 ///      same place, so it wins when this element is AMONG its matches;
 ///   1. a stable selector (any ladder rung but the position path) on its own;
+///   1a. `a[href="…"]` verbatim, for a link whose destination the ladder could not carry -- an
+///      absolute or query-bearing href (a Hacker News result, its comments link). Rung 4b takes
+///      only a relative query-free path and rule 0 only a link relative to this page, so such a
+///      link had no reportable address (2026-10-04 audit). Only when no other link leads there;
 ///   1b. `<tag>[aria-label="…"]`, then `<tag>[title="…"]` -- the element's own accessible name,
 ///      when it has no digit (the ladder cannot carry it: a `[selector]` holds no whitespace);
 ///   2. the `[list]` selector + `:has-text("<label>")`;
@@ -79,12 +83,24 @@ enum ReceiptAnchorProbe {
             var rel = window.__snips.relHrefOf ? window.__snips.relHrefOf(el) : null;
             if (rel) cands.push({ s: String(el.tagName || 'a').toLowerCase() + ':rel-href(' + quote(rel) + ')', among: true });
             if (stable && sel) cands.push({ s: sel });
+            var tagName = String(el.tagName || '').toLowerCase();
+            // 1a. THE LINK'S DESTINATION, verbatim, when the ladder could not carry it. Rung 4b takes
+            // only a relative, query-free path and rule 0 only a link relative to this page, so an
+            // external or parametrised link -- a Hacker News result, `href="https://github.com/x/y"`;
+            // its comments link, `href="item?id=123"` -- had no reportable address at all (2026-10-04
+            // audit). Offered when the value is quotable (no quotes, backslashes, whitespace or
+            // control characters, at most 120 characters) and is not a rung-4b path, which rule 1
+            // already tried; it wins only when no other link on the page leads there.
+            if (tagName === 'a') {
+              var href = String(el.getAttribute('href') || '');
+              var rung4b = href.charAt(0) === '/' && href.indexOf('//') !== 0 && href.indexOf('?') === -1 && href.indexOf('#') === -1;
+              if (href && href.length <= 120 && !/[\s"'\\`\u0000-\u001f\u007f]/.test(href) && !rung4b) cands.push({ s: 'a[href=' + quote(href) + ']' });
+            }
             // 1b. What the element SAYS it is: its aria-label, else its title -- written for people
             // and screen readers, so it outlives a redeploy that renames every class. The search
             // button's receipt carried `aria-label="Search or jump to, type / to search"` while its
             // anchor was built on `…___zQrEw` (github-ss, 2026-09-29). A value with a digit is
             // skipped (a count, a version, a date: it changes with the page's content).
-            var tagName = String(el.tagName || '').toLowerCase();
             ['aria-label', 'title'].forEach(function (attr) {
               var v = String(el.getAttribute(attr) || '').replace(/\s+/g, ' ').trim();
               if (v && v.length <= 80 && !/[0-9]/.test(v) && tagName) cands.push({ s: tagName + '[' + attr + '=' + quote(v) + ']' });

@@ -241,5 +241,39 @@ function check(name, cond, detail) { console.log((cond ? 'ok   ' : 'FAIL ') + na
   check('a link elsewhere on the site is not rel-href', t && t.s === 'a[href="/MHSanaei/3x-ui"]', t);
 }
 
+// 15. THE HACKER NEWS SHAPE (2026-10-04 audit): a result link to another site, and its comments
+//     link with a query string. Rung 4b refuses both (not a relative query-free path), `:rel-href`
+//     refuses the first (another origin) and the second from the front page's root (no shared
+//     segment) -- so neither had an address. Rule 1a offers the href verbatim, when unique.
+{
+  const story = (title, href, id) => el('tr', {}, [el('td', {}, [el('span', { class: 'titleline' }, [el('a', { href, 'aloha-id': id }, [], title)])])]);
+  const sub = (id, n, aid) => el('tr', {}, [el('td', {}, [el('span', { class: 'subline' }, [el('a', { href: 'item?id=' + id, 'aloha-id': aid }, [], n + ' comments')])])]);
+  const doc = makeDoc([el('table', {}, [el('tbody', {}, [
+    story('Show HN: Bar 2.0', 'https://github.com/foo/bar', 's1'), sub(101, 98, 'c1'),
+    story('A plain post', 'https://example.org/post', 's2'), sub(102, 4, 'c2'),
+    story('Same place again', 'https://example.org/post', 's3'), sub(103, 1, 'c3')])])]);
+  const at = 'https://news.ycombinator.com/';
+  const list = 'body>table>tbody>tr>td>span>a';
+  const r = run(doc, 's1', 'body>table>tbody>tr:nth-of-type(1)>td>span>a', false, list, false, at);
+  check('an external result link anchors on its href verbatim', r && r.s === 'a[href="https://github.com/foo/bar"]' && r.n === 1, r);
+  const c = run(doc, 'c1', 'body>table>tbody>tr:nth-of-type(2)>td>span>a', false, list, false, at);
+  check('a query-bearing relative link too (and never its digit label)', c && c.s === 'a[href="item?id=101"]', c);
+  // Two links to the same place: not exactly this element, so the href is not its address.
+  const d = run(doc, 's2', 'body>table>tbody>tr:nth-of-type(3)>td>span>a', false, list, false, at);
+  check('a destination two links share is not an address', d && !/example\.org/.test(d.s), d);
+  // A READ whose label sits inside the href is still protected by the value filter.
+  const read = makeDoc([el('div', {}, [el('a', { href: 'https://example.org/v3.8.5', 'aloha-id': 'rd' }, [], 'v3.8.5'), el('a', { href: '/other', 'aloha-id': 'o' }, [], 'Other')])]);
+  const rr = run(read, 'rd', 'body>div>a:nth-of-type(1)', false, 'body>div>a', true, at);
+  check('a read never anchors on an href holding the value read', !rr || !/v3\.8\.5/.test(rr.s), rr);
+  // A rung-4b href is rule 1's business: when it is ambiguous there, rule 1a does not offer it again.
+  const twice = makeDoc([el('ul', {}, [el('li', {}, [el('a', { href: '/p/1', 'aloha-id': 'p1' }, [], 'One')]), el('li', {}, [el('a', { href: '/p/1', 'aloha-id': 'p2' }, [], 'Two')])])]);
+  const t = run(twice, 'p2', 'a[href="/p/1"]', true, 'body>ul>li>a', false, at);
+  check('an ambiguous rung-4b href falls to the list, not to itself', t && t.s === 'body>ul>li>a:has-text("Two")', t);
+  // Unquotable values are never offered.
+  const odd = makeDoc([el('div', {}, [el('a', { href: 'https://x.example/a"b', 'aloha-id': 'q' }, [], 'Q')])]);
+  const oq = run(odd, 'q', 'body>div>a', false, '', false, at);
+  check('an href with a quote is not offered', oq && !/href/.test(oq.s), oq);
+}
+
 console.log(failures ? `${failures} FAILED` : 'all receipt-anchor checks passed');
 process.exit(failures ? 1 : 0);

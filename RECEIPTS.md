@@ -76,6 +76,9 @@ are tried in this order, and the first one that resolves back to the element win
 - **0:** `tag:rel-href("ref")`, when the element is a link relative to the current page. Up to
   2026-10-01 this rule wrote `tag:sub-path("/tail")`.
 - **1:** the ladder's stable selector, when it is not a position path.
+- **1a:** `a[href="…"]` verbatim, for a link whose href is absolute or carries a query (rung 4b
+  takes only a relative query-free path, rule 0 only a link relative to this page), when the
+  value is quotable and no other link on the page leads there (since 2026-10-04).
 - **1b:** `tag[aria-label="…"]` or `tag[title="…"]`, when the label has no digit (since 2026-09-30).
 - **2:** `<list>:has-text("…")`.
 - **3:** `<list>` with `[anchor-nth=]`.
