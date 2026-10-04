@@ -1324,6 +1324,15 @@ public final class AgentDOMService {
     /// checkboxes or radios, no passwords -- which is also where honeypots and CSRF tokens live,
     /// and Postmill's submit form carries a `submission[email]` trap.
     ///
+    /// AND NOTHING THE PAGE HAS HIDDEN WITH CSS. `type=hidden` is only the honest kind of hidden;
+    /// `submission[email]` is a visible-type `<input>` that the page's stylesheet removes from the
+    /// layout, and listing it under "pass one of these ids to page_type" is an invitation to fill
+    /// the trap. The walker's `isVisible` (offsetWidth and offsetHeight above zero, not
+    /// `display: none`, not `visibility: hidden`, not `aria-hidden`) is the same test the
+    /// serializer applies before it renders a control, so a field this trailer names is one a
+    /// human could see too. A field that is merely below the fold keeps `isVisible` and is still
+    /// listed -- being out of the viewport is the case the trailer exists for.
+    ///
     /// Bounded: at most one `contains` per emitted line, and the loop stops at twelve.
     static func formFieldTrailer(_ nodes: [DomNode], renderedInto view: String) -> String {
         let nonText: Set<String> = [
@@ -1341,6 +1350,7 @@ public final class AgentDOMService {
             // and is not what `page_type`'s eligibility check looks at.
             let attrs = node.element.attributes
             if tag == "input", nonText.contains((attrs["type"] ?? "").lowercased()) { continue }
+            if !node.positioning.isVisible { continue }
             let raw = attrs["name"] ?? attrs["aria-label"] ?? attrs["placeholder"] ?? ""
             let name = raw.isEmpty ? "" : " (" + String(raw.prefix(40)) + ")"
             let hidden = view.contains(node.id) ? "" : "  [not in the view above]"

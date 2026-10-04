@@ -103,6 +103,32 @@ import Foundation
         #expect(AgentDOMService.formFieldTrailer([], renderedInto: "").isEmpty)
     }
 
+    /// `type=hidden` is only the honest kind of hidden. Postmill's `submission[email]` is a
+    /// visible-type input the stylesheet removes from the layout -- a honeypot -- and a trailer
+    /// that names it under "pass one of these ids to page_type" invites the model to fill it.
+    /// The walker's `isVisible` is false for `display: none`, `visibility: hidden`, `aria-hidden`
+    /// and a zero-size box alike.
+    @Test func aCssHiddenOrZeroSizeFieldIsNeverAdvertised() {
+        var honeypot = field("3f5c-0009", "input", ["name": "submission[email]", "type": "text"])
+        honeypot.positioning = DomPositioning(isInViewport: true, isVisible: false)
+        let title = field("3f5c-0001", "input", ["name": "submission[title]"])
+        let out = AgentDOMService.formFieldTrailer([honeypot, title], renderedInto: "")
+        #expect(!out.contains("submission[email]"))
+        #expect(!out.contains("3f5c-0009"))
+        #expect(out.contains("3f5c-0001 (submission[title]) input"))
+        // A page whose only fields are hidden gets no heading either.
+        #expect(AgentDOMService.formFieldTrailer([honeypot], renderedInto: "").isEmpty)
+    }
+
+    /// Below the fold is not hidden: a field the viewport does not currently show is exactly the
+    /// one the trailer exists to name.
+    @Test func aFieldBelowTheFoldIsStillListed() {
+        var body = field("3f5c-0002", "textarea", ["name": "submission[body]"])
+        body.positioning = DomPositioning(distanceToViewportBorder: 1400, isInViewport: false, isVisible: true)
+        let out = AgentDOMService.formFieldTrailer([body], renderedInto: "")
+        #expect(out.contains("3f5c-0002 (submission[body]) textarea  [not in the view above]"))
+    }
+
     @Test func aNodeWithoutAnIdCannotBeTypedIntoAndIsSkipped() {
         let out = AgentDOMService.formFieldTrailer([field("", "textarea", ["name": "body"])], renderedInto: "")
         #expect(out.isEmpty)
