@@ -109,9 +109,10 @@ public enum StepTraceSelector {
         if let id = attributes["id"], isValidCSSIdentifier(id), !looksGenerated(id) {
             return "#" + id
         }
-        // 2. explicit test hooks
+        // 2. explicit test hooks, screened like an id: a hook the framework numbers per render
+        //    (`data-testid="radix-3"`) resolves to nothing on the next visit either (2026-10-04 audit).
         for key in ["data-testid", "data-test"] {
-            if let value = attributes[key], isSafeAttributeValue(value) {
+            if let value = attributes[key], isSafeAttributeValue(value), !looksGenerated(value) {
                 return "[\(key)=\"\(value)\"]"
             }
         }

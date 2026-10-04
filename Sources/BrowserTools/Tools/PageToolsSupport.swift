@@ -264,12 +264,12 @@ enum PageToolReceipt {
     /// `""` when the element has no durable selector: the note never guesses.
     static func liveNote(alohaId: String, tab: StepTraceTab?, bridge: AgentBrowserBridge, tool: String,
                          text: Bool = true) async -> String {
-        guard let selector = await bridge.liveSelector(durableSelector(alohaId: alohaId, tab: tab), alohaId: alohaId)
+        guard let live = await bridge.liveSelector(durableSelector(alohaId: alohaId, tab: tab), alohaId: alohaId)
         else { return "" }
         return selectorNote(
-            selector: selector, matches: await bridge.selectorMatchCount(selector),
+            selector: live.selector, matches: live.matches,
             text: text ? await bridge.elementText(alohaId: alohaId) : nil,
-            identity: await bridge.elementIdentity(selector: selector, alohaId: alohaId),
+            identity: await bridge.elementIdentity(selector: live.selector, alohaId: alohaId),
             tool: tool)
     }
 
@@ -296,8 +296,17 @@ enum PageToolReceipt {
         if let matches { note += " [matches=\(matches)]" }
         // WHICH of the N matches this was. Only when there were several: with one match the
         // selector already names the element, and the token would be noise on every receipt.
-        if let matches, matches > 1, let index = identity?.index, index >= 1, index <= matches {
-            note += " [index=\(index)/\(matches)]"
+        // AND WHETHER IT NAMES THIS ELEMENT AT ALL. The identity probe reports no index when the
+        // selector's live matches do not include the element -- the snapshot's class or id is gone
+        // from it, or the selector matches nothing now and no path could be rebuilt. The address
+        // is still written, and `[index=none]` marks it unverified, so a mint does not build a
+        // step on it when `[list=]`, `[path=]` or `[anchor=]` offer a checked one (2026-10-04 audit).
+        if let matches, let identity {
+            if let index = identity.index, matches > 1, index >= 1, index <= matches {
+                note += " [index=\(index)/\(matches)]"
+            } else if identity.index == nil {
+                note += " [index=none]"
+            }
         }
         // The element's OWN words, so an anchor for a many-match selector is built from what
         // was on the element rather than from the task's phrasing (which may reorder them).

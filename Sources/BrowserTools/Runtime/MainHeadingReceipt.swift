@@ -120,8 +120,10 @@ extension AgentBrowserBridge {
         for heading in MainHeadingProbe.parse(json) {
             guard let selector = MainHeadingProbe.selector(for: heading) else { continue }
             let matches = await selectorMatchCount(selector)
+            // Verified like every receipt's selector: the heading's place among the matches, or no
+            // index at all -- and then `[index=none]` -- when the ladder's pick does not name it.
             var index: Int? = nil
-            if let matches, matches > 1 { index = await matchIndex(selector: selector, xpath: heading.xpath) }
+            if let matches, matches >= 1 { index = await matchIndex(selector: selector, xpath: heading.xpath) }
             notes.append(PageToolReceipt.selectorNote(
                 selector: selector, matches: matches, text: heading.text.isEmpty ? nil : heading.text,
                 identity: ElementIdentity(index: index, attributes: MainHeadingProbe.receiptAttributes(heading)),

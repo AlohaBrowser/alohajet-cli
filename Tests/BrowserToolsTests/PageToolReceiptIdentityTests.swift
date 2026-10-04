@@ -115,18 +115,51 @@ struct PageToolReceiptIdentityTests {
         #expect(PageToolReceipt.submittedNote == " [submitted=enter]")
     }
 
-    /// The whole note from the live page, in one call: the ladder's selector verified live, the
-    /// count, the text and the identity, in the receipt's order. With no durable selector: "".
+    /// The whole note from the live page, in one call: the ladder's selector verified live (with
+    /// its count), the text and the identity, in the receipt's order. With no durable selector: "".
     @Test func theLiveNoteComposesEveryProbe() async {
         let node = DomNode(id: "a2", element: DomElement(tagName: "button", attributes: ["class": "size"]))
         let tab = ReceiptFakeTab(nodes: ["a2": node])
-        // A named selector asks nothing of the live-path probe; then the count, the text, the identity.
-        let backend = ReceiptProbeBackend([.number(3), .string("M"), .string(#"{"index":2,"attrs":[["aria-label","M"]]}"#)])
+        // The live-selector probe (count included), then the text, then the identity.
+        let backend = ReceiptProbeBackend([.string(#"{"n":3,"has":true,"path":"","pathN":0}"#), .string("M"),
+                                           .string(#"{"index":2,"attrs":[["aria-label","M"]]}"#)])
         let note = await PageToolReceipt.liveNote(alohaId: "a2", tab: tab, bridge: AgentBrowserBridge(backend: backend), tool: "page_click")
         #expect(note == " [selector=button.size] [tool=page_click] [matches=3] [index=2/3] [text=\"M\"] [attrs=aria-label=\"M\"]")
         #expect(backend.asked == 3)
         let none = await PageToolReceipt.liveNote(alohaId: "zz", tab: tab, bridge: AgentBrowserBridge(backend: ReceiptProbeBackend([.number(1)])), tool: "page_click")
         #expect(none == "")
+    }
+
+    /// A SELECTOR THE LIVE PAGE DOES NOT CONFIRM is written with `[index=none]`: the identity probe
+    /// found the element but not among the selector's matches (its class or id changed on
+    /// re-render, or it matches nothing now), and no path could be rebuilt. A mint then knows not
+    /// to build a step on that address (2026-10-04 audit).
+    @Test func anUnverifiedSelectorIsMarkedIndexNone() {
+        let unconfirmed = ElementIdentity(index: nil, attributes: [.init(name: "href", value: "/p")])
+        #expect(PageToolReceipt.selectorNote(selector: "a.card", matches: 2, identity: unconfirmed)
+                == " [selector=a.card] [matches=2] [index=none] [attrs=href=\"/p\"]")
+        #expect(PageToolReceipt.selectorNote(selector: "#q", matches: 0, identity: ElementIdentity(index: nil, attributes: []))
+                == " [selector=#q] [matches=0] [index=none]")
+        #expect(PageToolReceipt.selectorNote(selector: "#q", matches: 1, identity: ElementIdentity(index: nil, attributes: []))
+                == " [selector=#q] [matches=1] [index=none]")
+        // Confirmed, or unknown count, or no identity at all: no such token.
+        #expect(!PageToolReceipt.selectorNote(selector: "#q", matches: 1, identity: ElementIdentity(index: 1, attributes: [])).contains("[index="))
+        #expect(!PageToolReceipt.selectorNote(selector: "#q", matches: nil, identity: unconfirmed).contains("[index="))
+        #expect(!PageToolReceipt.selectorNote(selector: "#q", matches: 2).contains("[index="))
+    }
+
+    /// Through the live note: a named selector the page no longer confirms is rebuilt as the
+    /// element's position path, and the receipt carries that path with its own count.
+    @Test func theLiveNoteCarriesTheRebuiltPath() async {
+        let node = DomNode(id: "q1", element: DomElement(tagName: "input", attributes: ["id": "q"]))
+        let tab = ReceiptFakeTab(nodes: ["q1": node])
+        let backend = ReceiptProbeBackend([
+            .string(#"{"n":1,"has":false,"path":"body>form>input:nth-of-type(2)","pathN":1}"#), .string(""),
+            .string(#"{"index":1,"attrs":[["name","q"]]}"#)])
+        let note = await PageToolReceipt.liveNote(alohaId: "q1", tab: tab, bridge: AgentBrowserBridge(backend: backend), tool: "page_type")
+        #expect(note == " [selector=body>form>input:nth-of-type(2)] [tool=page_type] [matches=1] [attrs=name=\"q\"]")
+        // The identity probe is asked about the REBUILT selector, not the stale one.
+        #expect(backend.scripts[2].contains("body>form>input:nth-of-type(2)"))
     }
 }
 

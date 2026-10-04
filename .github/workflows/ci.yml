@@ -143,6 +143,8 @@ jobs:
       # RECEIPTS.md equal to what the client writes and the resolver understands.
       - name: Receipt identity probe (fake DOM)
         run: node Tests/BrowserToolsTests/receipt_identity.js
+      - name: Live selector verification (fake DOM)
+        run: node Tests/BrowserToolsTests/live_selector.js
       - name: Receipt list position (fake DOM)
         run: node Tests/BrowserToolsTests/list_position.js
       - name: Main heading probe (fake DOM)

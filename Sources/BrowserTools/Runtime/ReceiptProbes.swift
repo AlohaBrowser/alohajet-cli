@@ -96,49 +96,106 @@ extension AgentBrowserBridge {
         return count
     }
 
-    /// The receipt's selector, with a DEAD position path rebuilt from the live page.
+    /// The receipt's selector, VERIFIED on the live page before it is written, and how many
+    /// elements it matches there.
     ///
-    /// The ladder's position path comes from the page snapshot the agent last read, and a page
-    /// that keeps rendering after that moves it: github.com inserted a `div` above its header after
-    /// the read, so the search button's `body>div:nth-of-type(1)>div:nth-of-type(4)>…>button` matched
-    /// nothing at click time (github-ss-r75, `[matches=0]`) while the live element sat under
-    /// `div:nth-of-type(5)`. Only a position path (`body>…`) that matches NOTHING right now is
-    /// rebuilt: from the element itself, found by its aloha-id, one segment per ancestor
-    /// (`:nth-of-type` only where the parent has several of that tag, as the ladder writes it),
-    /// and kept only if it resolves to that element. Any other selector, a path that still
-    /// matches, or one that cannot be rebuilt comes back unchanged.
-    func liveSelector(_ selector: String?, alohaId: String) async -> String? {
-        guard let selector, selector == "body" || selector.hasPrefix("body>"), !alohaId.isEmpty else { return selector }
-        guard await selectorMatchCount(selector) == 0 else { return selector }
-        let idLiteral = JSValue.string(alohaId).stringify()
-        let script = """
-        (function (id) { /* receipt: live selector */
+    /// The ladder's selector comes from the page snapshot the agent last read, and a page that
+    /// keeps rendering after that can move the element or rename it. Measured first on a position
+    /// path: github.com inserted a `div` above its header after the read, so the search button's
+    /// `body>div:nth-of-type(1)>div:nth-of-type(4)>…>button` matched nothing at click time
+    /// (agent run github-ss-r75, `[matches=0]`) while the live element sat under
+    /// `div:nth-of-type(5)`. A named rung can go the same way -- a class the framework swapped on
+    /// re-render, an id it re-minted -- and the 2026-10-04 audit asked that every rung, not only
+    /// the position path, be checked before it reaches a receipt.
+    ///
+    /// One page round trip (`LiveSelectorProbe`): does the selector's live match list contain
+    /// the element? If so it is kept, with its count. If not, a position path is rebuilt from the
+    /// element itself, found by its aloha-id, one segment per ancestor (`:nth-of-type` only where
+    /// the parent has several of that tag, as the ladder writes it), and kept only if it resolves
+    /// to that element. If that fails too the selector comes back as it was, with its count, and
+    /// the identity probe's missing index then puts `[index=none]` on the receipt: the address is
+    /// written, and marked unverified. nil only when there is no selector to verify; a page that
+    /// cannot answer returns the selector with no count.
+    func liveSelector(_ selector: String?, alohaId: String) async -> LiveSelector? {
+        guard let selector, !selector.isEmpty else { return nil }
+        guard !alohaId.isEmpty else { return LiveSelector(selector: selector, matches: nil) }
+        let script = LiveSelectorProbe.expression(selector: selector, alohaId: alohaId)
+        guard let value = try? await backend.evaluateViaCdp(script), let json = value.stringValue,
+              let reply = LiveSelectorProbe.parse(json) else { return LiveSelector(selector: selector, matches: nil) }
+        if reply.contains { return LiveSelector(selector: selector, matches: reply.matches) }
+        if let path = reply.rebuiltPath { return LiveSelector(selector: path, matches: reply.rebuiltMatches ?? 1) }
+        return LiveSelector(selector: selector, matches: reply.matches)
+    }
+}
+
+/// A selector checked on the live page: the one the receipt should carry (the ladder's, or the
+/// position path rebuilt from the live element when the ladder's no longer named it), and how
+/// many elements it matches there (nil when the page could not say).
+struct LiveSelector: Equatable, Sendable {
+    let selector: String
+    let matches: Int?
+}
+
+/// The one page round trip behind ``AgentBrowserBridge/liveSelector(_:alohaId:)``. A template
+/// (`\#(selectorLiteral)`, `\#(alohaIdLiteral)`, `\#(maxPathSegments)`) so a harness can run the
+/// shipped bytes against a fake document: `Tests/BrowserToolsTests/live_selector.js`.
+enum LiveSelectorProbe {
+    struct Reply: Equatable, Sendable {
+        /// `querySelectorAll(selector).length`; nil when the selector did not parse.
+        let matches: Int?
+        /// Whether the element is among those matches.
+        let contains: Bool
+        /// The position path rebuilt from the live element, when the selector did not contain it
+        /// and a path could be built that does; nil otherwise.
+        let rebuiltPath: String?
+        let rebuiltMatches: Int?
+    }
+
+    static func expression(selector: String, alohaId: String) -> String {
+        let selectorLiteral = JSValue.string(selector).stringify()
+        let alohaIdLiteral = JSValue.string(alohaId).stringify()
+        return #"""
+        (function (sel, id) { /* receipt: live selector */
+          var out = { n: -1, has: false, path: '', pathN: 0 };
           try {
             var el = null, tagged = document.querySelectorAll('[aloha-id]');
             for (var k = 0; k < tagged.length; k++) if (tagged[k].getAttribute('aloha-id') === id) { el = tagged[k]; break; }
-            if (!el || !document.body || !document.body.contains(el)) return "";
+            try {
+              var all = document.querySelectorAll(sel);
+              out.n = all.length;
+              for (var i = 0; i < all.length; i++) if (all[i] === el) { out.has = true; break; }
+            } catch (e) { out.n = -1; }
+            if (out.has || !el || !document.body || !document.body.contains(el)) return JSON.stringify(out);
+            // THE SELECTOR NO LONGER NAMES THIS ELEMENT: rebuild its position from the live tree,
+            // in the ladder's own format, and keep the path only when it resolves back to it.
             var segs = [];
             for (var n = el; n && n !== document.body; n = n.parentElement) {
               var p = n.parentElement;
-              if (!p) return "";
+              if (!p) return JSON.stringify(out);
               var tag = String(n.tagName || '').toLowerCase();
-              if (!/^[a-z][a-z0-9-]*$/.test(tag)) return "";
+              if (!/^[a-z][a-z0-9-]*$/.test(tag)) return JSON.stringify(out);
               var same = 0, at = 0;
               for (var c = p.firstElementChild; c; c = c.nextElementSibling) {
                 if (c.tagName === n.tagName) { same++; if (c === n) at = same; }
               }
               segs.unshift(same > 1 ? tag + ':nth-of-type(' + at + ')' : tag);
-              if (segs.length > \(StepTraceSelector.maxPathSegments)) return "";
+              if (segs.length > \#(StepTraceSelector.maxPathSegments)) return JSON.stringify(out);
             }
             var path = ['body'].concat(segs).join('>');
             var hits = document.querySelectorAll(path);
-            for (var h = 0; h < hits.length; h++) if (hits[h] === el) return path;
-            return "";
-          } catch (e) { return ""; }
-        })(\(idLiteral))
-        """
-        guard let value = try? await backend.evaluateViaCdp(script), let path = value.stringValue, !path.isEmpty
-        else { return selector }
-        return path
+            for (var h = 0; h < hits.length; h++) if (hits[h] === el) { out.path = path; out.pathN = hits.length; break; }
+          } catch (e) {}
+          return JSON.stringify(out);
+        })(\#(selectorLiteral), \#(alohaIdLiteral))
+        """#
+    }
+
+    static func parse(_ json: String) -> Reply? {
+        guard let value = JSValue.parse(json), case .object = value else { return nil }
+        let n = value["n"]?.intValue ?? -1
+        let path = value.string("path").flatMap { $0.isEmpty ? nil : $0 }
+        let pathN = value["pathN"]?.intValue ?? 0
+        return Reply(matches: n >= 0 ? n : nil, contains: value.bool("has") ?? false,
+                     rebuiltPath: path, rebuiltMatches: path == nil || pathN < 1 ? nil : pathN)
     }
 }

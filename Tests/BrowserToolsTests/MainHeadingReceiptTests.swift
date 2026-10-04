@@ -46,16 +46,25 @@ struct MainHeadingReceiptTests {
         #expect(MainHeadingProbe.parse("not json").isEmpty)
     }
 
-    /// The bridge: one probe for the headings, then a count and -- for several matches -- an
-    /// index per heading, composed into the read's line. An empty page adds nothing.
+    /// The bridge: one probe for the headings, then a count and an index per heading that has
+    /// matches, composed into the read's line. An empty page adds nothing.
     @Test func theBridgeComposesTheLine() async {
-        let backend = ReceiptProbeBackend([.string(releasesReply), .number(2), .number(1), .number(1)])
+        let backend = ReceiptProbeBackend([.string(releasesReply), .number(2), .number(1), .number(1), .number(1)])
         let line = await AgentBrowserBridge(backend: backend).mainHeadingReceiptLine()
         #expect(line == "Main headings on this page:"
                 + "\n- [selector=h1.d-inline.mr-3] [source=main-heading] [matches=2] [index=1/2] [text=\"v4.31.0\"]"
                 + "\n- [selector=body>div>main>section:nth-of-type(2)>div>h1] [source=main-heading] [matches=1] [text=\"v4.30.0\"]")
-        #expect(backend.asked == 4)
+        #expect(backend.asked == 5)
         #expect(await AgentBrowserBridge(backend: ReceiptProbeBackend([.string("[]")])).mainHeadingReceiptLine() == "")
         #expect(await AgentBrowserBridge(backend: ReceiptProbeBackend(error: ReceiptProbeFailure())).mainHeadingReceiptLine() == "")
+    }
+
+    /// A heading whose ladder selector does not name it on the live page (the class rung matched
+    /// another `h1`) is written with `[index=none]`, like every other unverified receipt address.
+    @Test func anUnverifiedHeadingSelectorIsMarked() async {
+        let one = #"[{"tag":"h1","attrs":[["class","d-inline mr-3"]],"xpath":"/body/div/main/section[1]/div/h1","text":"v4.31.0"}]"#
+        let backend = ReceiptProbeBackend([.string(one), .number(1), .number(-1)])
+        let line = await AgentBrowserBridge(backend: backend).mainHeadingReceiptLine()
+        #expect(line == "Main heading on this page:\n- [selector=h1.d-inline.mr-3] [source=main-heading] [matches=1] [index=none] [text=\"v4.31.0\"]")
     }
 }

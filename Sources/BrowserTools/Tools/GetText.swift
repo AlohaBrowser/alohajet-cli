@@ -32,17 +32,16 @@ import ToolABI
     /// clicked and returned the link's label. Empty when the element has no durable selector --
     /// the note never guesses.
     static func readNote(_ alohaId: String, _ tab: StepTraceTab?, _ bridge: AgentBrowserBridge) async -> String {
-        guard let selector = await bridge.liveSelector(PageToolReceipt.durableSelector(alohaId: alohaId, tab: tab), alohaId: alohaId)
+        guard let live = await bridge.liveSelector(PageToolReceipt.durableSelector(alohaId: alohaId, tab: tab), alohaId: alohaId)
         else { return "" }
         let text = await bridge.elementText(alohaId: alohaId)
-        let identity = await bridge.elementIdentity(selector: selector, alohaId: alohaId)
-        if let free = answerFreeReadAddress(selector: selector, text: text, identity: identity) {
+        let identity = await bridge.elementIdentity(selector: live.selector, alohaId: alohaId)
+        if let free = answerFreeReadAddress(selector: live.selector, text: text, identity: identity) {
             return PageToolReceipt.selectorNote(
                 selector: free.selector, matches: free.matches, text: text, identity: free.identity, tool: "get_text")
         }
         return PageToolReceipt.selectorNote(
-            selector: selector, matches: await bridge.selectorMatchCount(selector),
-            text: text, identity: identity, tool: "get_text")
+            selector: live.selector, matches: live.matches, text: text, identity: identity, tool: "get_text")
     }
 
     /// A READ'S `[selector]` NEVER CARRIES WHAT IT READS. The ladder can put the read text into the

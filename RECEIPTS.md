@@ -39,11 +39,11 @@ Writer: `PageToolReceipt.selectorNote` (`Sources/BrowserTools/Tools/PageToolsSup
 
 | Bracket | Holds | Since | Meaning last changed |
 |---|---|---|---|
-| `[selector=]` | the address to replay with: the selector ladder's pick (`Tabs/StepTraceSelector.swift`): id, data-testid, name, input type, `a[href="/path"]`, role, classes, else a position path `body>…`. A position path that matched nothing on the live page is rebuilt from the live element before it is written. **One exception** follows this table | 2026-08-11 | 2026-10-02 |
+| `[selector=]` | the address to replay with: the selector ladder's pick (`Tabs/StepTraceSelector.swift`): id, data-testid, name, input type, `a[href="/path"]`, role, classes, else a position path `body>…`. **Verified on the live page before it is written** (every rung, since 2026-10-04): a selector whose live matches do not include the element is replaced by a position path rebuilt from the live element, or, when none can be built, written as it is with `[index=none]`. **One exception** follows this table | 2026-08-11 | 2026-10-04 |
 | `[tool=]` | the tool that wrote the receipt: `page_click`, `page_type`, `page_select`, `page_press_keys`, `get_text` | 2026-09-30 | — |
 | `[source=]` | where a non-tool line came from: `main-heading` (the heading line a page read carries) | 2026-09-30 | — |
 | `[matches=]` | how many elements `[selector=]` matches on the page now | 2026-09-21 | 2026-10-01 (it follows `[selector=]`) |
-| `[index=]` | `i/n`: which of the `n` matches this element is, 1-based, document order. Only when `n > 1` | 2026-09-21 | 2026-10-01 |
+| `[index=]` | `i/n`: which of the `n` matches this element is, 1-based, document order. Only when `n > 1`. **`none`**: `[selector=]` matched `n` elements (`[matches=]`, possibly 0) and this element was not among them, and no live path could be rebuilt -- the address is UNVERIFIED; replay by `[list=]`, `[path=]` or `[anchor=]` instead, never by this selector | 2026-09-21 | 2026-10-04 (`none`) |
 | `[text=]` | the element's own rendered text, quoted, whitespace collapsed | 2026-09-21 | — |
 | `[attrs=]` | the element's real attributes as `name="value"` pairs (aria-label, href, role, name, data-*…) | 2026-09-21 | — |
 | `[list=]` | `<list selector> i/n`: the repeating list the element sits in, and its place there. Only when the list has 2+ members | 2026-09-23 | — |
@@ -57,6 +57,22 @@ example `a[href="/…/releases/tag/v3.8.5"]` for the read `v3.8.5`:
 
 The old selector is dropped. A read with no list keeps the ladder's selector (the anchor-based
 alternative lands with the anchor rule, in the next PR).
+
+**Live verification (2026-10-04).** The ladder's selector comes from the page snapshot the agent
+last read, and a page that keeps rendering after that can move the element (github.com inserted
+a `div` above its header, agent run github-ss-r75) or rename it (a re-minted id, a swapped
+class). Before any receipt is written, `AgentBrowserBridge.liveSelector`
+(`Sources/BrowserTools/Runtime/ReceiptProbes.swift`) asks the live page, in one round trip,
+whether the selector's matches include the element:
+- yes: the selector is kept, `[matches=]` is its live count;
+- no, and a position path built from the live element resolves back to it: that path is the
+  `[selector=]`, `[matches=]` its count;
+- no, and nothing can be rebuilt (the element is gone, a shadow root is in the way): the selector
+  is written as it was, `[matches=]` is its live count, and `[index=none]` marks it unverified.
+
+The ladder itself screens a `data-testid` / `data-test` value through the same generated-id rule
+as an id (`radix-3`, `_r_1d_`, `JV2FMF8` are skipped), since a numbered test hook is no more
+durable than a numbered id.
 
 ## Whole-page reads
 

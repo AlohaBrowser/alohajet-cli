@@ -67,6 +67,20 @@ private func selectorNode(
                 == "[data-testid=\"a\"]")
     }
 
+    /// A test hook a component library NUMBERS per render is screened like a generated id: it
+    /// resolves to nothing on the next visit, so the next rung is the better handle.
+    @Test func aGeneratedTestHookIsSkippedLikeAGeneratedId() {
+        #expect(stableCSSSelector(for: selectorNode(tag: "button", ["data-testid": "radix-3", "name": "submit"]))
+                == "[name=\"submit\"]")
+        #expect(stableCSSSelector(for: selectorNode(tag: "li", ["data-testid": "_r_1d_", "role": "option"]))
+                == "li[role=\"option\"]")
+        #expect(stableCSSSelector(for: selectorNode(tag: "button", ["data-testid": "JV2FMF8"], xpath: "/body/button"))
+                == "body>button")
+        // An authored hook with a digit in it stays a hook.
+        #expect(stableCSSSelector(for: selectorNode(tag: "button", ["data-testid": "size-003-in-stock"]))
+                == "[data-testid=\"size-003-in-stock\"]")
+    }
+
     @Test func nameAttributeIsUsedBeforeTheInputTypeFallback() {
         #expect(stableCSSSelector(for: selectorNode(tag: "input", ["name": "email", "type": "email"]))
                 == "[name=\"email\"]")
