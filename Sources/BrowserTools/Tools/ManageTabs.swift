@@ -212,7 +212,7 @@ func tabIsInteractiveWeb(_ tab: TabHandle) -> Bool {
 
 func manageTabsList(_ tabsWindow: TabsWindow, _ session: ChatModeSession? = nil) -> TabToolResult {
     let tabsModel = tabsWindow.tabs
-    let activeTabId = activeTabIdForPageTools(session, tabsWindow)
+    let activeTabId = inUseTabId(session: session, tabs: tabsModel)
     let summaries = tabsModel.orderedTabs.map { tab -> TabSummary in
         // Redact non-http(s) URLs so `list` does not leak a local file path (the
         // page tools refuse to act on such tabs; the path itself is the secret).
