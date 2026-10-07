@@ -84,7 +84,7 @@ Work with browser tabs. Six actions.
 
 **open** — opens a new tab at url AND returns its page in the same result, so one call navigates and reads. Only http and https URLs are accepted. Pass controlled_by: "user" instead when you are handing the user a link to read rather than a page you will drive; that opens an ordinary background tab and returns only its id.
 
-**close** — closes a tab by id. Close the tabs you opened once you are done with them. Only those: a tab that was already open when this session started, or that the user opened, is refused — "list" marks them.
+**close** — closes a tab by id. Close the tabs you opened once you are done with them. A tab that is not your chat's is refused; "list" says whose each tab is.
 
 **use** — makes an existing tab the one the page tools address. Exactly one tab is in use at a time; open takes it too, unless you pass use: false.
 

@@ -2,7 +2,8 @@ import Foundation
 import ToolABI
 
 /// One tab as the agent is shown it: what the tab row (``renderTabRow(_:askingChat:)``)
-/// prints. `manage_tabs list` and alohajet's tab summary build their rows here.
+/// prints. Every `manage_tabs` result that shows a tab, and alohajet's tab summary, build
+/// their rows here.
 public struct TabRow: Equatable, Sendable {
     public var id: String
     public var title: String
@@ -31,21 +32,27 @@ public struct TabRow: Equatable, Sendable {
 
 /// The tab row, the one line that describes a tab to the agent, as `askingChat` is told it:
 /// `<title> [<url>] (tab-id: <id>) — <whose tab>[, the tab the user is looking at][, in use]`.
-/// Whose tab is exactly "the user's tab", "your tab" or "another chat's tab (chat <id>)".
+/// Whose tab is ``ownerWords(_:askingChat:)``.
 ///
 /// Words, not decorations: the agent has to know which tabs are its own and which one its
 /// page tools act on, and a pictogram it has to guess the meaning of tells it neither. A
 /// tool prints its own words about what happened around the row, never inside it.
 public func renderTabRow(_ row: TabRow, askingChat: String) -> String {
-    let owner = switch row.attribution.ownerView(askingChat: askingChat) {
+    var words = [ownerWords(row.attribution, askingChat: askingChat)]
+    if row.attribution.foreground == true { words.append("the tab the user is looking at") }
+    if row.inUse { words.append("in use") }
+    return "\(row.title) [\(row.url)] (tab-id: \(row.id)) — \(words.joined(separator: ", "))"
+}
+
+/// Whose a tab is, as `askingChat` is told it: exactly "the user's tab", "your tab" or
+/// "another chat's tab (chat <id>)". The tab row and `manage_tabs close`'s refusal both say
+/// it in these words.
+func ownerWords(_ attribution: TabAttribution, askingChat: String) -> String {
+    switch attribution.ownerView(askingChat: askingChat) {
     case .user: "the user's tab"
     case .askingChat: "your tab"
     case .otherChat(let chat): "another chat's tab (chat \(chat))"
     }
-    var words = [owner]
-    if row.attribution.foreground == true { words.append("the tab the user is looking at") }
-    if row.inUse { words.append("in use") }
-    return "\(row.title) [\(row.url)] (tab-id: \(row.id)) — \(words.joined(separator: ", "))"
 }
 
 /// Raw result of a tab builtin, before being shaped into an SDK-facing value.

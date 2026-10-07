@@ -221,13 +221,33 @@ func manageTabsList(_ tabsWindow: TabsWindow, _ session: ChatModeSession?, askin
         tabs: rows)
 }
 
+/// The tab row of `tab` as it stands now, as the calling chat is told it.
+func currentTabRow(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext) -> String {
+    let row = TabRow(tab, inUseTabId: inUseTabId(session: ctx.session, tabs: tabsWindow.tabs))
+    return renderTabRow(row, askingChat: ctx.sessionId)
+}
+
+/// The tab row, with the page below it.
 func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ includeScreenshot: Bool) async -> TabToolResult {
-    let tabsModel = tabsWindow.tabs
-    guard let tab = tabsModel.getOrRestoreTab(tabId, restoreIfNeeded: false) else {
+    guard let tab = tabsWindow.tabs.getOrRestoreTab(tabId, restoreIfNeeded: false) else {
         return TabToolResult(output: "Tab \"\(tabId)\" not found.", isError: true)
     }
+    var result = await readTabPage(tab, tabsWindow, ctx, includeScreenshot)
+    if !result.isError {
+        // Rendered after the read: the title is the loaded page's, and the id the one the
+        // tab attached under.
+        result.output = [currentTabRow(tab, tabsWindow, ctx), result.output ?? ""]
+            .filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+    return result
+}
+
+/// What `read` returns below the tab row: the viewport line, then the page. `open` puts it
+/// under its own row, so no result describes one tab twice.
+private func readTabPage(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ includeScreenshot: Bool) async -> TabToolResult {
+    let tabsModel = tabsWindow.tabs
     if tab.userTookOver {
-        return TabToolResult(output: "Tab \"\(tabId)\" was taken over by the user. Pick a different tab or ask the user to hand it back.", isError: true)
+        return TabToolResult(output: "Tab \"\(tab.id)\" was taken over by the user. Pick a different tab or ask the user to hand it back.", isError: true)
     }
 
     if case let .rejected(reason) = validateTabUrl(TabUrlInput(url: tab.url)) {
@@ -242,11 +262,10 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
 
     // The title after the load, not the one the tab was born with. The load wait writes
     // it only on its polling leg, so a tab that finished via the lifecycle event reached
-    // here titleless and read back as `Tab: "Untitled"` — for example.com, every time.
+    // here titleless and its row read "Untitled" — for example.com, every time.
     if let live = tabsModel as? LiveTabMetadataRefreshing { await live.refreshTabMetadata() }
 
     do {
-        let title = tab.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled"
         let url = tab.url
         // The id the caller should use from here on. A tab this session just opened was
         // addressed by the provisional id it was allocated with; now that it is attached,
@@ -286,8 +305,7 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
                 interactResult = try await readPage()
             }
 
-            var sections: [String] = []
-            sections.append("Tab: \"\(title)\" (ID: \"\(tabId)\")\nURL: \(url)\(viewportLineFor(tab))")
+            var sections = viewportLine(tab).map { [$0] } ?? []
             sections.append("Interactive view: the page rendered as structural markdown — # headings, - list items, [text](href) links, | a | b | table rows, and plain paragraphs. Content is clean and id-free; every actionable element (link, button, input, select, landmark) carries a trailing {aloha-id=\"ID\" tag} marker. Use that id with page_click, page_type, page_select and get_text; to act on a row or a card, use the id on its own link or button trailer. The page tools address the tab currently in use — manage_tabs open and manage_tabs use both set it. Cross-origin iframe internals (payment widgets, embedded auth) cannot be inspected and carry no inner ids; do not read payment values back out.")
 
             if !interactResult.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -325,8 +343,7 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
         }
 
         let data = tabContext.data ?? ""
-        var sections: [String] = []
-        sections.append("Tab: \"\(title)\" (ID: \"\(tabId)\")\nURL: \(url)\(viewportLineFor(tab))")
+        var sections = viewportLine(tab).map { [$0] } ?? []
         if !data.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             sections.append(wrapPageMarkdown(data))
         }
@@ -340,13 +357,13 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
             url: url.isEmpty ? nil : url,
             faviconUrl: tab.faviconUrl?.isEmpty == false ? tab.faviconUrl : nil)
     } catch {
-        return TabToolResult(output: "Failed to read tab content: \(tabId) - \(error)", isError: true)
+        return TabToolResult(output: "Failed to read tab content: \(tab.id) - \(error)", isError: true)
     }
 }
 
-private func viewportLineFor(_ tab: TabHandle) -> String {
-    guard let bounds = tab.viewportBounds(), bounds.width > 0, bounds.height > 0 else { return "" }
-    return "\nViewport: \(bounds.width)x\(bounds.height)"
+private func viewportLine(_ tab: TabHandle) -> String? {
+    guard let bounds = tab.viewportBounds(), bounds.width > 0, bounds.height > 0 else { return nil }
+    return "Viewport: \(bounds.width)x\(bounds.height)"
 }
 
 func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ use: Bool, _ controlledBy: String, _ includeScreenshot: Bool) async -> TabToolResult {
@@ -359,7 +376,7 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
     }
 
     if controlledBy == "user" {
-        return manageTabsOpenUserControlled(normalized, tabsWindow)
+        return manageTabsOpenUserControlled(normalized, tabsWindow, ctx)
     }
 
     let existingTab = tabsWindow.tabs.orderedTabs.first { tab in
@@ -407,11 +424,13 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
     // provisional id and acquires its real Chrome target id only when this read attaches
     // it. Naming the tab any earlier prints an id that dies with this process — which is
     // exactly what `Tab ID: tab-XXXX` was, an id `manage_tabs list` had never heard of.
-    let opened = await manageTabsRead(newTab.id, tabsWindow, ctx, includeScreenshot)
+    let opened = await readTabPage(newTab, tabsWindow, ctx, includeScreenshot)
     let tabId = newTab.id
     if use { session.setActiveBrowserTab(tabId) }
 
-    var outputLines = ["Opened: \(normalized)", "Tab ID: \(tabId)"]
+    // The result's one row, rendered once the tab is taken into use, so "in use" is true of
+    // it; the page below carries no row of its own.
+    var outputLines = ["Opened: \(currentTabRow(newTab, tabsWindow, ctx))"]
     if use {
         outputLines.append("This tab is now the one page_click, page_type, page_select, page_navigate, page_press_keys, page_wait_for and get_text address. The page below is a snapshot taken at open; nothing refreshes it for you. After any click, type or navigation, call manage_tabs read with this tab_id to see the current page. Pass use: false on open to skip taking it.")
     }
@@ -434,19 +453,18 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
 /// the user's, the owner a tab that was already open has — so it gets no agent
 /// controller, no network recording, is never taken into use, and `close` refuses it. That last
 /// one is a real difference from an agent tab and the receipt says so.
-func manageTabsOpenUserControlled(_ url: String, _ tabsWindow: TabsWindow) -> TabToolResult {
+func manageTabsOpenUserControlled(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext) -> TabToolResult {
     let tab = tabsWindow.tabs.createTab(TabCreateSpec(tabType: "website", url: url, owner: .user))
     // The handle is allocation-only — the real browser target is created on first attach, and
     // nothing else ever attaches a user tab, so without this it stays a phantom the user never
     // sees. Not awaited: a background tab is throttled, so waiting out its load would stall the
     // open for the whole wake budget for a page the agent is not going to read.
     Task { _ = try? await tab.wake(nil) }
+    // No claim that it opens in the background: the desktop brings a new tab to the front.
     let lines = [
-        "Opened: \(url)",
-        "Tab ID: \(tab.id)",
-        "This tab is the user's: opened in the background like a middle-clicked link, with no AI "
-            + "indicator and no network recording, and it is NOT the tab the page tools address. "
-            + "You can read it; you cannot close it."
+        "Opened: \(currentTabRow(tab, tabsWindow, ctx))",
+        "This tab is the user's: it has no AI indicator and no network recording, and it is NOT "
+            + "the tab the page tools address. You can read it; you cannot close it."
     ]
     return TabToolResult(
         output: lines.joined(separator: "\n"),
@@ -461,18 +479,14 @@ func manageTabsClose(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTab
     guard let tab = tabsWindow.tabs.tab(tabId) else {
         return TabToolResult(output: "Tab \"\(tabId)\" not found.", isError: true)
     }
-    // THE USER'S TABS ARE NOT THE AGENT'S TO CLOSE. This guard used to test `isPinned`,
-    // which no CDP-backed tab can ever report true (the DevTools protocol has no pin
-    // concept), so it never fired and every tab in the browser — including the ones the
-    // user had open before the session attached — was closable. `openedByHuman` is set
-    // truthfully at every construction site: true when seeded, restored or adopted live,
-    // false only for a tab this session opened or a click spawned.
-    if tab.openedByHuman {
-        let title = tab.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled"
+    // AN AGENT CLOSES ONLY THE TABS ITS OWN CHAT OWNS: the user's tabs and other chats' tabs
+    // are refused. The owner is read once, at the moment of deciding, and the refusal names
+    // the owner the decision read.
+    let row = TabRow(tab, inUseTabId: inUseTabId(session: ctx.session, tabs: tabsWindow.tabs))
+    guard row.attribution.mayClose(askingChat: ctx.sessionId) else {
+        let owner = ownerWords(row.attribution, askingChat: ctx.sessionId)
         return TabToolResult(
-            output: "Cannot close \"\(title)\": it is the user's tab, not one you opened. "
-                + "You may only close tabs opened by manage_tabs.",
-            isError: true)
+            output: "Cannot close \"\(row.title)\": it is \(owner), not yours.", isError: true)
     }
 
     let title = tab.title
@@ -483,8 +497,9 @@ func manageTabsClose(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTab
     ctx.session.clearActiveBrowserTabIfMatches(tabId)
     await tabsWindow.tabs.closeTab(tabId, skipConfirm: true)
 
+    // Rendered once the tab is closed and out of use, so a closed tab never reads "in use".
     return TabToolResult(
-        output: "Closed: \"\(title ?? "")\" (\(url))",
+        output: "Closed: \(currentTabRow(tab, tabsWindow, ctx))",
         tabId: tabId,
         title: title?.isEmpty == false ? title : nil,
         url: url.isEmpty ? nil : url,
@@ -509,7 +524,7 @@ func manageTabsUse(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsA
 
     ctx.session.setActiveBrowserTab(tab.id)
     return TabToolResult(
-        output: "Tab \"\(tab.id)\" (\(tab.url)) is now the tab the page tools address. Page state is never pushed to you: call manage_tabs read with this tab_id whenever you need to see the current page.",
+        output: "\(currentTabRow(tab, tabsWindow, ctx))\nPage state is never pushed to you: call manage_tabs read with this tab_id whenever you need to see the current page.",
         tabId: tab.id,
         title: tab.title?.isEmpty == false ? tab.title : nil,
         url: tab.url.isEmpty ? nil : tab.url

@@ -121,7 +121,8 @@ public nonisolated struct TabViewportBounds: Sendable {
 
 extension TabHandle {
     /// Whether the tab is the user's: the owner collapsed to a bool, for the readers that
-    /// predate ``attribution``. `manage_tabs close` refuses a tab whose value is `true`.
+    /// predate ``attribution``. `manage_tabs close` reads ``TabAttribution/mayClose(askingChat:)``
+    /// instead.
     ///
     /// It replaced an `isPinned` flag: pinning is a browser-UI concept the DevTools
     /// protocol does not expose (`Target.TargetInfo` has no such field), so every

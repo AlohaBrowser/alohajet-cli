@@ -134,7 +134,7 @@ import ToolABI
         let closed = try await call(["action": .string("close"), "tab_id": .string(openedId)], context)
 
         #expect(closed.isError == true)
-        #expect(closed.output.contains("the user's tab"))
+        #expect(closed.output.contains("it is the user's tab, not yours"))
         #expect(model.tab(openedId) != nil)
     }
 

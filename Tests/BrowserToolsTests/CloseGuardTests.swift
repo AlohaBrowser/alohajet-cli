@@ -93,7 +93,7 @@ import ToolABI
     let (model, window, ctx) = fixture()
     let result = await manageTabsClose("users-tab", window, ctx)
     #expect(result.isError)
-    #expect(result.output?.contains("the user's tab") == true)
+    #expect(result.output?.contains("it is the user's tab, not yours") == true)
     #expect(model.closed.isEmpty)
     #expect(model.tab("users-tab") != nil)
 }
