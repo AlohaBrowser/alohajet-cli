@@ -584,10 +584,10 @@ public final class CDPTabsModel: TabsModel {
     /// (``refreshAndAdoptTabs()``) resurrect it.
     private var closedTargetIds: Set<String> = []
 
-    /// The chat this model was built for: it owns the tabs this model counts as the
-    /// agent's without a tool opening them (``ownChatOrUser``). `nil` (the default) leaves
-    /// the model with no chat.
-    private let chatId: String?
+    /// The owner of a tab this model counts as its own without a tool opening it: the chat
+    /// the model was built for, or the user when it was built for none (`chatId` is `nil`,
+    /// the default), since an attribution cannot say "a chat's tab" without a chat to name.
+    private let ownChatOrUser: TabOwner
 
     /// Whether the tabs already open when this model seeded belong to a HUMAN. True for
     /// the user's own browser, which is what `--cdp` reaches: those tabs predate us and
@@ -615,7 +615,7 @@ public final class CDPTabsModel: TabsModel {
         onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)? = nil
     ) {
         self.client = client
-        self.chatId = chatId
+        self.ownChatOrUser = chatId.map(TabOwner.chat) ?? .user
         self.seededTabsAreHuman = seededTabsAreHuman
         self.agentOwnedTabIds = agentOwnedTabIds
         self.navigationPacer = navigationPacer
@@ -641,11 +641,6 @@ public final class CDPTabsModel: TabsModel {
         /// outside tests, that snapshot is taken just before a click.
         case adoptedAfterClick
     }
-
-    /// The owner of a tab this model counts as its own without a tool opening it: the chat
-    /// the model was built for, or the user when it was built for none, since an
-    /// attribution cannot say "a chat's tab" without a chat to name.
-    private var ownChatOrUser: TabOwner { chatId.map(TabOwner.chat) ?? .user }
 
     /// The one way a tab enters this model. Every route builds its handle here, and the
     /// tab's owner is decided here. `targetId`, `url` and `title` are whatever the route has
