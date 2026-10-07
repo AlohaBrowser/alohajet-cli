@@ -48,10 +48,10 @@ public func renderTabRow(_ row: TabRow, askingChat: String) -> String {
 /// "another chat's tab (chat <id>)". The tab row and `manage_tabs close`'s refusal both say
 /// it in these words.
 func ownerWords(_ attribution: TabAttribution, askingChat: String) -> String {
-    switch attribution.ownerView(askingChat: askingChat) {
+    switch attribution.owner {
     case .user: "the user's tab"
-    case .askingChat: "your tab"
-    case .otherChat(let chat): "another chat's tab (chat \(chat))"
+    case .chat(let chat) where chat == askingChat: "your tab"
+    case .chat(let chat): "another chat's tab (chat \(chat))"
     }
 }
 

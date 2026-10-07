@@ -157,22 +157,13 @@ public nonisolated enum TabOwner: Sendable, Equatable {
     case chat(String)
 }
 
-/// Whose a tab is, relative to the chat that asks. Exactly one case holds for any tab,
-/// because the owner has exactly one value.
-public nonisolated enum TabOwnerView: Sendable, Equatable {
-    case user
-    /// Owned by the asking chat.
-    case askingChat
-    /// Owned by another chat, the one with this id.
-    case otherChat(String)
-}
-
 /// A tab's owner and whether it is the foreground tab: the two facts the browser owns
 /// that the agent reads. Which tab is in use is not part of it: that is the agent's own
 /// state, kept on the agent's side.
 ///
-/// Its views are functions of the value and the asking chat's id, computed when a tab is
-/// described or a close is decided; never stored.
+/// What a chat may do with the tab, and how it is told whose the tab is, are worked out
+/// from the value and the asking chat's id when a close is decided or a tab is described;
+/// never stored.
 public nonisolated struct TabAttribution: Sendable, Equatable {
     public var owner: TabOwner
     /// Whether the tab is the one shown in the browser window now; `nil` when the
@@ -182,14 +173,6 @@ public nonisolated struct TabAttribution: Sendable, Equatable {
     public init(owner: TabOwner, foreground: Bool? = nil) {
         self.owner = owner
         self.foreground = foreground
-    }
-
-    public func ownerView(askingChat: String) -> TabOwnerView {
-        switch owner {
-        case .user: .user
-        case .chat(let chat) where chat == askingChat: .askingChat
-        case .chat(let chat): .otherChat(chat)
-        }
     }
 
     /// Whether the asking chat may close the tab: only a tab its own chat owns. Reads the
