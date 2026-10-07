@@ -380,26 +380,6 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
         return manageTabsOpenUserControlled(normalized, tabsWindow, ctx)
     }
 
-    let existingTab = tabsWindow.tabs.orderedTabs.first { tab in
-        guard let agentId = tab.browserAgentControlledAgentId, agentId == ctx.sessionId else { return false }
-        return tab.url == normalized
-    }
-    if let existingTab {
-        if use { ctx.session.setActiveBrowserTab(existingTab.id) }
-        let lines = [
-            "Reused existing tab (same agent, same URL): \(normalized)",
-            "Tab ID: \(existingTab.id)",
-            "No new tab created — operate on this id directly."
-        ]
-        return TabToolResult(
-            output: lines.joined(separator: "\n"),
-            tabId: existingTab.id,
-            title: existingTab.title?.isEmpty == false ? existingTab.title : nil,
-            url: normalized,
-            faviconUrl: existingTab.faviconUrl?.isEmpty == false ? existingTab.faviconUrl : nil
-        )
-    }
-
     let newTab = tabsWindow.tabs.createTab(TabCreateSpec(
         tabType: "website",
         url: normalized,

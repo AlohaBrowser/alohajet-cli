@@ -15,7 +15,7 @@ public protocol TabsModel: AnyObject {
     var activeTabId: String? { get }
     func setActiveTabId(_ id: String?)
     var tabsById: [String: TabHandle] { get }
-    /// The insertion-ordered tab handles (used by list + same-URL reuse).
+    /// The insertion-ordered tab handles.
     var orderedTabs: [TabHandle] { get }
     func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle?
     func tab(_ id: String) -> TabHandle?
