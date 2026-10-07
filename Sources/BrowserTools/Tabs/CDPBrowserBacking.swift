@@ -92,6 +92,7 @@ final class CDPTabSession {
         guard !isDestroyed else { throw CDPError.notConnected }
         if effectiveTargetId == nil {
             effectiveTargetId = try await client.openTab(url: url)
+            tabsTrace("[tab \(targetId)] CREATED in the browser for url=\(url); real id=\(effectiveTargetId ?? "(none)")")
         }
         guard let resolved = effectiveTargetId else { throw CDPError.notConnected }
         let session = try await client.attachToTarget(targetId: resolved)

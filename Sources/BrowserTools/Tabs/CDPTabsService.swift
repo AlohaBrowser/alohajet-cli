@@ -116,7 +116,10 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// written only by the navigation waiter and the read probe, so a page the agent moved with a
     /// click stayed stale here — `manage_tabs list` printed the pre-click URL. Not a navigation:
     /// nothing is reset, this is a reading of the document that is already there.
-    func noteObservedURL(_ url: String) { if !url.isEmpty { session.url = url } }
+    func noteObservedURL(_ url: String) {
+        tabsTrace("[tab \(id)] CLICK-URL cached url \(session.url) -> \(url.isEmpty ? "(empty, ignored)" : url)")
+        if !url.isEmpty { session.url = url }
+    }
 
     /// Drops the title this handle was constructed with, so ``title`` reads the session's
     /// live one. The constructor value is a snapshot of the moment the tab was seeded and
@@ -285,6 +288,8 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         // The tab's intended target, captured before any poll can overwrite it,
         // so the load flag can tell a real navigation from the initial blank doc.
         let expectedURL = session.url
+        let traceStart = Date()
+        tabsTrace("[tab \(id)] LOAD-WAIT start expects url=\(expectedURL) budget=\(timeoutMs)ms")
 
         // Subscribe BEFORE enabling lifecycle events / navigating-state probing so
         // no `load` emitted in the gap is missed.
@@ -334,7 +339,11 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
             if Task.isCancelled || signal?.aborted == true { throw SimpleBrowserError("Operation aborted") }
 
             // (a) The real main-frame load fired since we subscribed.
-            if loadFlag.didLoad { refreshCachedURLTitleFromFlag(loadFlag); return true }
+            if loadFlag.didLoad {
+                refreshCachedURLTitleFromFlag(loadFlag)
+                tabsTrace("[tab \(id)] LOAD-WAIT done by load event after \(Int(Date().timeIntervalSince(traceStart) * 1000))ms; cached url=\(session.url) title=\"\(session.title ?? "")\"")
+                return true
+            }
 
             // (b) Fallback poll: readyState + committed URL. Only accept a
             // readyState pass once the live document is the real target (not the
@@ -387,12 +396,15 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
                     if let title = probe["title"]?.stringValue { session.title = title }
                 }
                 let state = probe["ready"]?.stringValue ?? ""
+                tabsTrace("[tab \(id)] LOAD-WAIT probe page url=\(probedURL) ready=\(probe["ready"]?.stringValue ?? "") counted-as-real=\(isReal) title=\"\(probe["title"]?.stringValue ?? "")\"")
                 if (state == "interactive" || state == "complete") && isReal {
+                    tabsTrace("[tab \(id)] LOAD-WAIT done by probe after \(Int(Date().timeIntervalSince(traceStart) * 1000))ms; cached url=\(session.url) title=\"\(session.title ?? "")\"")
                     return true
                 }
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
+        tabsTrace("[tab \(id)] LOAD-WAIT TIMED OUT after \(Int(Date().timeIntervalSince(traceStart) * 1000))ms; still expected url=\(expectedURL)")
         return false
     }
 
@@ -400,6 +412,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// observed, so a reader that passed via the lifecycle event (without a final
     /// poll) still sees the committed URL.
     private func refreshCachedURLTitleFromFlag(_ flag: MainFrameLoadFlag) {
+        tabsTrace("[tab \(id)] LOAD-WAIT committed url from load event: \(flag.committedURL ?? "(none)")")
         if let url = flag.committedURL, !url.isEmpty { session.url = url }
     }
 
@@ -440,6 +453,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// A wired ``NavigationPacer`` is asked for its turn first; `profileId` is the budget
     /// the host charges the navigation against, `nil` when the caller holds none.
     public func navigateToURL(_ url: String, profileId: String? = nil, signal: AbortSignal?) async throws {
+        tabsTrace("[tab \(id)] NAVIGATE by agent to \(url); cached url before=\(session.url)")
         try await pacer?(url, profileId, signal)
         // A pacer can hold a navigation for minutes. An abort raised while it waited must
         // not then be spent loading a page nobody is waiting for.
@@ -590,6 +604,8 @@ public final class CDPTabsModel: TabsModel {
     private var order: [String] = []
     private var _activeTabId: String?
     private var seeded = false
+    /// TEMPORARY (trace branch): tells one agent build's tabs model from another in the trace.
+    private lazy var traceTag = String(UInt(bitPattern: ObjectIdentifier(self).hashValue) & 0xFFFFF, radix: 16)
 
     /// Ids ``closeTab`` closed. `Target.closeTarget` is fire-and-forget, so a browser
     /// that still lists a closed target must not let ``adoptLiveTarget`` or a listing
@@ -692,6 +708,8 @@ public final class CDPTabsModel: TabsModel {
             attributionSource: attributionSource,
             pacer: navigationPacer)
         register(handle)
+        let route = "\(origin)".prefix { $0 != "(" }
+        tabsTrace("[tabs \(traceTag)] ENTER via \(route) id=\(targetId) owner=\(owner) url=\(url) title=\"\(title ?? "")\"")
         return handle
     }
 
@@ -747,7 +765,11 @@ public final class CDPTabsModel: TabsModel {
         // target exists. Indexing `tabs[id]` with the id the tool was CALLED with then
         // found nothing and returned silently — a close that reported success and closed
         // nothing.
-        guard let handle = resolveLocked(id) else { return }
+        guard let handle = resolveLocked(id) else {
+            tabsTrace("[tabs \(traceTag)] CLOSE id=\(id): not tracked, nothing closed")
+            return
+        }
+        tabsTrace("[tabs \(traceTag)] CLOSE by agent id=\(id) real id=\(handle.session.effectiveTargetId ?? "(none)")")
         let registeredId = tabs.first { $0.value === handle }?.key ?? id
         tabs.removeValue(forKey: registeredId)
         order.removeAll { $0 == registeredId }
@@ -799,7 +821,11 @@ public final class CDPTabsModel: TabsModel {
     public func seedFromBrowser() async {
         guard !seeded else { return }
         seeded = true
-        guard let infos = await pageTargetInfos() else { return }
+        guard let infos = await pageTargetInfos() else {
+            tabsTrace("[tabs \(traceTag)] SEED listing failed")
+            return
+        }
+        tabsTrace("[tabs \(traceTag)] SEED new tabs model; the browser lists \(infos.count) page(s)")
         for info in infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
             _ = admit(.seeded, targetId: targetId, url: info["url"]?.stringValue ?? "", title: info["title"]?.stringValue)
@@ -826,25 +852,46 @@ public final class CDPTabsModel: TabsModel {
     /// A tracked tab the listing leaves out is KEPT: the desktop's listing leaves out
     /// grouped tabs, and a tab the agent knows stays known while it runs.
     public func refreshAndAdoptTabs() async {
-        guard let infos = await pageTargetInfos() else { return }
+        guard let infos = await pageTargetInfos() else {
+            tabsTrace("[tabs \(traceTag)] LISTING failed")
+            return
+        }
+        tabsTrace("[tabs \(traceTag)] LISTING the browser lists \(infos.count) page(s); the model tracks \(order.count)")
+        var listedIds: Set<String> = []
         for info in infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
+            listedIds.insert(targetId)
             let url = info["url"]?.stringValue ?? ""
             let title = info["title"]?.stringValue
             if let handle = resolveLocked(targetId) {
+                let urlBefore = handle.session.url
+                let titleBefore = handle.title ?? ""
+                var urlDecision = "took the listing's"
+                var titleDecision = "took the listing's"
                 // A tab still on its initial blank document has not committed the URL it was
                 // opened for; overwriting the intended target with `about:blank` would make
                 // the load wait expect the wrong page.
                 if !url.isEmpty, url != "about:blank" || handle.session.url.isEmpty {
                     handle.session.url = url
+                } else {
+                    urlDecision = url.isEmpty ? "KEPT its own (listing empty)" : "KEPT its own (listing about:blank)"
                 }
                 if let title, !title.isEmpty {
                     handle.session.title = title
                     handle.clearCachedTitle()
+                } else {
+                    titleDecision = "KEPT its own (listing empty)"
                 }
+                tabsTrace("[tabs \(traceTag)] LISTED tracked id=\(targetId) | browser: url=\(url) title=\"\(title ?? "")\" | model before: url=\(urlBefore) title=\"\(titleBefore)\" | url: \(urlDecision); title: \(titleDecision)")
             } else if !closedTargetIds.contains(targetId) {
+                tabsTrace("[tabs \(traceTag)] LISTED untracked id=\(targetId) url=\(url) -> adopting")
                 _ = admit(.foundInListing, targetId: targetId, url: url, title: title)
+            } else {
+                tabsTrace("[tabs \(traceTag)] LISTED id=\(targetId) which this model closed -> skipped")
             }
+        }
+        for handle in order.compactMap({ tabs[$0] }) where !listedIds.contains(handle.id) {
+            tabsTrace("[tabs \(traceTag)] NOT LISTED by the browser, KEPT id=\(handle.id) url=\(handle.session.url) title=\"\(handle.title ?? "")\"")
         }
     }
 }
@@ -898,11 +945,20 @@ extension CDPTabsModel: LivePageTargetAdopting {
     /// Whose the tab is follows the rule for a seeded tab, in `admit` (like
     /// ``seedFromBrowser``, unlike ``adoptSpawnedTabs``).
     public func adoptLiveTarget(_ id: String) async -> TabHandle? {
-        if let existing = resolveLocked(id) { return existing }
-        if closedTargetIds.contains(id) { return nil }
+        if let existing = resolveLocked(id) {
+            tabsTrace("[tabs \(traceTag)] ADOPT-LIVE id=\(id): already tracked, no request")
+            return existing
+        }
+        if closedTargetIds.contains(id) {
+            tabsTrace("[tabs \(traceTag)] ADOPT-LIVE id=\(id): this model closed it -> nil")
+            return nil
+        }
         guard let infos = await pageTargetInfos(),
               let info = infos.first(where: { $0["targetId"]?.stringValue == id })
-        else { return nil }
+        else {
+            tabsTrace("[tabs \(traceTag)] ADOPT-LIVE id=\(id): not in the browser's listing -> nil")
+            return nil
+        }
         return admit(.adoptedLive, targetId: id, url: info["url"]?.stringValue ?? "", title: info["title"]?.stringValue)
     }
 }
