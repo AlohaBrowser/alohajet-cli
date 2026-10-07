@@ -591,8 +591,8 @@ public final class CDPTabsModel: TabsModel {
 
     /// The agent-controller / chat-session identity written into the control flags of a
     /// tab adopted from a click-spawned target, mirroring how ``createTab`` flags an
-    /// agent-opened tab. The chat they name (``ownChat``) owns the tabs this model counts
-    /// as the agent's without a tool opening them. `nil` (the default) leaves the model
+    /// agent-opened tab. The chat they name owns the tabs this model counts as the agent's
+    /// without a tool opening them (``ownChatOrUser``). `nil` (the default) leaves the model
     /// with no chat.
     private let agentControllerId: String?
     private let sessionId: String?
@@ -649,20 +649,17 @@ public final class CDPTabsModel: TabsModel {
         case adoptedAfterClick
     }
 
-    /// The chat this model was built for, the same one a click-adopted tab's
-    /// `chatSessionId` names; `nil` when it was built for none.
-    private var ownChat: String? { sessionId ?? agentControllerId }
-
-    /// Whose a tab this model counts as the agent's without a tool opening it is: the
-    /// model's own chat. A model built with no chat has none to name, and an attribution
-    /// cannot say "a chat's tab" without one, so such a tab is the user's.
-    private var agentTabOwner: TabOwner { ownChat.map(TabOwner.chat) ?? .user }
+    /// The owner of a tab this model counts as its own without a tool opening it: the chat
+    /// the model was built for (the one a click-adopted tab's `chatSessionId` names), or
+    /// the user when it was built for none, since an attribution cannot say "a chat's tab"
+    /// without a chat to name.
+    private var ownChatOrUser: TabOwner { (sessionId ?? agentControllerId).map(TabOwner.chat) ?? .user }
 
     /// Whose a tab the browser already had is: the user's, except in a browser the
-    /// alohajet-cli program launched and for the ids it already owns, where it is the
-    /// agent's.
+    /// alohajet-cli program launched and for the ids it already owns, where it is this
+    /// model's own.
     private func seededOwner(_ targetId: String) -> TabOwner {
-        seededTabsAreHuman && !agentOwnedTabIds.contains(targetId) ? .user : agentTabOwner
+        seededTabsAreHuman && !agentOwnedTabIds.contains(targetId) ? .user : ownChatOrUser
     }
 
     /// The one way a tab enters this model. Every route builds its handle here, and whose
@@ -685,7 +682,7 @@ public final class CDPTabsModel: TabsModel {
                 control = nil
             }
         case .adoptedAfterClick:
-            owner = agentTabOwner
+            owner = ownChatOrUser
             control = (agentControllerId, sessionId ?? agentControllerId)
         case .seeded, .restoredById, .adoptedLive:
             owner = seededOwner(targetId)
