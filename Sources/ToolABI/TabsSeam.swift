@@ -48,8 +48,8 @@ public protocol ClickSpawnedTabAdopting: AnyObject {
     /// Snapshots the live page target ids before an action, so the post-action
     /// diff can tell a genuinely-new target from one that already existed.
     func currentPageTargetIds() async -> Set<String>
-    /// Adopts each live page target not in `previous` (and not already tracked)
-    /// as an agent-controlled background tab, returning the adopted tabs. Already
+    /// Adopts each live page target not in `previous` (and not already tracked),
+    /// returning the adopted tabs. Already
     /// known / previously-seen targets are skipped, so a repeated identical click
     /// adopts nothing.
     func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab]
@@ -91,7 +91,7 @@ public protocol PageReadRemediating: AnyObject {
     func remediateAfterRead(_ signal: AbortSignal?) async -> Bool
 }
 
-public protocol TabHandle: AgentControllableTab {
+public protocol TabHandle: AnyObject, Sendable {
     var id: String { get }
     var title: String? { get }
     var url: String { get }
@@ -100,7 +100,6 @@ public protocol TabHandle: AgentControllableTab {
     var attribution: TabAttribution { get }
     var tabType: String { get }
     var faviconUrl: String? { get }
-    var userTookOver: Bool { get }
     var agentDOM: AgentDOMSnapshotting? { get }
     /// Wakes the tab: ensures a website tab is loaded with live web contents
     /// before snapshotting; non-website tabs are always ready.
@@ -120,22 +119,6 @@ public nonisolated struct TabViewportBounds: Sendable {
         self.width = width
         self.height = height
     }
-}
-
-extension TabHandle {
-    /// Whether the tab is the user's: the owner collapsed to a bool, for the readers that
-    /// predate ``attribution``. `manage_tabs close` reads ``TabAttribution/mayClose(askingChat:)``
-    /// instead.
-    ///
-    /// It replaced an `isPinned` flag: pinning is a browser-UI concept the DevTools
-    /// protocol does not expose (`Target.TargetInfo` has no such field), so every
-    /// CDP-backed tab reported `false` and the close guard that tested it never fired.
-    ///
-    /// Never declare `openedByHuman` in a conforming type. This member is not a protocol
-    /// requirement, so Swift picks it by the declared type: a conformer's own copy would
-    /// answer when the tab is read as that type, and this one when it is read as a
-    /// `TabHandle`, and the two could disagree without a compiler warning.
-    public var openedByHuman: Bool { attribution.owner == .user }
 }
 
 public nonisolated struct TabCreateSpec: Sendable {

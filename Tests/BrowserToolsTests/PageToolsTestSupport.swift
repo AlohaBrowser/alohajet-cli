@@ -14,19 +14,13 @@ import CDP
 // every one of the seven tools shares (`resolveActivePageTab` in
 // `PageToolsSupport.swift`) without needing a live CDP connection.
 
-final class PageToolsStubTabHandle: TabHandle {
+@MainActor final class PageToolsStubTabHandle: TabHandle {
     let id: String
     var title: String?
     var url: String
     var attribution: TabAttribution
     var tabType: String
     var faviconUrl: String?
-    var userTookOver: Bool
-
-    private var _chatSessionId: String?
-    private var _aiControlled = false
-    private var _browserControlled = false
-    private var _agentId: String?
 
     init(id: String, url: String, title: String? = nil, tabType: String = "website", owner: TabOwner = .chat("test-session")) {
         self.id = id
@@ -35,7 +29,6 @@ final class PageToolsStubTabHandle: TabHandle {
         self.tabType = tabType
         self.attribution = TabAttribution(owner: owner)
         self.faviconUrl = nil
-        self.userTookOver = false
     }
 
     var agentDOM: AgentDOMSnapshotting? { nil }
@@ -47,19 +40,6 @@ final class PageToolsStubTabHandle: TabHandle {
     }
     func viewportBounds() -> TabViewportBounds? { nil }
     func startNetworkRecording(logPath: String) {}
-
-    var browserAgentControlledAgentId: String? { _agentId }
-    var chatSessionId: String? {
-        get { _chatSessionId }
-        set { _chatSessionId = newValue }
-    }
-    var isAIControlledTab: Bool { _aiControlled }
-    var isBrowserAgentControlled: Bool { _browserControlled }
-    func setAIControlledTab(_ controlled: Bool, agentId: String?) {
-        _aiControlled = controlled
-        _browserControlled = !controlled
-        _agentId = agentId
-    }
 }
 
 final class PageToolsStubTabsModel: TabsModel, LivePageTargetAdopting {

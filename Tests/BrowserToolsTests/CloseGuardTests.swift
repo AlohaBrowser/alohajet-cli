@@ -15,12 +15,7 @@ import ToolABI
     let attribution: TabAttribution
     var tabType = "website"
     var faviconUrl: String?
-    var userTookOver = false
     var agentDOM: AgentDOMSnapshotting? { nil }
-    var browserAgentControlledAgentId: String?
-    var chatSessionId: String?
-    var isAIControlledTab = false
-    var isBrowserAgentControlled = false
 
     init(id: String, url: String, owner: TabOwner) {
         self.id = id
@@ -29,11 +24,6 @@ import ToolABI
         self.title = id
     }
 
-    func setAIControlledTab(_ controlled: Bool, agentId: String?) {
-        isAIControlledTab = controlled
-        isBrowserAgentControlled = !controlled
-        browserAgentControlledAgentId = agentId
-    }
     func wake(_ signal: AbortSignal?) async throws -> WakeResult { WakeResult(ok: true) }
     func viewportBounds() -> TabViewportBounds? { nil }
     func startNetworkRecording(logPath: String) {}

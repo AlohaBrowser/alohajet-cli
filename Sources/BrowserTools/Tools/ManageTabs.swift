@@ -246,17 +246,11 @@ func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabs
 /// under its own row, so no result describes one tab twice.
 private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ includeScreenshot: Bool) async -> TabToolResult {
     let tabsModel = tabsWindow.tabs
-    if tab.userTookOver {
-        return TabToolResult(output: "Tab \"\(tab.id)\" was taken over by the user. Pick a different tab or ask the user to hand it back.", isError: true)
-    }
-
     if case let .rejected(reason) = validateTabUrl(TabUrlInput(url: tab.url)) {
         return TabToolResult(output: reason, isError: true)
     }
 
-    if let abortedBeforeMark = abortedResultOrNull(ctx.abortSignal?.aborted == true) { return abortedBeforeMark }
-
-    markTabAgentControlled(tab, sessionId: ctx.sessionId, source: "manage-tabs:read")
+    if let abortedBeforeWake = abortedResultOrNull(ctx.abortSignal?.aborted == true) { return abortedBeforeWake }
 
     if let wakeFailure = await ensureTabAwake(tab, ctx.abortSignal) { return wakeFailure }
 
@@ -432,9 +426,9 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
 }
 
 /// `controlled_by: "user"`: a tab opened FOR the user, not one the agent drives. It is created
-/// the user's, the owner a tab that was already open has — so it gets no agent
-/// controller, no network recording, is never taken into use, and `close` refuses it. That last
-/// one is a real difference from an agent tab and the receipt says so.
+/// the user's, the owner a tab that was already open has — so it gets no network recording,
+/// is never taken into use, and `close` refuses it. That last one is a real difference from
+/// an agent tab and the receipt says so.
 func manageTabsOpenUserControlled(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext) async -> TabToolResult {
     let tab = tabsWindow.tabs.createTab(TabCreateSpec(tabType: "website", url: url, owner: .user))
     // The handle is allocation-only — the real browser target is created on first attach, and
@@ -450,7 +444,7 @@ func manageTabsOpenUserControlled(_ url: String, _ tabsWindow: TabsWindow, _ ctx
     // No claim that it opens in the background: the desktop brings a new tab to the front.
     let lines = [
         "Opened: \(renderedTabRow(tab, tabsWindow, ctx))",
-        "This tab is the user's: it has no AI indicator and no network recording, and it is NOT "
+        "This tab is the user's: it has no network recording, and it is NOT "
             + "the tab the page tools address. You can read it; you cannot close it."
     ]
     return TabToolResult(
@@ -503,9 +497,7 @@ func manageTabsUse(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsA
         return TabToolResult(output: reason, isError: true)
     }
 
-    if let abortedBeforeMark = abortedResultOrNull(ctx.abortSignal?.aborted == true) { return abortedBeforeMark }
-
-    markTabAgentControlled(tab, sessionId: ctx.sessionId, source: "manage-tabs:use")
+    if let abortedBeforeWake = abortedResultOrNull(ctx.abortSignal?.aborted == true) { return abortedBeforeWake }
 
     if let wakeFailure = await ensureTabAwake(tab, ctx.abortSignal) { return wakeFailure }
 

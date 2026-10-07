@@ -4,11 +4,11 @@ import CDP
 import ToolABI
 @testable import BrowserTools
 
-// The seams `makeCDPBrowserTabsService` hands a host — the navigation pacer, the
-// per-handle creation hook, the control-state hook — exist so a host does not have to
-// fork this file to attach its own behaviour to a tab. Each of them fails SILENTLY when
-// it is wrong: a tab built down a path nobody announced simply has no sealed-region
-// handling and no navigation guard, and a navigation that leaves by the door the pacer
+// The seams `makeCDPBrowserTabsService` hands a host — the navigation pacer and the
+// per-handle creation hook — exist so a host does not have to fork this file to attach
+// its own behaviour to a tab. Each of them fails SILENTLY when it is wrong: a tab built
+// down a path nobody announced simply has no sealed-region handling, and a navigation
+// that leaves by the door the pacer
 // does not watch is simply never metered. Nothing throws, nothing logs. These tests are
 // the only thing that notices.
 
@@ -79,27 +79,6 @@ struct TabsInjectionSeamTests {
         _ = await adopting.adoptLiveTarget("live-target")
         _ = await spawnAdopting.adoptSpawnedTabs(notIn: before)
         #expect(log.handles.count == 4, "a re-adoption announced an already-known tab")
-    }
-
-    @Test("onTabCreated runs before the control flags are written, so the first transition is seen")
-    @MainActor
-    func onTabCreatedPrecedesTheFirstControlTransition() async throws {
-        let (_, client) = try await connectedMock()
-        let log = SeamLog()
-        let service = await makeCDPBrowserTabsService(
-            client: client,
-            seed: false,
-            onTabCreated: { handle in
-                handle.onControlStateChange = { isAI, isAgent in log.record("\(isAI)", "\(isAgent)") }
-            })
-        _ = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
-
-        // `createTab` puts the tab under the agent immediately, and that is the only such
-        // call a read ever makes (`markTabAgentControlled` finds it already owned and
-        // returns). Announce the handle after it and a host's navigation guard never
-        // learns the tab became its own.
-        #expect(log.lines == ["false|true"])
     }
 
     @Test("the pacer gates the open path: a refused turn creates no target")

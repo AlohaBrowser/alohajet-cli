@@ -258,8 +258,7 @@ public struct AgentOwnedTabs: Sendable {
         // exists for the user's tabs must not fire on our own `about:blank`.
         let tabsService = await makeCDPBrowserTabsService(
             client: client,
-            agentControllerId: sessionId,
-            sessionId: sessionId,
+            chatId: sessionId,
             seededTabsAreHuman: !ownsBrowser,
             agentOwnedTabIds: agentOwnedTabs?.ids(matching: endpoint) ?? [])
         let networkDir = networkLogDirectory ?? environmentNetworkLogDirectory(sessionId: sessionId)

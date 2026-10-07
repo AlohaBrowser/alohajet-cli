@@ -82,7 +82,7 @@ Work with browser tabs. Six actions.
 
 **read** — returns one tab's page as interactive markdown: headings, lists, links, tables and paragraphs, with every actionable element (link, button, input, select) carrying a trailing {aloha-id="..."} marker. Those ids are what page_click, page_type, page_select and get_text address. A tab that cannot produce interactive markdown (a non-web tab, or one with no attached DOM) falls back to plain markdown with no ids.
 
-**open** — opens a new tab at url AND returns its page in the same result, so one call navigates and reads. Only http and https URLs are accepted. Pass controlled_by: "user" instead when you are handing the user a link to read rather than a page you will drive; that opens an ordinary background tab and returns only its id.
+**open** — opens a new tab at url AND returns its page in the same result, so one call navigates and reads. Only http and https URLs are accepted. Pass controlled_by: "user" instead when you are handing the user a link to read rather than a page you will drive; that opens a tab that is the user's and returns no page.
 
 **close** — closes a tab by id. Close the tabs you opened once you are done with them. A tab that is not your chat's is refused; "list" says whose each tab is.
 
@@ -114,7 +114,7 @@ private let manageTabsSchema = objectSchema([
     )),
     ("controlled_by", schemaField(
         type: "string",
-        description: "Applies to \"open\". \"agent\" (the default) opens a tab this session owns: it is marked agent-controlled, so the host shows its AI indicator and exempts it from background throttling, its network traffic is recorded when the session logs it, and it is taken into use with its page in the result. \"user\" opens an ordinary background tab instead, exactly as if the user had middle-clicked the link — no indicator, no recording, not taken into use, no page in the result, and close refuses it afterwards because it counts as the user's. Use it for links you are handing the user to read, not pages you intend to drive.",
+        description: "Applies to \"open\". \"agent\" (the default) opens a tab this session owns: its network traffic is recorded when the session logs it, and it is taken into use with its page in the result. \"user\" opens a tab that is the user's instead — no recording, not taken into use, no page in the result, and close refuses it afterwards. Use it for links you are handing the user to read, not pages you intend to drive.",
         enumValues: ["agent", "user"],
         defaultValue: .string("agent")
     )),

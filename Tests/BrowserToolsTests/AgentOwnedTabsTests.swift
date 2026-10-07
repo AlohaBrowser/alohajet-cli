@@ -13,20 +13,20 @@ private func seededModel(agentOwned: Set<String>) async throws -> TabsModel {
     let client = CDPClient(channel: channel)
     try await client.connect()
     let service = await makeCDPBrowserTabsService(
-        client: client, sessionId: "alohajet", seededTabsAreHuman: true, agentOwnedTabIds: agentOwned)
+        client: client, chatId: "alohajet", seededTabsAreHuman: true, agentOwnedTabIds: agentOwned)
     return try #require(service.window).tabs
 }
 
 @Test @MainActor func aSeededTabRecordedAsTheAgentsIsNotTheUsers() async throws {
     let tabs = try await seededModel(agentOwned: ["agents-target"])
-    #expect(tabs.tab("users-target")?.openedByHuman == true)
-    #expect(tabs.tab("agents-target")?.openedByHuman == false)
+    #expect(tabs.tab("users-target")?.attribution.owner == .user)
+    #expect(tabs.tab("agents-target")?.attribution.owner == .chat("alohajet"))
 }
 
 @Test @MainActor func everySeededTabStaysTheUsersWhenNothingWasRecorded() async throws {
     let tabs = try await seededModel(agentOwned: [])
-    #expect(tabs.tab("users-target")?.openedByHuman == true)
-    #expect(tabs.tab("agents-target")?.openedByHuman == true)
+    #expect(tabs.tab("users-target")?.attribution.owner == .user)
+    #expect(tabs.tab("agents-target")?.attribution.owner == .user)
 }
 
 @Test @MainActor func aRestoredTabRecordedAsTheAgentsIsNotTheUsers() async throws {
@@ -36,11 +36,11 @@ private func seededModel(agentOwned: Set<String>) async throws -> TabsModel {
     let client = CDPClient(channel: channel)
     try await client.connect()
     let service = await makeCDPBrowserTabsService(
-        client: client, seed: false, sessionId: "alohajet", seededTabsAreHuman: true,
+        client: client, seed: false, chatId: "alohajet", seededTabsAreHuman: true,
         agentOwnedTabIds: ["agents-target"])
     let tabs = try #require(service.window).tabs
-    #expect(tabs.getOrRestoreTab("agents-target", restoreIfNeeded: true)?.openedByHuman == false)
-    #expect(tabs.getOrRestoreTab("users-target", restoreIfNeeded: true)?.openedByHuman == true)
+    #expect(tabs.getOrRestoreTab("agents-target", restoreIfNeeded: true)?.attribution.owner == .chat("alohajet"))
+    #expect(tabs.getOrRestoreTab("users-target", restoreIfNeeded: true)?.attribution.owner == .user)
 }
 
 @Test func recordedOwnershipIsIgnoredWhenTheBrowserIsNotTheOneItWasRecordedAgainst() {

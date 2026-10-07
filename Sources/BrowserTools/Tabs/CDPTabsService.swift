@@ -44,8 +44,8 @@ final class CDPAgentDOMSnapshotting: AgentDOMSnapshotting {
 }
 
 /// A ``TabHandle`` over a CDP page target. It owns the target session, an
-/// ``AgentDOMService`` (for interactive snapshots, click, type, etc.), and the
-/// agent-control flags the tab tools read and set.
+/// ``AgentDOMService`` (for interactive snapshots, click, type, etc.), and the tab's
+/// attribution.
 public final class CDPTabHandle: TabHandle, StepTraceTab {
     let session: CDPTabSession
     let browserTab: CDPBrowserTab
@@ -59,21 +59,11 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
 
     private var constructedTitle: String?
     public let tabType: String
-    public private(set) var browserAgentControlledAgentId: String?
-    public var chatSessionId: String?
-    public private(set) var isAIControlledTab = false
-    public private(set) var isBrowserAgentControlled = false
     private var networkRecorder: NetworkRecorder?
     private var cachedViewportBounds: TabViewportBounds?
     /// Whose this tab is. Set once at construction, by the tabs model's one entry
     /// function; the foreground is unknown, since nothing here asks the browser for it.
     public let attribution: TabAttribution
-
-    /// Fired after every ``setAIControlledTab`` with the flags as they now stand. The
-    /// hook a host hangs a per-tab navigation guard off: the guard installs when the tab
-    /// enters agent control and uninstalls when it leaves, and only the transition says
-    /// which just happened. Nothing in this package sets it.
-    public var onControlStateChange: (@MainActor @Sendable (_ isAIControlled: Bool, _ isAgentControlled: Bool) -> Void)?
 
     init(
         session: CDPTabSession,
@@ -124,8 +114,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     public var title: String? { constructedTitle ?? session.title }
 
     public var faviconUrl: String? { nil }
-
-    public var userTookOver: Bool { false }
 
     public var agentDOM: AgentDOMSnapshotting? {
         tabType == "website" ? snapshotting : nil
@@ -578,15 +566,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
             await recorder.start()
         }
     }
-
-    // MARK: AgentControllableTab
-
-    public func setAIControlledTab(_ controlled: Bool, agentId: String?) {
-        isAIControlledTab = controlled
-        isBrowserAgentControlled = !controlled
-        browserAgentControlledAgentId = controlled ? nil : agentId
-        onControlStateChange?(isAIControlledTab, isBrowserAgentControlled)
-    }
 }
 
 
@@ -605,13 +584,10 @@ public final class CDPTabsModel: TabsModel {
     /// (``refreshAndAdoptTabs()``) resurrect it.
     private var closedTargetIds: Set<String> = []
 
-    /// The agent-controller / chat-session identity written into the control flags of a
-    /// tab adopted from a click-spawned target, mirroring how ``createTab`` flags an
-    /// agent-opened tab. The chat they name owns the tabs this model counts as the agent's
-    /// without a tool opening them (``ownChatOrUser``). `nil` (the default) leaves the model
-    /// with no chat.
-    private let agentControllerId: String?
-    private let sessionId: String?
+    /// The chat this model was built for: it owns the tabs this model counts as the
+    /// agent's without a tool opening them (``ownChatOrUser``). `nil` (the default) leaves
+    /// the model with no chat.
+    private let chatId: String?
 
     /// Whether the tabs already open when this model seeded belong to a HUMAN. True for
     /// the user's own browser, which is what `--cdp` reaches: those tabs predate us and
@@ -627,21 +603,19 @@ public final class CDPTabsModel: TabsModel {
 
     /// Announced once per ``CDPTabHandle``, from ``register`` — the single point every
     /// creation path funnels through, so a tab cannot reach a host unannounced and end up
-    /// with neither the host's sealed-region handling nor its navigation guard.
+    /// without the host's sealed-region handling.
     private let onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)?
 
     public init(
         client: CDPClient,
-        agentControllerId: String? = nil,
-        sessionId: String? = nil,
+        chatId: String? = nil,
         seededTabsAreHuman: Bool = true,
         agentOwnedTabIds: Set<String> = [],
         navigationPacer: NavigationPacer? = nil,
         onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)? = nil
     ) {
         self.client = client
-        self.agentControllerId = agentControllerId
-        self.sessionId = sessionId
+        self.chatId = chatId
         self.seededTabsAreHuman = seededTabsAreHuman
         self.agentOwnedTabIds = agentOwnedTabIds
         self.navigationPacer = navigationPacer
@@ -669,38 +643,26 @@ public final class CDPTabsModel: TabsModel {
     }
 
     /// The owner of a tab this model counts as its own without a tool opening it: the chat
-    /// the model was built for (the one a click-adopted tab's `chatSessionId` names), or
-    /// the user when it was built for none, since an attribution cannot say "a chat's tab"
-    /// without a chat to name.
-    private var ownChatOrUser: TabOwner { (sessionId ?? agentControllerId).map(TabOwner.chat) ?? .user }
+    /// the model was built for, or the user when it was built for none, since an
+    /// attribution cannot say "a chat's tab" without a chat to name.
+    private var ownChatOrUser: TabOwner { chatId.map(TabOwner.chat) ?? .user }
 
-    /// The one way a tab enters this model. Every route builds its handle here, and whose
-    /// the tab is and which control flags it starts with are decided here. The flags can
-    /// change later: `manage_tabs read` and `use`, for example, may rewrite them through
-    /// `markTabAgentControlled`. `targetId`, `url` and `title` are whatever the route has in
-    /// hand: the provisional id and requested url of a tab opened through ``createTab(_:)``,
-    /// a restored tab's bare id, or the browser's listing of a seeded or adopted target.
+    /// The one way a tab enters this model. Every route builds its handle here, and the
+    /// tab's owner is decided here. `targetId`, `url` and `title` are whatever the route has
+    /// in hand: the provisional id and requested url of a tab opened through
+    /// ``createTab(_:)``, a restored tab's bare id, or the browser's listing of a seeded or
+    /// adopted target.
     private func admit(_ origin: TabOrigin, targetId: String, url: String, title: String?) -> CDPTabHandle {
         let owner: TabOwner
-        // The flags written once the tab is announced; `nil` writes none.
-        let control: (agentId: String?, chatSessionId: String?)?
         switch origin {
         case .createdByTool(let spec):
             owner = spec.owner
-            // A chat's tab is flagged as that chat's, under both ids.
-            if case .chat(let chat) = spec.owner {
-                control = (chat, chat)
-            } else {
-                control = nil
-            }
         case .adoptedAfterClick:
             owner = ownChatOrUser
-            control = (agentControllerId, sessionId ?? agentControllerId)
         case .seeded, .restoredById, .adoptedLive, .foundInListing:
             // A tab the browser already had is the user's, except in a browser the
             // alohajet-cli program launched and for the ids it already owns.
             owner = seededTabsAreHuman && !agentOwnedTabIds.contains(targetId) ? .user : ownChatOrUser
-            control = nil
         }
         // Only a tab opened through `createTab` is created in the browser on first attach.
         // Every other route binds to the target id it was given (no createOnAttach), so
@@ -715,15 +677,7 @@ public final class CDPTabsModel: TabsModel {
             title: title,
             attribution: TabAttribution(owner: owner),
             pacer: navigationPacer)
-        // Registered — and so announced — BEFORE the control flags are written: a host
-        // that hangs its navigation guard off `onControlStateChange` has to be listening
-        // for the transition that puts this tab under the agent, and that transition is
-        // the next line. Registration reads nothing the flags write.
         register(handle)
-        if let control {
-            handle.setAIControlledTab(false, agentId: control.agentId)
-            handle.chatSessionId = control.chatSessionId
-        }
         return handle
     }
 
@@ -1182,26 +1136,17 @@ public final class CDPTabsService: TabsService {
 /// wants more than that: the pacer gates every navigation (see ``NavigationPacer``), and
 /// `onTabCreated` hands over each ``CDPTabHandle`` the moment it is registered, before
 /// anything has driven it — which is where a host installs its own
-/// `domService.sealedRegionProvider` and `onControlStateChange`.
+/// `domService.sealedRegionProvider`.
 ///
-/// Two consequences of "the moment it is registered", both of which bite a host that
-/// reads instead of installs:
-///
-/// - The control flags and `chatSessionId` are written on the line AFTER registration,
-///   deliberately, so a host listening on `onControlStateChange` sees the transition that
-///   puts the tab under the agent rather than missing it. A hook that READS
-///   `isAIControlledTab` or `chatSessionId` therefore always reads the pre-transition
-///   value. Listen; do not read.
-/// - For tabs seeded from the browser the hook fires during this call, before the
-///   `TabsService` exists. A closure that needs the service itself has nothing to capture
-///   for those tabs — hang what it needs off the handle, or wire the seeded tabs from the
-///   host after this returns.
+/// For tabs seeded from the browser the hook fires during this call, before the
+/// `TabsService` exists. A closure that needs the service itself has nothing to capture
+/// for those tabs — hang what it needs off the handle, or wire the seeded tabs from the
+/// host after this returns.
 public func makeCDPBrowserTabsService(
     client: CDPClient,
     windowId: String = "cdp-window",
     seed: Bool = true,
-    agentControllerId: String? = nil,
-    sessionId: String? = nil,
+    chatId: String? = nil,
     seededTabsAreHuman: Bool = true,
     agentOwnedTabIds: Set<String> = [],
     navigationPacer: NavigationPacer? = nil,
@@ -1209,8 +1154,7 @@ public func makeCDPBrowserTabsService(
 ) async -> TabsService {
     let model = CDPTabsModel(
         client: client,
-        agentControllerId: agentControllerId,
-        sessionId: sessionId,
+        chatId: chatId,
         seededTabsAreHuman: seededTabsAreHuman,
         agentOwnedTabIds: agentOwnedTabIds,
         navigationPacer: navigationPacer,
