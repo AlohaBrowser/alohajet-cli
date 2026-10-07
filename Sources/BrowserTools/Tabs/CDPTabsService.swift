@@ -69,10 +69,10 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
 
     /// Whose this tab is and whether it is the foreground tab, worked out each time it is
     /// read: the one place the attribution source's answers meet the tabs model's own
-    /// rule. The foreground is true for the tab the source names and false for every
-    /// other; with no source it is unknown.
+    /// rule.
     public var attribution: TabAttribution {
-        TabAttribution(owner: owner, foreground: attributionSource.map { $0.foregroundTabId == id })
+        guard let attributionSource else { return TabAttribution(owner: owner) }
+        return TabAttribution(owner: owner, foreground: attributionSource.foregroundTabId == id)
     }
 
     init(
