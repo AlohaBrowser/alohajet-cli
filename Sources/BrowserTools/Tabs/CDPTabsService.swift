@@ -660,8 +660,8 @@ public final class CDPTabsModel: TabsModel {
         /// Addressed by an id the model does not track, and found among the browser's page
         /// targets (``adoptLiveTarget(_:)``).
         case adoptedLive
-        /// Found in a listing the model did not open it in (``refreshAndAdoptTabs()``): a
-        /// tab a page opened, for example.
+        /// Listed by the browser, and not yet tracked, at a listing after seeding
+        /// (``refreshAndAdoptTabs()``): a tab a page opened, for example.
         case foundInListing
         /// A page target missing from the snapshot passed to ``adoptSpawnedTabs(notIn:)``;
         /// outside tests, that snapshot is taken just before a click.
@@ -861,22 +861,21 @@ public final class CDPTabsModel: TabsModel {
         guard let infos = await pageTargetInfos() else { return }
         for info in infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
-            guard let handle = resolveLocked(targetId) else {
-                if !closedTargetIds.contains(targetId) {
-                    _ = admit(.foundInListing, targetId: targetId, url: info["url"]?.stringValue ?? "", title: info["title"]?.stringValue)
-                }
-                continue
-            }
             let url = info["url"]?.stringValue ?? ""
-            // A tab still on its initial blank document has not committed the URL it was
-            // opened for; overwriting the intended target with `about:blank` would make
-            // the load wait expect the wrong page.
-            if !url.isEmpty, url != "about:blank" || handle.session.url.isEmpty {
-                handle.session.url = url
-            }
-            if let title = info["title"]?.stringValue, !title.isEmpty {
-                handle.session.title = title
-                handle.clearCachedTitle()
+            let title = info["title"]?.stringValue
+            if let handle = resolveLocked(targetId) {
+                // A tab still on its initial blank document has not committed the URL it was
+                // opened for; overwriting the intended target with `about:blank` would make
+                // the load wait expect the wrong page.
+                if !url.isEmpty, url != "about:blank" || handle.session.url.isEmpty {
+                    handle.session.url = url
+                }
+                if let title, !title.isEmpty {
+                    handle.session.title = title
+                    handle.clearCachedTitle()
+                }
+            } else if !closedTargetIds.contains(targetId) {
+                _ = admit(.foundInListing, targetId: targetId, url: url, title: title)
             }
         }
     }
