@@ -655,13 +655,6 @@ public final class CDPTabsModel: TabsModel {
     /// without a chat to name.
     private var ownChatOrUser: TabOwner { (sessionId ?? agentControllerId).map(TabOwner.chat) ?? .user }
 
-    /// Whose a tab the browser already had is: the user's, except in a browser the
-    /// alohajet-cli program launched and for the ids it already owns, where it is this
-    /// model's own.
-    private func seededOwner(_ targetId: String) -> TabOwner {
-        seededTabsAreHuman && !agentOwnedTabIds.contains(targetId) ? .user : ownChatOrUser
-    }
-
     /// The one way a tab enters this model. Every route builds its handle here, and whose
     /// the tab is and which control flags it starts with are decided here. The flags can
     /// change later: `manage_tabs read` and `use`, for example, may rewrite them through
@@ -685,7 +678,9 @@ public final class CDPTabsModel: TabsModel {
             owner = ownChatOrUser
             control = (agentControllerId, sessionId ?? agentControllerId)
         case .seeded, .restoredById, .adoptedLive:
-            owner = seededOwner(targetId)
+            // A tab the browser already had is the user's, except in a browser the
+            // alohajet-cli program launched and for the ids it already owns.
+            owner = seededTabsAreHuman && !agentOwnedTabIds.contains(targetId) ? .user : ownChatOrUser
             control = nil
         }
         // Only a tab opened through `createTab` is created in the browser on first attach.
