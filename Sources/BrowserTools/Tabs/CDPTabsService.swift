@@ -61,15 +61,26 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     public let tabType: String
     private var networkRecorder: NetworkRecorder?
     private var cachedViewportBounds: TabViewportBounds?
-    /// Whose this tab is. Set once at construction, by the tabs model's one entry
-    /// function; the foreground is unknown, since nothing here asks the browser for it.
-    public let attribution: TabAttribution
+    /// Whose this tab is by the tabs model's own rule, decided once by its one entry
+    /// function.
+    private let owner: TabOwner
+    /// Asked for what only the browser knows; `nil` when the browser offers no source.
+    private let attributionSource: TabAttributionSource?
+
+    /// Whose this tab is and whether it is the foreground tab, worked out each time it is
+    /// read: the one place the attribution source's answers meet the tabs model's own
+    /// rule. The foreground is true for the tab the source names and false for every
+    /// other; with no source it is unknown.
+    public var attribution: TabAttribution {
+        TabAttribution(owner: owner, foreground: attributionSource.map { $0.foregroundTabId == id })
+    }
 
     init(
         session: CDPTabSession,
         tabType: String,
         title: String?,
-        attribution: TabAttribution,
+        owner: TabOwner,
+        attributionSource: TabAttributionSource?,
         pacer: NavigationPacer? = nil
     ) {
         self.session = session
@@ -83,7 +94,8 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         self.snapshotting = CDPAgentDOMSnapshotting(service: domService)
         self.tabType = tabType
         self.constructedTitle = title
-        self.attribution = attribution
+        self.owner = owner
+        self.attributionSource = attributionSource
         self.pacer = pacer
     }
 
@@ -597,6 +609,10 @@ public final class CDPTabsModel: TabsModel {
 
     private let agentOwnedTabIds: Set<String>
 
+    /// Handed to every handle this model builds, which asks it whenever its attribution is
+    /// read. See ``TabAttributionSource``.
+    private let attributionSource: TabAttributionSource?
+
     /// Handed to every handle this model builds, so both doors a navigation leaves by are
     /// metered by the same gate. See ``NavigationPacer``.
     private let navigationPacer: NavigationPacer?
@@ -611,6 +627,7 @@ public final class CDPTabsModel: TabsModel {
         chatId: String? = nil,
         seededTabsAreHuman: Bool = true,
         agentOwnedTabIds: Set<String> = [],
+        attributionSource: TabAttributionSource? = nil,
         navigationPacer: NavigationPacer? = nil,
         onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)? = nil
     ) {
@@ -618,6 +635,7 @@ public final class CDPTabsModel: TabsModel {
         self.ownChatOrUser = chatId.map(TabOwner.chat) ?? .user
         self.seededTabsAreHuman = seededTabsAreHuman
         self.agentOwnedTabIds = agentOwnedTabIds
+        self.attributionSource = attributionSource
         self.navigationPacer = navigationPacer
         self.onTabCreated = onTabCreated
     }
@@ -670,7 +688,8 @@ public final class CDPTabsModel: TabsModel {
             session: session,
             tabType: spec?.tabType ?? "website",
             title: title,
-            attribution: TabAttribution(owner: owner),
+            owner: owner,
+            attributionSource: attributionSource,
             pacer: navigationPacer)
         register(handle)
         return handle
@@ -1127,16 +1146,22 @@ public final class CDPTabsService: TabsService {
 /// A consumer that supplies only a `CDPClient` gets a `manage_tabs` / `tab_read`
 /// / click path that works without any hand-written browser code.
 ///
-/// `navigationPacer` and `onTabCreated` are the whole injection surface for a host that
-/// wants more than that: the pacer gates every navigation (see ``NavigationPacer``), and
-/// `onTabCreated` hands over each ``CDPTabHandle`` the moment it is registered, before
-/// anything has driven it — which is where a host installs its own
+/// `attributionSource`, `navigationPacer` and `onTabCreated` are the whole injection surface
+/// for a host that wants more than that: the source tells the tabs model what only the
+/// browser knows (see ``TabAttributionSource``), the pacer gates every navigation (see
+/// ``NavigationPacer``), and `onTabCreated` hands over each ``CDPTabHandle`` the moment it
+/// is registered, before anything has driven it — which is where a host installs its own
 /// `domService.sealedRegionProvider`.
 ///
 /// For tabs seeded from the browser the hook fires during this call, before the
 /// `TabsService` exists. A closure that needs the service itself has nothing to capture
 /// for those tabs — hang what it needs off the handle, or wire the seeded tabs from the
 /// host after this returns.
+///
+/// `@MainActor` is spelled out although this module is main-actor by default: Swift 6.2
+/// shows another module a top-level async function as nonisolated, and that module then
+/// cannot hand over a main-actor `attributionSource`.
+@MainActor
 public func makeCDPBrowserTabsService(
     client: CDPClient,
     windowId: String = "cdp-window",
@@ -1144,6 +1169,7 @@ public func makeCDPBrowserTabsService(
     chatId: String? = nil,
     seededTabsAreHuman: Bool = true,
     agentOwnedTabIds: Set<String> = [],
+    attributionSource: TabAttributionSource? = nil,
     navigationPacer: NavigationPacer? = nil,
     onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)? = nil
 ) async -> TabsService {
@@ -1152,6 +1178,7 @@ public func makeCDPBrowserTabsService(
         chatId: chatId,
         seededTabsAreHuman: seededTabsAreHuman,
         agentOwnedTabIds: agentOwnedTabIds,
+        attributionSource: attributionSource,
         navigationPacer: navigationPacer,
         onTabCreated: onTabCreated)
     if seed { await model.seedFromBrowser() }
