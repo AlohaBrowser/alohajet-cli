@@ -844,7 +844,8 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     /// new: not in `previous`, not already tracked (by registered or real target
     /// id), with a navigable non-blank url. Each adopted target is bound to a
     /// handle over the EXISTING target (no new target is created) and registered
-    /// as an agent-controlled background tab.
+    /// as the tab of the chat this model was built for, or the user's when it was built
+    /// for none.
     public func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab] {
         guard let infos = await pageTargetInfos() else { return [] }
         var adopted: [AdoptedTab] = []
@@ -880,9 +881,8 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
 extension CDPTabsModel: LiveTabRefreshingAndAdopting {}
 
 extension CDPTabsModel: LivePageTargetAdopting {
-    /// Adopted with no control flags (like ``seedFromBrowser``, unlike
-    /// ``adoptSpawnedTabs``): adopting it must not hand it to the AI overlay. Whose the
-    /// tab is follows the rule for a seeded tab, in `admit`.
+    /// Whose the tab is follows the rule for a seeded tab, in `admit` (like
+    /// ``seedFromBrowser``, unlike ``adoptSpawnedTabs``).
     public func adoptLiveTarget(_ id: String) async -> TabHandle? {
         if let existing = resolveLocked(id) { return existing }
         if closedTargetIds.contains(id) { return nil }
