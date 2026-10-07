@@ -55,13 +55,16 @@ public protocol ClickSpawnedTabAdopting: AnyObject {
     func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab]
 }
 
-/// Refreshing the cached per-tab metadata (url and title) from the live browser. Kept
-/// off ``TabsModel`` and probed with `as?`, like the seams around it: a model with no
-/// browser behind it has nothing to refresh from.
-public protocol LiveTabMetadataRefreshing: AnyObject {
-    /// Re-reads url and title for every tracked tab. One call for the whole window, so a
-    /// list or a read pays one round-trip rather than one per tab.
-    func refreshTabMetadata() async
+/// Bringing the model up to date with the live browser's listing: refreshing the cached
+/// url and title of every tracked tab, and adopting each page target the model does not
+/// track yet. Kept off ``TabsModel`` and probed with `as?`, like the seams around it: a
+/// model with no browser behind it has nothing to list.
+public protocol LiveTabRefreshingAndAdopting: AnyObject {
+    /// Re-reads url and title for every tracked tab, and adopts every listed page target
+    /// the model does not track, except one it has just closed. A tracked tab the listing
+    /// leaves out is kept. One call for the whole window, so a list or a read pays one
+    /// round-trip rather than one per tab.
+    func refreshAndAdoptTabs() async
 }
 
 /// Addressing a live page target the model never saw. Kept off ``TabsModel`` and

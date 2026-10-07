@@ -43,9 +43,10 @@ import ToolABI
             // Titles and URLs in the model are caches, and only the tools that touched a
             // tab ever wrote to them: a page the agent navigated listed under the OLD
             // page's title, and a tab nobody read listed as "Untitled". One
-            // `Target.getTargets` for the window fixes every row.
-            if let live = tabsWindow.tabs as? LiveTabMetadataRefreshing {
-                await live.refreshTabMetadata()
+            // `Target.getTargets` for the window fixes every row, and adds the tabs the
+            // model has not seen, such as one a click opened.
+            if let live = tabsWindow.tabs as? LiveTabRefreshingAndAdopting {
+                await live.refreshAndAdoptTabs()
             }
             result = manageTabsList(tabsWindow, session, askingChat: context.sessionId)
         case "read":
@@ -262,7 +263,7 @@ private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: Man
     // The title after the load, not the one the tab was born with. The load wait writes
     // it only on its polling leg, so a tab that finished via the lifecycle event reached
     // here titleless and its row read "Untitled" — for example.com, every time.
-    if let live = tabsModel as? LiveTabMetadataRefreshing { await live.refreshTabMetadata() }
+    if let live = tabsModel as? LiveTabRefreshingAndAdopting { await live.refreshAndAdoptTabs() }
 
     do {
         let url = tab.url
@@ -377,7 +378,7 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
     }
 
     if controlledBy == "user" {
-        return manageTabsOpenUserControlled(normalized, tabsWindow, ctx)
+        return await manageTabsOpenUserControlled(normalized, tabsWindow, ctx)
     }
 
     let newTab = tabsWindow.tabs.createTab(TabCreateSpec(
@@ -434,12 +435,17 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
 /// the user's, the owner a tab that was already open has — so it gets no agent
 /// controller, no network recording, is never taken into use, and `close` refuses it. That last
 /// one is a real difference from an agent tab and the receipt says so.
-func manageTabsOpenUserControlled(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext) -> TabToolResult {
+func manageTabsOpenUserControlled(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext) async -> TabToolResult {
     let tab = tabsWindow.tabs.createTab(TabCreateSpec(tabType: "website", url: url, owner: .user))
     // The handle is allocation-only — the real browser target is created on first attach, and
-    // nothing else ever attaches a user tab, so without this it stays a phantom the user never
-    // sees. Not awaited: a background tab is throttled, so waiting out its load would stall the
-    // open for the whole wake budget for a page the agent is not going to read.
+    // nothing else ever attaches a user tab, so without the wake it stays a phantom the user
+    // never sees. The open waits for the browser tab to EXIST: until then the handle has only
+    // its provisional id, so a listing in that gap would adopt the same tab a second time, and
+    // the row below would name an id `list` never shows. A failed creation is retried by the
+    // wake, as before. The wake's load is not awaited: a background tab is throttled, so
+    // waiting it out would stall the open for the whole wake budget for a page the agent is
+    // not going to read.
+    try? await (tab as? CDPTabHandle)?.createInBrowser()
     Task { _ = try? await tab.wake(nil) }
     // No claim that it opens in the background: the desktop brings a new tab to the front.
     let lines = [

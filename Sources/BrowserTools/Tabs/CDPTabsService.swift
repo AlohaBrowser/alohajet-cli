@@ -192,15 +192,9 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
             return WakeResult(ok: false, message: "Tab \"\(id)\" is unavailable because it has no live WebContents.")
         }
         do {
-            // A tab this session opened navigates by being CREATED — `Target.createTarget`
-            // carries the url — so its one fetch never reaches `navigateToURL`, and a
-            // pacer hooked only there meters every goto while every `manage_tabs open`
-            // walks past. Asked outside the 18s deadline below, which bounds the wake, not
-            // the wait for a turn. A tab whose real target already exists is merely being
-            // woken, nothing is fetched, and it asks for no turn.
-            if session.effectiveTargetId == nil, !session.url.isEmpty {
-                try await pacer?(session.url, nil, signal)
-            }
+            // Asked outside the 18s deadline below, which bounds the wake, not the wait
+            // for a turn.
+            try await awaitTurnToCreate(signal)
             // 18s covers 15s load wait plus attach / Page.enable / bringToFront.
             return try await withCDPDeadline(milliseconds: 18_000) {
                 let sessionId = try await self.session.ensureAttached()
@@ -233,6 +227,27 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         } catch {
             let message = "\(error)"
             return WakeResult(ok: false, message: "Tab \"\(id)\" is unavailable because it failed to wake: \(message)")
+        }
+    }
+
+    /// The first part of ``wake(_:)`` alone: creates the browser tab of a tab this session
+    /// opened, if it has none yet, and attaches to it, so it returns with the tab's real
+    /// id known, without waiting for its page to load. A tab opened for the user needs
+    /// this: nothing waits for its wake, and until its browser tab exists it has only its
+    /// provisional id.
+    func createInBrowser() async throws {
+        try await awaitTurnToCreate(nil)
+        _ = try await session.ensureAttached()
+    }
+
+    /// A tab this session opened navigates by being CREATED — `Target.createTarget`
+    /// carries the url — so its one fetch never reaches `navigateToURL`, and a pacer
+    /// hooked only there meters every goto while every `manage_tabs open` walks past. A
+    /// tab whose real target already exists is merely being woken, nothing is fetched, and
+    /// it asks for no turn.
+    private func awaitTurnToCreate(_ signal: AbortSignal?) async throws {
+        if session.effectiveTargetId == nil, !session.url.isEmpty {
+            try await pacer?(session.url, nil, signal)
         }
     }
 
@@ -586,7 +601,8 @@ public final class CDPTabsModel: TabsModel {
     private var seeded = false
 
     /// Ids ``closeTab`` closed. `Target.closeTarget` is fire-and-forget, so a browser
-    /// that still lists a closed target must not let ``adoptLiveTarget`` resurrect it.
+    /// that still lists a closed target must not let ``adoptLiveTarget`` or a listing
+    /// (``refreshAndAdoptTabs()``) resurrect it.
     private var closedTargetIds: Set<String> = []
 
     /// The agent-controller / chat-session identity written into the control flags of a
@@ -644,6 +660,9 @@ public final class CDPTabsModel: TabsModel {
         /// Addressed by an id the model does not track, and found among the browser's page
         /// targets (``adoptLiveTarget(_:)``).
         case adoptedLive
+        /// Found in a listing the model did not open it in (``refreshAndAdoptTabs()``): a
+        /// tab a page opened, for example.
+        case foundInListing
         /// A page target missing from the snapshot passed to ``adoptSpawnedTabs(notIn:)``;
         /// outside tests, that snapshot is taken just before a click.
         case adoptedAfterClick
@@ -677,7 +696,7 @@ public final class CDPTabsModel: TabsModel {
         case .adoptedAfterClick:
             owner = ownChatOrUser
             control = (agentControllerId, sessionId ?? agentControllerId)
-        case .seeded, .restoredById, .adoptedLive:
+        case .seeded, .restoredById, .adoptedLive, .foundInListing:
             // A tab the browser already had is the user's, except in a browser the
             // alohajet-cli program launched and for the ids it already owns.
             owner = seededTabsAreHuman && !agentOwnedTabIds.contains(targetId) ? .user : ownChatOrUser
@@ -819,21 +838,35 @@ public final class CDPTabsModel: TabsModel {
         }
     }
 
-    /// Refresh the cached url and title of every tracked tab from the browser's live
-    /// target list — one `Target.getTargets` for the whole window.
+    /// Brings the model up to date with the browser's live target list, in one
+    /// `Target.getTargets` for the whole window: a tracked tab gets its cached url and
+    /// title refreshed, and a page target the model does not track yet is adopted, except
+    /// one this model closed.
     ///
-    /// Both are caches. `url` is written by the navigation waiter, the read probe and the
-    /// click's live-URL read; `title` was written by the read probe ALONE, and only on
-    /// the polling leg of the load wait — so a tab that finished loading via the
-    /// lifecycle event kept the title it was born with (`nil`, rendered "Untitled"), and
-    /// a page the agent navigated kept the OLD page's title against the new URL. Nothing
-    /// else refreshes a tab the tools never touched. This does, for all of them, for one
-    /// round-trip.
-    public func refreshTabMetadata() async {
+    /// The url and title are caches. `url` is written by the navigation waiter, the read
+    /// probe and the click's live-URL read; `title` was written by the read probe ALONE,
+    /// and only on the polling leg of the load wait — so a tab that finished loading via
+    /// the lifecycle event kept the title it was born with (`nil`, rendered "Untitled"),
+    /// and a page the agent navigated kept the OLD page's title against the new URL.
+    /// Nothing else refreshes a tab the tools never touched. This does, for all of them,
+    /// for one round-trip.
+    ///
+    /// Adoption is how a tab that appeared without this model opening it, a `target=_blank`
+    /// link or a popup a click opened, reaches the agent. It goes through `admit`, so whose
+    /// the tab is follows the rule for a seeded tab, and it joins the order at the end. A
+    /// closed id is skipped because `Target.closeTarget` does not wait for the tab to go.
+    /// A tracked tab the listing leaves out is KEPT: the desktop's listing leaves out
+    /// grouped tabs, and a tab the agent knows stays known while it runs.
+    public func refreshAndAdoptTabs() async {
         guard let infos = await pageTargetInfos() else { return }
         for info in infos {
-            guard let targetId = info["targetId"]?.stringValue,
-                  let handle = resolveLocked(targetId) else { continue }
+            guard let targetId = info["targetId"]?.stringValue else { continue }
+            guard let handle = resolveLocked(targetId) else {
+                if !closedTargetIds.contains(targetId) {
+                    _ = admit(.foundInListing, targetId: targetId, url: info["url"]?.stringValue ?? "", title: info["title"]?.stringValue)
+                }
+                continue
+            }
             let url = info["url"]?.stringValue ?? ""
             // A tab still on its initial blank document has not committed the URL it was
             // opened for; overwriting the intended target with `about:blank` would make
@@ -891,7 +924,7 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     }
 }
 
-extension CDPTabsModel: LiveTabMetadataRefreshing {}
+extension CDPTabsModel: LiveTabRefreshingAndAdopting {}
 
 extension CDPTabsModel: LivePageTargetAdopting {
     /// Adopted with no control flags (like ``seedFromBrowser``, unlike

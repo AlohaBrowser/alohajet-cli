@@ -520,8 +520,8 @@ func resolveTab(_ session: BrowserToolSession, _ explicit: String?) async -> Str
     guard let tabs = session.tabs else { return nil }
     // The addresses are caches, so they are refreshed from the browser first, as
     // `manage_tabs list` does before it lists.
-    if let live = tabs as? LiveTabMetadataRefreshing {
-        await live.refreshTabMetadata()
+    if let live = tabs as? LiveTabRefreshingAndAdopting {
+        await live.refreshAndAdoptTabs()
     }
     let web = Set(
         tabs.orderedTabs.lazy
