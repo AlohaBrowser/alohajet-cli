@@ -13,7 +13,7 @@ private func seededModel(agentOwned: Set<String>) async throws -> TabsModel {
     let client = CDPClient(channel: channel)
     try await client.connect()
     let service = await makeCDPBrowserTabsService(
-        client: client, seededTabsAreHuman: true, agentOwnedTabIds: agentOwned)
+        client: client, sessionId: "alohajet", seededTabsAreHuman: true, agentOwnedTabIds: agentOwned)
     return try #require(service.window).tabs
 }
 
@@ -36,7 +36,7 @@ private func seededModel(agentOwned: Set<String>) async throws -> TabsModel {
     let client = CDPClient(channel: channel)
     try await client.connect()
     let service = await makeCDPBrowserTabsService(
-        client: client, seed: false, seededTabsAreHuman: true,
+        client: client, seed: false, sessionId: "alohajet", seededTabsAreHuman: true,
         agentOwnedTabIds: ["agents-target"])
     let tabs = try #require(service.window).tabs
     #expect(tabs.getOrRestoreTab("agents-target", restoreIfNeeded: true)?.openedByHuman == false)

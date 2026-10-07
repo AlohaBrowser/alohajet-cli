@@ -12,7 +12,7 @@ import ToolABI
     let id: String
     var title: String?
     var url: String
-    let openedByHuman: Bool
+    let attribution: TabAttribution
     var tabType = "website"
     var faviconUrl: String?
     var userTookOver = false
@@ -22,10 +22,10 @@ import ToolABI
     var isAIControlledTab = false
     var isBrowserAgentControlled = false
 
-    init(id: String, url: String, openedByHuman: Bool) {
+    init(id: String, url: String, owner: TabOwner) {
         self.id = id
         self.url = url
-        self.openedByHuman = openedByHuman
+        self.attribution = TabAttribution(owner: owner)
         self.title = id
     }
 
@@ -52,7 +52,7 @@ import ToolABI
     func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle? { tab(id) }
     func tab(_ id: String) -> TabHandle? { handles.first { $0.id == id } }
     func createTab(_ spec: TabCreateSpec) -> TabHandle {
-        let handle = FakeTab(id: "new", url: spec.url, openedByHuman: spec.openedByHuman)
+        let handle = FakeTab(id: "new", url: spec.url, owner: spec.owner)
         handles.append(handle)
         return handle
     }
@@ -82,8 +82,8 @@ import ToolABI
 
 @MainActor private func fixture() -> (FakeTabs, FakeWindow, ManageTabsActionContext) {
     let model = FakeTabs([
-        FakeTab(id: "users-tab", url: "https://example.com/", openedByHuman: true),
-        FakeTab(id: "agents-tab", url: "https://example.org/", openedByHuman: false)
+        FakeTab(id: "users-tab", url: "https://example.com/", owner: .user),
+        FakeTab(id: "agents-tab", url: "https://example.org/", owner: .chat("s"))
     ])
     return (model, FakeWindow(model),
             ManageTabsActionContext(sessionId: "s", toolCallId: "c", session: FakeSession(), abortSignal: nil))
@@ -108,21 +108,21 @@ import ToolABI
 @Test @MainActor func listMarksTheTabThePageToolsAddress() {
     let (_, window, ctx) = fixture()
     ctx.session.setActiveBrowserTab("agents-tab")
-    let output = manageTabsList(window, ctx.session).output ?? ""
-    #expect(output.contains("● agents-tab"))
-    #expect(output.components(separatedBy: "●").count == 2)
+    let output = manageTabsList(window, ctx.session, askingChat: ctx.sessionId).output ?? ""
+    #expect(output.contains("(tab-id: agents-tab) — your tab, in use"))
+    #expect(output.components(separatedBy: "in use").count == 2)
 }
 
 @Test @MainActor func listMarksNothingWhenNoTabIsInUse() {
     let (_, window, ctx) = fixture()
-    let output = manageTabsList(window, ctx.session).output ?? ""
-    #expect(!output.contains("●"))
+    let output = manageTabsList(window, ctx.session, askingChat: ctx.sessionId).output ?? ""
+    #expect(!output.contains("in use"))
 }
 
 @Test @MainActor func listNamesWhichTabsAreTheUsers() {
-    let (_, window, _) = fixture()
-    let output = manageTabsList(window).output ?? ""
-    #expect(output.contains("[the user's tab — cannot be closed]"))
+    let (_, window, ctx) = fixture()
+    let output = manageTabsList(window, nil, askingChat: ctx.sessionId).output ?? ""
+    #expect(output.contains("(tab-id: users-tab) — the user's tab"))
     // Exactly one of the two tabs carries it.
-    #expect(output.components(separatedBy: "[the user's tab").count == 2)
+    #expect(output.components(separatedBy: "the user's tab").count == 2)
 }

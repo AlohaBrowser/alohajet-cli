@@ -55,7 +55,7 @@ struct PageClickExecutorToolTests {
 
     @Test func aTabNobodyTookIsNotDrivenImplicitly() async throws {
         let tool = PageClickExecutorTool()
-        let usersTab = PageToolsStubTabHandle(id: "users-tab", url: "https://user.example/", openedByHuman: true)
+        let usersTab = PageToolsStubTabHandle(id: "users-tab", url: "https://user.example/", owner: .user)
         let window = PageToolsStubTabsWindow(PageToolsStubTabsModel([usersTab]))
         let services = NativeToolServices(tabsService: PageToolsStubTabsService(window))
         let result = try await tool.execute(.object(["aloha_id": .string("btn-1")]), makePageToolContext(services: services))

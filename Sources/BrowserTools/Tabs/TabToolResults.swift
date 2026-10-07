@@ -1,22 +1,51 @@
 import Foundation
 import ToolABI
 
-/// A tab description as surfaced to the agent in list output.
-public struct TabSummary: Equatable, Sendable {
+/// One tab as the agent is shown it: what the tab row (``renderTabRow(_:askingChat:)``)
+/// prints. `manage_tabs list` and alohajet's tab summary build their rows here.
+public struct TabRow: Equatable, Sendable {
     public var id: String
     public var title: String
     public var url: String
-    public var isActive: Bool
-    /// Whether the tab is the user's rather than this session's — rendered as the
-    /// "user's tab" marker, and the reason `close` refuses it.
-    public var openedByHuman: Bool
-    public init(id: String, title: String, url: String, isActive: Bool, openedByHuman: Bool) {
-        self.id = id
-        self.title = title
-        self.url = url
-        self.isActive = isActive
-        self.openedByHuman = openedByHuman
+    public var attribution: TabAttribution
+    /// Whether this is the tab in use: the one the page tools act on.
+    public var inUse: Bool
+
+    /// The one way to build a row: from the tab, and the id ``inUseTabId(session:tabs:)``
+    /// resolved. It is the one place that names an untitled tab "Untitled" and hides a
+    /// non-web address, so every surface describes a tab the same way.
+    public init(_ tab: TabHandle, inUseTabId: String?) {
+        id = tab.id
+        title = tab.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled"
+        // Non-http(s) addresses are hidden so a row does not leak a local file path (the
+        // page tools refuse to act on such tabs; the path itself is the secret).
+        if case .rejected = validateTabUrl(TabUrlInput(url: tab.url)) {
+            url = "[non-web URL hidden]"
+        } else {
+            url = tab.url
+        }
+        attribution = tab.attribution
+        inUse = tab.id == inUseTabId
     }
+}
+
+/// The tab row, the one line that describes a tab to the agent, as `askingChat` is told it:
+/// `<title> [<url>] (tab-id: <id>) — <whose tab>[, the tab the user is looking at][, in use]`.
+/// Whose tab is exactly "the user's tab", "your tab" or "another chat's tab (chat <id>)".
+///
+/// Words, not decorations: the agent has to know which tabs are its own and which one its
+/// page tools act on, and a pictogram it has to guess the meaning of tells it neither. A
+/// tool prints its own words about what happened around the row, never inside it.
+public func renderTabRow(_ row: TabRow, askingChat: String) -> String {
+    let owner = switch row.attribution.ownerView(askingChat: askingChat) {
+    case .user: "the user's tab"
+    case .askingChat: "your tab"
+    case .otherChat(let chat): "another chat's tab (chat \(chat))"
+    }
+    var words = [owner]
+    if row.attribution.foreground == true { words.append("the tab the user is looking at") }
+    if row.inUse { words.append("in use") }
+    return "\(row.title) [\(row.url)] (tab-id: \(row.id)) — \(words.joined(separator: ", "))"
 }
 
 /// Raw result of a tab builtin, before being shaped into an SDK-facing value.
@@ -29,7 +58,7 @@ public struct TabToolResult: Equatable, Sendable {
     public var url: String?
     public var faviconUrl: String?
     public var previousTabId: String?
-    public var tabs: [TabSummary]?
+    public var tabs: [TabRow]?
     public var matches: [AlohaIdMatch]?
     /// Viewport screenshots this action captured, carried on the result to the
     /// `RawToolResult` the executor returns. Empty unless `include_screenshot`
@@ -39,7 +68,7 @@ public struct TabToolResult: Equatable, Sendable {
     public init(
         output: String? = nil, isError: Bool = false, error: String? = nil, tabId: String? = nil,
         title: String? = nil, url: String? = nil, faviconUrl: String? = nil,
-        previousTabId: String? = nil, tabs: [TabSummary]? = nil, matches: [AlohaIdMatch]? = nil,
+        previousTabId: String? = nil, tabs: [TabRow]? = nil, matches: [AlohaIdMatch]? = nil,
         images: [ParsedDataUrlImage] = []
     ) {
         self.output = output
@@ -113,7 +142,7 @@ public enum SdkTabResult: Equatable, Sendable {
     case close(tabId: String, title: String?, url: String?, faviconUrl: String?)
     case focus(tabId: String)
     case unfocus(previousTabId: String?)
-    case list([TabSummary])
+    case list([TabRow])
     case findByText([AlohaIdMatch])
 }
 
@@ -168,20 +197,6 @@ public func sdkListResult(_ result: TabToolResult) -> SdkTabResult {
 public func sdkFindByTextResult(_ result: TabToolResult) -> SdkTabResult {
     if result.isError { return toolErrorToSdkError(result) }
     return .findByText(result.matches ?? [])
-}
-
-public func listTabs(_ tabs: [TabSummary]) -> TabToolResult {
-    let lines = tabs.enumerated().map { index, tab -> String in
-        let activeMarker = tab.isActive ? "● " : ""
-        // Named, not decorated: the agent has to know which tabs it may close, and a
-        // pictogram it has to guess the meaning of is not that. `close` refuses these.
-        let ownerMarker = tab.openedByHuman ? " [the user's tab — cannot be closed]" : ""
-        return "\(index + 1). \(activeMarker)\(tab.title)\(ownerMarker)\n   ID: \(tab.id)\n   URL: \(tab.url)"
-    }
-    let joined = lines.joined(separator: "\n\n")
-    return TabToolResult(
-        output: "\(tabs.count) tab(s) open:\n\n\(joined)",
-        tabs: tabs)
 }
 
 public func abortedResultOrNull(_ aborted: Bool) -> TabToolResult? {

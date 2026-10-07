@@ -65,10 +65,9 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     public private(set) var isBrowserAgentControlled = false
     private var networkRecorder: NetworkRecorder?
     private var cachedViewportBounds: TabViewportBounds?
-    /// Whether the user owns this tab (see ``TabHandle/openedByHuman``). Set once
-    /// at construction: `true` for a target seeded from the browser, restored, or
-    /// adopted live; `false` for one this session opened or a click spawned.
-    public let openedByHuman: Bool
+    /// Whose this tab is. Set once at construction, by the tabs model's one entry
+    /// function; the foreground is unknown, since nothing here asks the browser for it.
+    public let attribution: TabAttribution
 
     /// Fired after every ``setAIControlledTab`` with the flags as they now stand. The
     /// hook a host hangs a per-tab navigation guard off: the guard installs when the tab
@@ -80,7 +79,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         session: CDPTabSession,
         tabType: String,
         title: String?,
-        openedByHuman: Bool,
+        attribution: TabAttribution,
         pacer: NavigationPacer? = nil
     ) {
         self.session = session
@@ -94,7 +93,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         self.snapshotting = CDPAgentDOMSnapshotting(service: domService)
         self.tabType = tabType
         self.constructedTitle = title
-        self.openedByHuman = openedByHuman
+        self.attribution = attribution
         self.pacer = pacer
     }
 
@@ -590,10 +589,11 @@ public final class CDPTabsModel: TabsModel {
     /// that still lists a closed target must not let ``adoptLiveTarget`` resurrect it.
     private var closedTargetIds: Set<String> = []
 
-    /// The agent-controller / chat-session identity attributed to a tab adopted
-    /// from a click-spawned target, mirroring how ``createTab`` attributes an
-    /// agent-opened tab. `nil` (the default) registers the adopted tab as a plain
-    /// agent-controlled website tab keyed by its real target id.
+    /// The agent-controller / chat-session identity written into the control flags of a
+    /// tab adopted from a click-spawned target, mirroring how ``createTab`` flags an
+    /// agent-opened tab. The chat they name (``ownChat``) owns the tabs this model counts
+    /// as the agent's without a tool opening them. `nil` (the default) leaves the model
+    /// with no chat.
     private let agentControllerId: String?
     private let sessionId: String?
 
@@ -649,8 +649,20 @@ public final class CDPTabsModel: TabsModel {
         case adoptedAfterClick
     }
 
-    private func seededOwnership(_ targetId: String) -> Bool {
-        seededTabsAreHuman && !agentOwnedTabIds.contains(targetId)
+    /// The chat this model was built for, the same one a click-adopted tab's
+    /// `chatSessionId` names; `nil` when it was built for none.
+    private var ownChat: String? { sessionId ?? agentControllerId }
+
+    /// Whose a tab this model counts as the agent's without a tool opening it is: the
+    /// model's own chat. A model built with no chat has none to name, and an attribution
+    /// cannot say "a chat's tab" without one, so such a tab is the user's.
+    private var agentTabOwner: TabOwner { ownChat.map(TabOwner.chat) ?? .user }
+
+    /// Whose a tab the browser already had is: the user's, except in a browser the
+    /// alohajet-cli program launched and for the ids it already owns, where it is the
+    /// agent's.
+    private func seededOwner(_ targetId: String) -> TabOwner {
+        seededTabsAreHuman && !agentOwnedTabIds.contains(targetId) ? .user : agentTabOwner
     }
 
     /// The one way a tab enters this model. Every route builds its handle here, and whose
@@ -660,22 +672,23 @@ public final class CDPTabsModel: TabsModel {
     /// hand: the provisional id and requested url of a tab opened through ``createTab(_:)``,
     /// a restored tab's bare id, or the browser's listing of a seeded or adopted target.
     private func admit(_ origin: TabOrigin, targetId: String, url: String, title: String?) -> CDPTabHandle {
-        let openedByHuman: Bool
+        let owner: TabOwner
         // The flags written once the tab is announced; `nil` writes none.
         let control: (agentId: String?, chatSessionId: String?)?
         switch origin {
         case .createdByTool(let spec):
-            openedByHuman = spec.openedByHuman
-            if let agentId = spec.agentControllerId, !spec.openedByHuman {
-                control = (agentId, spec.sessionId ?? agentId)
+            owner = spec.owner
+            // A chat's tab is flagged as that chat's, under both ids.
+            if case .chat(let chat) = spec.owner {
+                control = (chat, chat)
             } else {
                 control = nil
             }
         case .adoptedAfterClick:
-            openedByHuman = false
+            owner = agentTabOwner
             control = (agentControllerId, sessionId ?? agentControllerId)
         case .seeded, .restoredById, .adoptedLive:
-            openedByHuman = seededOwnership(targetId)
+            owner = seededOwner(targetId)
             control = nil
         }
         // Only a tab opened through `createTab` is created in the browser on first attach.
@@ -689,7 +702,7 @@ public final class CDPTabsModel: TabsModel {
             session: session,
             tabType: spec?.tabType ?? "website",
             title: title,
-            openedByHuman: openedByHuman,
+            attribution: TabAttribution(owner: owner),
             pacer: navigationPacer)
         // Registered — and so announced — BEFORE the control flags are written: a host
         // that hangs its navigation guard off `onControlStateChange` has to be listening
@@ -889,7 +902,7 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
 extension CDPTabsModel: LiveTabMetadataRefreshing {}
 
 extension CDPTabsModel: LivePageTargetAdopting {
-    /// Adopted with no agent attribution (like ``seedFromBrowser``, unlike
+    /// Adopted with no control flags (like ``seedFromBrowser``, unlike
     /// ``adoptSpawnedTabs``): adopting it must not hand it to the AI overlay. Whose the
     /// tab is follows the rule for a seeded tab, in `admit`.
     public func adoptLiveTarget(_ id: String) async -> TabHandle? {

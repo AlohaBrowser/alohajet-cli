@@ -56,8 +56,7 @@ struct TabsInjectionSeamTests {
         // Path 2 of 4: the tab this session opens. Its real Chrome target does not exist
         // yet, so it is announced under the provisional id.
         let created = model.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com/opened", openedByHuman: false,
-            agentControllerId: "agent-1", sessionId: "agent-1"))
+            tabType: "website", url: "https://example.com/opened", owner: .chat("agent-1")))
 
         // Path 3 of 4: a live target this model never saw, addressed by id.
         cdp.addTarget(id: "live-target", url: "https://example.com/live", title: "Live")
@@ -94,8 +93,7 @@ struct TabsInjectionSeamTests {
                 handle.onControlStateChange = { isAI, isAgent in log.record("\(isAI)", "\(isAgent)") }
             })
         _ = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com", openedByHuman: false,
-            agentControllerId: "agent-1", sessionId: "agent-1"))
+            tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
 
         // `createTab` puts the tab under the agent immediately, and that is the only such
         // call a read ever makes (`markTabAgentControlled` finds it already owned and
@@ -117,7 +115,7 @@ struct TabsInjectionSeamTests {
                 throw SimpleBrowserError("no turn")
             })
         let tab = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com/opened", openedByHuman: false))
+            tabType: "website", url: "https://example.com/opened", owner: .chat("agent-1")))
 
         let result = try await tab.wake(nil)
 
@@ -142,7 +140,7 @@ struct TabsInjectionSeamTests {
                 throw SimpleBrowserError("no turn")
             })
         let tab = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com", openedByHuman: false))
+            tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
         let handle = try #require(tab as? CDPTabHandle)
 
         let bridge = AgentBrowserBridge(backend: CDPAgentBridgeBackend(tab: handle))
@@ -164,7 +162,7 @@ struct TabsInjectionSeamTests {
             seed: false,
             navigationPacer: { url, profileId, _ in log.record(url, profileId) })
         let tab = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com", openedByHuman: false))
+            tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
         let handle = try #require(tab as? CDPTabHandle)
 
         let woke = try await handle.wake(nil)
@@ -187,7 +185,7 @@ struct TabsInjectionSeamTests {
             seed: false,
             navigationPacer: { url, profileId, _ in log.record(url, profileId) })
         let tab = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com", openedByHuman: false))
+            tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
 
         _ = try await tab.wake(nil)
         _ = try await tab.wake(nil)

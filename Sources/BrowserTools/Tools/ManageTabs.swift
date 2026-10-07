@@ -47,7 +47,7 @@ import ToolABI
             if let live = tabsWindow.tabs as? LiveTabMetadataRefreshing {
                 await live.refreshTabMetadata()
             }
-            result = manageTabsList(tabsWindow, session)
+            result = manageTabsList(tabsWindow, session, askingChat: context.sessionId)
         case "read":
             guard let tabId else {
                 return RawToolResult(output: "tab_id is required for the read action", isError: true)
@@ -210,27 +210,15 @@ func tabIsInteractiveWeb(_ tab: TabHandle) -> Bool {
     isInteractiveWebTab(InteractiveTabDescriptor(tabType: tab.tabType, hasAgentDom: tab.agentDOM != nil))
 }
 
-func manageTabsList(_ tabsWindow: TabsWindow, _ session: ChatModeSession? = nil) -> TabToolResult {
+/// One tab row per tab, in the tabs model's order, as `askingChat` is told it.
+func manageTabsList(_ tabsWindow: TabsWindow, _ session: ChatModeSession?, askingChat: String) -> TabToolResult {
     let tabsModel = tabsWindow.tabs
-    let activeTabId = inUseTabId(session: session, tabs: tabsModel)
-    let summaries = tabsModel.orderedTabs.map { tab -> TabSummary in
-        // Redact non-http(s) URLs so `list` does not leak a local file path (the
-        // page tools refuse to act on such tabs; the path itself is the secret).
-        let url: String
-        if case .rejected = validateTabUrl(TabUrlInput(url: tab.url)) {
-            url = "[non-web URL hidden]"
-        } else {
-            url = tab.url
-        }
-        return TabSummary(
-            id: tab.id,
-            title: tab.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled",
-            url: url,
-            isActive: tab.id == activeTabId,
-            openedByHuman: tab.openedByHuman
-        )
-    }
-    return listTabs(summaries)
+    let inUse = inUseTabId(session: session, tabs: tabsModel)
+    let rows = tabsModel.orderedTabs.map { TabRow($0, inUseTabId: inUse) }
+    let lines = rows.map { "- \(renderTabRow($0, askingChat: askingChat))" }
+    return TabToolResult(
+        output: "\(rows.count) tab(s) open:\n\n\(lines.joined(separator: "\n"))",
+        tabs: rows)
 }
 
 func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ includeScreenshot: Bool) async -> TabToolResult {
@@ -397,9 +385,7 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
     let newTab = tabsWindow.tabs.createTab(TabCreateSpec(
         tabType: "website",
         url: normalized,
-        openedByHuman: false,
-        agentControllerId: ctx.sessionId,
-        sessionId: ctx.sessionId
+        owner: .chat(ctx.sessionId)
     ))
 
     let session = ctx.session
@@ -445,11 +431,11 @@ func manageTabsOpen(_ url: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsAc
 }
 
 /// `controlled_by: "user"`: a tab opened FOR the user, not one the agent drives. It is created
-/// `openedByHuman`, the same flag a tab that was already open carries — so it gets no agent
+/// the user's, the owner a tab that was already open has — so it gets no agent
 /// controller, no network recording, is never taken into use, and `close` refuses it. That last
 /// one is a real difference from an agent tab and the receipt says so.
 func manageTabsOpenUserControlled(_ url: String, _ tabsWindow: TabsWindow) -> TabToolResult {
-    let tab = tabsWindow.tabs.createTab(TabCreateSpec(tabType: "website", url: url, openedByHuman: true))
+    let tab = tabsWindow.tabs.createTab(TabCreateSpec(tabType: "website", url: url, owner: .user))
     // The handle is allocation-only — the real browser target is created on first attach, and
     // nothing else ever attaches a user tab, so without this it stays a phantom the user never
     // sees. Not awaited: a background tab is throttled, so waiting out its load would stall the

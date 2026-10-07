@@ -18,7 +18,7 @@ final class PageToolsStubTabHandle: TabHandle {
     let id: String
     var title: String?
     var url: String
-    var openedByHuman: Bool
+    var attribution: TabAttribution
     var tabType: String
     var faviconUrl: String?
     var userTookOver: Bool
@@ -28,12 +28,12 @@ final class PageToolsStubTabHandle: TabHandle {
     private var _browserControlled = false
     private var _agentId: String?
 
-    init(id: String, url: String, title: String? = nil, tabType: String = "website", openedByHuman: Bool = false) {
+    init(id: String, url: String, title: String? = nil, tabType: String = "website", owner: TabOwner = .chat("test-session")) {
         self.id = id
         self.url = url
         self.title = title
         self.tabType = tabType
-        self.openedByHuman = openedByHuman
+        self.attribution = TabAttribution(owner: owner)
         self.faviconUrl = nil
         self.userTookOver = false
     }
@@ -98,7 +98,7 @@ final class PageToolsStubTabsModel: TabsModel, LivePageTargetAdopting {
     func createTab(_ spec: TabCreateSpec) -> TabHandle {
         let handle = PageToolsStubTabHandle(
             id: "stub-\(handles.count)", url: spec.url, tabType: spec.tabType,
-            openedByHuman: spec.openedByHuman)
+            owner: spec.owner)
         handles[handle.id] = handle
         order.append(handle.id)
         return handle
@@ -229,7 +229,7 @@ func makePageToolsCDPFixture(url: String = "https://example.com") async throws -
     try await client.connect()
     let tabsService = await makeCDPBrowserTabsService(client: client, seed: false)
     let tabs = try #require(tabsService.window).tabs
-    let tab = tabs.createTab(TabCreateSpec(tabType: "website", url: url, openedByHuman: false))
+    let tab = tabs.createTab(TabCreateSpec(tabType: "website", url: url, owner: .chat("test-session")))
     tabs.setActiveTabId(tab.id)
     return PageToolsCDPFixture(cdp: cdp, client: client, tabsService: tabsService, tabId: tab.id)
 }

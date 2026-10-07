@@ -273,6 +273,11 @@ public struct AgentOwnedTabs: Sendable {
     public var toolSchemas: [NativeToolSchema] { getNativeAgentToolSchemas() }
     public func toolSchema(_ name: String) -> NativeToolSchema? { getNativeAgentToolSchema(name) }
 
+    /// The tabs model the tools act on, for a caller that needs the tabs themselves rather
+    /// than a tool's text about them. For reading: opening and closing tabs stays the
+    /// tools' job.
+    public var tabs: TabsModel? { tabsService.window?.tabs }
+
     /// Execute one tool call. Never throws: a thrown tool error comes back as an error
     /// result, because that is what both front ends have to render anyway.
     public func run(_ toolName: String, _ arguments: WorkflowValue?) async -> RawToolResult {

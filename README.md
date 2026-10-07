@@ -286,13 +286,8 @@ tabs are theirs.
 $ alohajet --browser aloha tabs
 2 tab(s) open:
 
-1. [Current tab — the page you are looking at]  [the user's tab — cannot be closed]
-   ID: 786347A9-F916-41CF-A23E-78B28AA03961
-   URL: [non-web URL hidden]
-
-2. Error [the user's tab — cannot be closed]
-   ID: A3A286AD-D796-4FED-9AD7-895845AFB4EB
-   URL: http://localhost:6555/errors/error.html?...
+- [Current tab — the page you are looking at]  [[non-web URL hidden]] (tab-id: 786347A9-F916-41CF-A23E-78B28AA03961) — the user's tab
+- Error [http://localhost:6555/errors/error.html?...] (tab-id: A3A286AD-D796-4FED-9AD7-895845AFB4EB) — the user's tab
 ```
 
 Within the chromium lane there are three connection modes:

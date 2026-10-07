@@ -92,16 +92,9 @@ public protocol TabHandle: AgentControllableTab {
     var id: String { get }
     var title: String? { get }
     var url: String { get }
-    /// Whether this tab belongs to the user rather than the agent: it was already
-    /// open when the session attached, or restored/adopted as a live browser
-    /// target. `false` only for tabs this session opened itself. `manage_tabs
-    /// close` refuses a tab whose value is `true`.
-    ///
-    /// This replaced an `isPinned` flag: pinning is a browser-UI concept the
-    /// DevTools protocol does not expose (`Target.TargetInfo` has no such field),
-    /// so every CDP-backed tab reported `false` and the close guard that tested it
-    /// never fired once.
-    var openedByHuman: Bool { get }
+    /// Whose the tab is and whether it is the foreground tab. A required member, not a
+    /// capability probed with `as?`: every tab has an attribution.
+    var attribution: TabAttribution { get }
     var tabType: String { get }
     var faviconUrl: String? { get }
     var userTookOver: Bool { get }
@@ -126,18 +119,82 @@ public nonisolated struct TabViewportBounds: Sendable {
     }
 }
 
+extension TabHandle {
+    /// Whether the tab is the user's: the owner collapsed to a bool, for the readers that
+    /// predate ``attribution``. `manage_tabs close` refuses a tab whose value is `true`.
+    ///
+    /// It replaced an `isPinned` flag: pinning is a browser-UI concept the DevTools
+    /// protocol does not expose (`Target.TargetInfo` has no such field), so every
+    /// CDP-backed tab reported `false` and the close guard that tested it never fired.
+    ///
+    /// Never declare `openedByHuman` in a conforming type. This member is not a protocol
+    /// requirement, so Swift picks it by the declared type: a conformer's own copy would
+    /// answer when the tab is read as that type, and this one when it is read as a
+    /// `TabHandle`, and the two could disagree without a compiler warning.
+    public var openedByHuman: Bool { attribution.owner == .user }
+}
+
 public nonisolated struct TabCreateSpec: Sendable {
     public var tabType: String
     public var url: String
-    public var openedByHuman: Bool
-    public var agentControllerId: String?
-    public var sessionId: String?
-    public init(tabType: String, url: String, openedByHuman: Bool, agentControllerId: String? = nil, sessionId: String? = nil) {
+    /// Whose the new tab is: the chat that opens it to work in, or the user's for a tab
+    /// opened for the user (`controlled_by: "user"`).
+    public var owner: TabOwner
+    public init(tabType: String, url: String, owner: TabOwner) {
         self.tabType = tabType
         self.url = url
-        self.openedByHuman = openedByHuman
-        self.agentControllerId = agentControllerId
-        self.sessionId = sessionId
+        self.owner = owner
+    }
+}
+
+// MARK: - Attribution
+
+/// Whose a tab is: the user's, or one chat's. A tab has exactly one owner.
+public nonisolated enum TabOwner: Sendable, Equatable {
+    case user
+    /// The chat's id, the one the tools receive as `sessionId`.
+    case chat(String)
+}
+
+/// Whose a tab is, relative to the chat that asks. Exactly one case holds for any tab,
+/// because the owner has exactly one value.
+public nonisolated enum TabOwnerView: Sendable, Equatable {
+    case user
+    /// Owned by the asking chat.
+    case askingChat
+    /// Owned by another chat, the one with this id.
+    case otherChat(String)
+}
+
+/// A tab's owner and whether it is the foreground tab: the two facts the browser owns
+/// that the agent reads. Which tab is in use is not part of it: that is the agent's own
+/// state, kept on the agent's side.
+///
+/// Its views are functions of the value and the asking chat's id, computed when a tab is
+/// described or a close is decided; never stored.
+public nonisolated struct TabAttribution: Sendable, Equatable {
+    public var owner: TabOwner
+    /// Whether the tab is the one shown in the browser window now; `nil` when the
+    /// browser does not say.
+    public var foreground: Bool?
+
+    public init(owner: TabOwner, foreground: Bool? = nil) {
+        self.owner = owner
+        self.foreground = foreground
+    }
+
+    public func ownerView(askingChat: String) -> TabOwnerView {
+        switch owner {
+        case .user: .user
+        case .chat(let chat) where chat == askingChat: .askingChat
+        case .chat(let chat): .otherChat(chat)
+        }
+    }
+
+    /// Whether the asking chat may close the tab: only a tab its own chat owns. Reads the
+    /// owner alone.
+    public func mayClose(askingChat: String) -> Bool {
+        owner == .chat(askingChat)
     }
 }
 
