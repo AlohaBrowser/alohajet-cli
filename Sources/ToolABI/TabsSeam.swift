@@ -180,6 +180,9 @@ public nonisolated struct TabAttribution: Sendable, Equatable {
 public protocol TabAttributionSource: AnyObject {
     /// The id of the tab shown in the browser window now; `nil` when it shows none.
     var foregroundTabId: String? { get }
+    /// Whose the tab is, as the browser knows it now: the chat it recorded for the tab, or
+    /// the user when it recorded none.
+    func owner(of tabId: String) -> TabOwner
     /// Tells the browser that the tab the tabs model has just opened for the chat to work
     /// in is that chat's. Called once per such tab, as soon as the browser has returned the
     /// tab's id; never for a tab opened for the user, which stays the user's.

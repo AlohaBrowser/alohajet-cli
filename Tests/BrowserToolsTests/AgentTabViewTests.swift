@@ -11,6 +11,7 @@ import CDP
 
 @MainActor private final class FakeAttributionSource: TabAttributionSource {
     var foregroundTabId: String?
+    func owner(of tabId: String) -> TabOwner { .user }
     func attribute(_ tabId: String, to chatId: String) {}
 }
 

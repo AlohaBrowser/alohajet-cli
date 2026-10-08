@@ -61,7 +61,8 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     private var networkRecorder: NetworkRecorder?
     private var cachedViewportBounds: TabViewportBounds?
     /// Whose this tab is by the tabs model's own rule, decided once by its one entry
-    /// function.
+    /// function. It stands when the browser offers no source, and for a tab this model
+    /// opened until the browser has made it.
     private let owner: TabOwner
     /// Asked for what only the browser knows; `nil` when the browser offers no source.
     private let attributionSource: TabAttributionSource?
@@ -71,7 +72,12 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// rule.
     public var attribution: TabAttribution {
         guard let attributionSource else { return TabAttribution(owner: owner) }
-        return TabAttribution(owner: owner, foreground: attributionSource.foregroundTabId == id)
+        // The browser answers by the ids it serves. A tab this model opened has none until
+        // the browser makes it, so the browser has nothing to say about it yet.
+        guard session.effectiveTargetId != nil else { return TabAttribution(owner: owner, foreground: false) }
+        return TabAttribution(
+            owner: attributionSource.owner(of: id),
+            foreground: attributionSource.foregroundTabId == id)
     }
 
     init(
