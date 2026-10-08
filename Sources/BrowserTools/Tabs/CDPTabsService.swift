@@ -677,13 +677,13 @@ public final class CDPTabsModel: TabsModel {
         // A tab opened for a chat to work in is reported to the browser as that chat's the
         // moment the browser returns its id. A tab opened for the user is not reported, so
         // the browser keeps it the user's.
-        var reportChatsTab: (@MainActor (String) -> Void)?
+        var attributeToChat: (@MainActor (String) -> Void)?
         if case .chat(let chatId)? = spec?.owner, let attributionSource {
-            reportChatsTab = { attributionSource.attribute($0, to: chatId) }
+            attributeToChat = { attributionSource.attribute($0, to: chatId) }
         }
         let session = CDPTabSession(
             client: client, targetId: targetId, sessionId: nil, url: url, title: title,
-            createOnAttach: spec != nil, onCreatedInBrowser: reportChatsTab)
+            createOnAttach: spec != nil, onCreatedInBrowser: attributeToChat)
         let handle = CDPTabHandle(
             session: session,
             tabType: spec?.tabType ?? "website",
