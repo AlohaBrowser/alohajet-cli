@@ -33,7 +33,7 @@ import CDP
     let held = try #require(tabs.tab("B"))
 
     cdp.removeTarget(id: "B")
-    await tabs.refreshAndAdoptTabs()
+    await tabs.syncTabsWithBrowser()
 
     #expect(tabs.orderedTabs.map(\.id) == ["A"])
     #expect(tabs.tab("B") == nil)
@@ -52,7 +52,7 @@ import CDP
 
     // The user pressed Home: the browser lists the start page.
     cdp.addTarget(id: "A", url: "about:blank", title: "")
-    await tabs.refreshAndAdoptTabs()
+    await tabs.syncTabsWithBrowser()
 
     let tab = try #require(tabs.tab("A"))
     #expect(tab.url == "about:blank")

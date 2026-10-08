@@ -589,7 +589,7 @@ public final class CDPTabsModel: TabsModel {
 
     /// Ids ``closeTab`` closed. `Target.closeTarget` is fire-and-forget, so a browser
     /// that still lists a closed target must not let ``adoptLiveTarget`` or a listing
-    /// (``refreshAndAdoptTabs()``) resurrect it.
+    /// (``syncTabsWithBrowser()``) resurrect it.
     private var closedTargetIds: Set<String> = []
 
     /// The owner of a tab this model counts as its own without a tool opening it: the chat
@@ -647,7 +647,7 @@ public final class CDPTabsModel: TabsModel {
         /// targets (``adoptLiveTarget(_:)``).
         case adoptedLive
         /// Listed by the browser, and not yet tracked, at a listing after seeding
-        /// (``refreshAndAdoptTabs()``): a tab a page opened, for example.
+        /// (``syncTabsWithBrowser()``): a tab a page opened, for example.
         case foundInListing
         /// A page target missing from the snapshot passed to ``adoptSpawnedTabs(notIn:)``;
         /// outside tests, that snapshot is taken just before a click.
@@ -734,7 +734,7 @@ public final class CDPTabsModel: TabsModel {
         // found nothing and returned silently — a close that reported success and closed
         // nothing.
         guard let handle = resolveLocked(id) else { return }
-        let registeredId = remove(handle)
+        let registeredId = forget(handle)
         closedTargetIds.insert(registeredId)
         closedTargetIds.insert(id)
         if let realTargetId = handle.session.effectiveTargetId {
@@ -745,9 +745,10 @@ public final class CDPTabsModel: TabsModel {
 
     /// Takes `handle` out of the list: its entry, its place in the order, and the in-use
     /// pointer if that named it. The handle is marked gone, so anything still holding it
-    /// fails fast instead of reaching the browser. Returns the id it was registered under.
+    /// fails fast instead of reaching the browser. Sends the browser nothing. Returns the id
+    /// it was registered under.
     @discardableResult
-    private func remove(_ handle: CDPTabHandle) -> String {
+    private func forget(_ handle: CDPTabHandle) -> String {
         let registeredId = tabs.first { $0.value === handle }?.key ?? handle.id
         tabs.removeValue(forKey: registeredId)
         order.removeAll { $0 == registeredId }
@@ -812,10 +813,10 @@ public final class CDPTabsModel: TabsModel {
     ///   popup opened, or one the user opened. It goes through `admit`, so whose the tab is
     ///   follows the rule for a seeded tab, and it joins the order at the end. A closed id is
     ///   skipped because `Target.closeTarget` does not wait for the tab to go.
-    /// - A tracked tab the listing does not name leaves (``remove(_:)``). A tab this model
+    /// - A tracked tab the listing does not name leaves (``forget(_:)``). A tab this model
     ///   opened whose browser tab does not exist yet has no real id the listing could name,
     ///   and stays.
-    public func refreshAndAdoptTabs() async {
+    public func syncTabsWithBrowser() async {
         guard let infos = await pageTargetInfos() else { return }
         var listed: Set<String> = []
         for info in infos {
@@ -834,7 +835,7 @@ public final class CDPTabsModel: TabsModel {
             guard let realId = handle.session.effectiveTargetId else { return false }
             return !listed.contains(realId)
         }
-        for handle in gone { remove(handle) }
+        for handle in gone { forget(handle) }
     }
 }
 
@@ -881,7 +882,7 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     }
 }
 
-extension CDPTabsModel: LiveTabRefreshingAndAdopting {}
+extension CDPTabsModel: BrowserTabSyncing {}
 
 extension CDPTabsModel: LivePageTargetAdopting {
     /// Whose the tab is follows the rule for a seeded tab, in `admit` (like

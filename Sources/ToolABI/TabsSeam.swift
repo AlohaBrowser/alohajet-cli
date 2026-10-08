@@ -59,12 +59,12 @@ public protocol ClickSpawnedTabAdopting: AnyObject {
 /// each tracked tab the listing no longer names dropped. Kept off ``TabsModel`` and probed
 /// with `as?`, like the seams around it: a model with no browser behind it has nothing to
 /// list.
-public protocol LiveTabRefreshingAndAdopting: AnyObject {
+public protocol BrowserTabSyncing: AnyObject {
     /// Takes the listing's url and title for every tracked tab, adopts every listed page
     /// target the model does not track (except one it has just closed), and drops every
     /// tracked tab the listing leaves out. One call for the whole window, so a list or a
     /// read pays one round-trip rather than one per tab.
-    func refreshAndAdoptTabs() async
+    func syncTabsWithBrowser() async
 }
 
 /// Addressing a live page target the model never saw. Kept off ``TabsModel`` and

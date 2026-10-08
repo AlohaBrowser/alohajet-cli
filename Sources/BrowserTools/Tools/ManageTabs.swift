@@ -45,8 +45,8 @@ import ToolABI
             // page's title, and a tab nobody read listed as "Untitled". One
             // `Target.getTargets` for the window fixes every row, adds the tabs the model
             // has not seen, such as one a click opened, and drops the ones that closed.
-            if let live = tabsWindow.tabs as? LiveTabRefreshingAndAdopting {
-                await live.refreshAndAdoptTabs()
+            if let live = tabsWindow.tabs as? BrowserTabSyncing {
+                await live.syncTabsWithBrowser()
             }
             result = manageTabsList(tabsWindow, session, askingChat: context.sessionId)
         case "read":
@@ -220,10 +220,11 @@ func manageTabsList(_ tabsWindow: TabsWindow, _ session: ChatModeSession?, askin
     let shown = tabsShownToAgent(tabsModel, inUseTabId: inUse)
     let rows = shown.map { TabRow($0, inUseTabId: inUse) }
     let lines = rows.map { "- \(renderTabRow($0, askingChat: askingChat))" }
-    let hidden = tabsModel.orderedTabs.count - shown.count
-    let leftOut = hidden == 0 ? "" : " (\(hidden) empty \(hidden == 1 ? "tab" : "tabs") not shown)"
+    let emptyTabsNotShown = tabsModel.orderedTabs.count - shown.count
+    let countNote = emptyTabsNotShown == 0 ? ""
+        : " (\(emptyTabsNotShown) empty \(emptyTabsNotShown == 1 ? "tab" : "tabs") not shown)"
     return TabToolResult(
-        output: "\(rows.count) tab(s) open\(leftOut):\n\n\(lines.joined(separator: "\n"))",
+        output: "\(rows.count) tab(s) open\(countNote):\n\n\(lines.joined(separator: "\n"))",
         tabs: rows)
 }
 
@@ -237,7 +238,7 @@ func renderedTabRow(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: ManageTab
 func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ includeScreenshot: Bool) async -> TabToolResult {
     // The browser's listing first, so a tab closed since the last one is not found and the
     // gate judges the address the tab shows now.
-    if let live = tabsWindow.tabs as? LiveTabRefreshingAndAdopting { await live.refreshAndAdoptTabs() }
+    if let live = tabsWindow.tabs as? BrowserTabSyncing { await live.syncTabsWithBrowser() }
     guard let tab = tabsWindow.tabs.tab(tabId) else {
         return TabToolResult(output: "Tab \"\(tabId)\" not found.", isError: true)
     }
@@ -265,7 +266,7 @@ private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: Man
     // The title after the load, not the one the tab was born with. The load wait writes
     // it only on its polling leg, so a tab that finished via the lifecycle event reached
     // here titleless and its row read "Untitled" — for example.com, every time.
-    if let live = tabsModel as? LiveTabRefreshingAndAdopting { await live.refreshAndAdoptTabs() }
+    if let live = tabsModel as? BrowserTabSyncing { await live.syncTabsWithBrowser() }
 
     do {
         let url = tab.url
@@ -498,7 +499,7 @@ func manageTabsClose(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTab
 
 func manageTabsUse(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext) async -> TabToolResult {
     // As `read` does: the listing first, so the gate judges the address the tab shows now.
-    if let live = tabsWindow.tabs as? LiveTabRefreshingAndAdopting { await live.refreshAndAdoptTabs() }
+    if let live = tabsWindow.tabs as? BrowserTabSyncing { await live.syncTabsWithBrowser() }
     guard let tab = tabsWindow.tabs.tab(tabId) else {
         return TabToolResult(output: "Tab \"\(tabId)\" not found.", isError: true)
     }
