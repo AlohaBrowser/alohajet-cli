@@ -212,14 +212,18 @@ func tabIsInteractiveWeb(_ tab: TabHandle) -> Bool {
 }
 
 /// One tab row per tab the agent is shown (``tabsShownToAgent(_:inUseTabId:)``), in the tabs
-/// model's order, as `askingChat` is told it.
+/// model's order, as `askingChat` is told it. The count says how many empty tabs it left out,
+/// so the agent never tells the user a smaller number than the tab strip shows.
 func manageTabsList(_ tabsWindow: TabsWindow, _ session: ChatModeSession?, askingChat: String) -> TabToolResult {
     let tabsModel = tabsWindow.tabs
     let inUse = inUseTabId(session: session, tabs: tabsModel)
-    let rows = tabsShownToAgent(tabsModel, inUseTabId: inUse).map { TabRow($0, inUseTabId: inUse) }
+    let shown = tabsShownToAgent(tabsModel, inUseTabId: inUse)
+    let rows = shown.map { TabRow($0, inUseTabId: inUse) }
     let lines = rows.map { "- \(renderTabRow($0, askingChat: askingChat))" }
+    let hidden = tabsModel.orderedTabs.count - shown.count
+    let leftOut = hidden == 0 ? "" : " (\(hidden) empty \(hidden == 1 ? "tab" : "tabs") not shown)"
     return TabToolResult(
-        output: "\(rows.count) tab(s) open:\n\n\(lines.joined(separator: "\n"))",
+        output: "\(rows.count) tab(s) open\(leftOut):\n\n\(lines.joined(separator: "\n"))",
         tabs: rows)
 }
 
