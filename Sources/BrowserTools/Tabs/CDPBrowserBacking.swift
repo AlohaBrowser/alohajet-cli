@@ -54,8 +54,14 @@ final class CDPTabSession {
     /// callers share this so the real target is created exactly once.
     private var attachTask: Task<String, Error>?
     private let createOnAttach: Bool
+    /// Called with the browser's id as soon as ``performAttach()`` has created the tab in the
+    /// browser, before the id reaches any caller.
+    private let onCreatedInBrowser: (@MainActor (String) -> Void)?
 
-    init(client: CDPClient, targetId: String, sessionId: String?, url: String, title: String? = nil, createOnAttach: Bool = false) {
+    init(
+        client: CDPClient, targetId: String, sessionId: String?, url: String, title: String? = nil,
+        createOnAttach: Bool = false, onCreatedInBrowser: (@MainActor (String) -> Void)? = nil
+    ) {
         self.client = client
         self.targetId = targetId
         self.effectiveTargetId = createOnAttach ? nil : targetId
@@ -63,6 +69,7 @@ final class CDPTabSession {
         self.url = url
         self.title = title
         self.createOnAttach = createOnAttach
+        self.onCreatedInBrowser = onCreatedInBrowser
     }
 
     func markDestroyed() {
@@ -97,7 +104,9 @@ final class CDPTabSession {
     private func performAttach() async throws -> String {
         guard !isDestroyed else { throw CDPError.notConnected }
         if effectiveTargetId == nil {
-            effectiveTargetId = try await client.openTab(url: url)
+            let created = try await client.openTab(url: url)
+            effectiveTargetId = created
+            onCreatedInBrowser?(created)
         }
         guard let resolved = effectiveTargetId else { throw CDPError.notConnected }
         let session = try await client.attachToTarget(targetId: resolved)

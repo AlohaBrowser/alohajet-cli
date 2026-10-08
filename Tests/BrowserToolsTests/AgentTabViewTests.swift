@@ -11,6 +11,7 @@ import CDP
 
 @MainActor private final class FakeAttributionSource: TabAttributionSource {
     var foregroundTabId: String?
+    func attribute(_ tabId: String, to chatId: String) {}
 }
 
 @MainActor private func seededModel(

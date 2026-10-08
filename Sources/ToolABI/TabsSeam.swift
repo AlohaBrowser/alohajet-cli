@@ -169,9 +169,10 @@ public nonisolated struct TabAttribution: Sendable, Equatable {
 }
 
 /// The one object through which the browser tells the tabs model what only the browser
-/// knows about its tabs. Inside Aloha Desktop the desktop implements it and hands it to the
-/// chat runner. A browser with none (Chrome, and programs that drive the desktop from
-/// outside its app) leaves the tabs model to its own rule, and the foreground unknown.
+/// knows about its tabs, and the tabs model tells the browser that a tab it opened is its
+/// chat's. Inside Aloha Desktop the desktop implements it and hands it to the chat runner.
+/// A browser with none (Chrome, and programs that drive the desktop from outside its app)
+/// leaves the tabs model to its own rule, and the foreground unknown.
 ///
 /// Only the tabs model asks it, and it asks at the moment it needs an answer, so nothing it
 /// says is copied anywhere to go stale.
@@ -179,6 +180,10 @@ public nonisolated struct TabAttribution: Sendable, Equatable {
 public protocol TabAttributionSource: AnyObject {
     /// The id of the tab shown in the browser window now; `nil` when it shows none.
     var foregroundTabId: String? { get }
+    /// Tells the browser that the tab the tabs model has just opened for the chat to work
+    /// in is that chat's. Called once per such tab, as soon as the browser has returned the
+    /// tab's id; never for a tab opened for the user, which stays the user's.
+    func attribute(_ tabId: String, to chatId: String)
 }
 
 /// The legacy/non-interactive tab read context.

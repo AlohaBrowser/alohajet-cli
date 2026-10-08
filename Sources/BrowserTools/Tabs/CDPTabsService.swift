@@ -674,9 +674,16 @@ public final class CDPTabsModel: TabsModel {
         // Every other route binds to the target id it was given (no createOnAttach), so
         // attaching later reaches that target instead of creating a new one.
         let spec: TabCreateSpec? = if case .createdByTool(let spec) = origin { spec } else { nil }
+        // A tab opened for a chat to work in is reported to the browser as that chat's the
+        // moment the browser returns its id. A tab opened for the user is not reported, so
+        // the browser keeps it the user's.
+        var reportChatsTab: (@MainActor (String) -> Void)?
+        if case .chat(let chatId)? = spec?.owner, let attributionSource {
+            reportChatsTab = { attributionSource.attribute($0, to: chatId) }
+        }
         let session = CDPTabSession(
             client: client, targetId: targetId, sessionId: nil, url: url, title: title,
-            createOnAttach: spec != nil)
+            createOnAttach: spec != nil, onCreatedInBrowser: reportChatsTab)
         let handle = CDPTabHandle(
             session: session,
             tabType: spec?.tabType ?? "website",
