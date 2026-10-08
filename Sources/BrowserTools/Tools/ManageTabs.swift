@@ -43,8 +43,8 @@ import ToolABI
             // Titles and URLs in the model are caches, and only the tools that touched a
             // tab ever wrote to them: a page the agent navigated listed under the OLD
             // page's title, and a tab nobody read listed as "Untitled". One
-            // `Target.getTargets` for the window fixes every row, and adds the tabs the
-            // model has not seen, such as one a click opened.
+            // `Target.getTargets` for the window fixes every row, adds the tabs the model
+            // has not seen, such as one a click opened, and drops the ones that closed.
             if let live = tabsWindow.tabs as? LiveTabRefreshingAndAdopting {
                 await live.refreshAndAdoptTabs()
             }
@@ -211,11 +211,12 @@ func tabIsInteractiveWeb(_ tab: TabHandle) -> Bool {
     isInteractiveWebTab(InteractiveTabDescriptor(tabType: tab.tabType, hasAgentDom: tab.agentDOM != nil))
 }
 
-/// One tab row per tab, in the tabs model's order, as `askingChat` is told it.
+/// One tab row per tab the agent is shown (``tabsShownToAgent(_:inUseTabId:)``), in the tabs
+/// model's order, as `askingChat` is told it.
 func manageTabsList(_ tabsWindow: TabsWindow, _ session: ChatModeSession?, askingChat: String) -> TabToolResult {
     let tabsModel = tabsWindow.tabs
     let inUse = inUseTabId(session: session, tabs: tabsModel)
-    let rows = tabsModel.orderedTabs.map { TabRow($0, inUseTabId: inUse) }
+    let rows = tabsShownToAgent(tabsModel, inUseTabId: inUse).map { TabRow($0, inUseTabId: inUse) }
     let lines = rows.map { "- \(renderTabRow($0, askingChat: askingChat))" }
     return TabToolResult(
         output: "\(rows.count) tab(s) open:\n\n\(lines.joined(separator: "\n"))",
@@ -230,7 +231,10 @@ func renderedTabRow(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: ManageTab
 
 /// The tab row, with the page below it.
 func manageTabsRead(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext, _ includeScreenshot: Bool) async -> TabToolResult {
-    guard let tab = tabsWindow.tabs.getOrRestoreTab(tabId, restoreIfNeeded: false) else {
+    // The browser's listing first, so a tab closed since the last one is not found and the
+    // gate judges the address the tab shows now.
+    if let live = tabsWindow.tabs as? LiveTabRefreshingAndAdopting { await live.refreshAndAdoptTabs() }
+    guard let tab = tabsWindow.tabs.tab(tabId) else {
         return TabToolResult(output: "Tab \"\(tabId)\" not found.", isError: true)
     }
     var result = await readPageBody(tab, tabsWindow, ctx, includeScreenshot)
@@ -489,7 +493,9 @@ func manageTabsClose(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTab
 }
 
 func manageTabsUse(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTabsActionContext) async -> TabToolResult {
-    guard let tab = tabsWindow.tabs.getOrRestoreTab(tabId, restoreIfNeeded: false) else {
+    // As `read` does: the listing first, so the gate judges the address the tab shows now.
+    if let live = tabsWindow.tabs as? LiveTabRefreshingAndAdopting { await live.refreshAndAdoptTabs() }
+    guard let tab = tabsWindow.tabs.tab(tabId) else {
         return TabToolResult(output: "Tab \"\(tabId)\" not found.", isError: true)
     }
 

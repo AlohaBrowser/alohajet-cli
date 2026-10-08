@@ -29,8 +29,9 @@ private func seededModel(agentOwned: Set<String>) async throws -> TabsModel {
     #expect(tabs.tab("agents-target")?.attribution.owner == .user)
 }
 
-@Test @MainActor func aRestoredTabRecordedAsTheAgentsIsNotTheUsers() async throws {
+@Test @MainActor func aTabAdoptedByIdRecordedAsTheAgentsIsNotTheUsers() async throws {
     let cdp = MockCDP()
+    cdp.addTarget(id: "users-target", url: "https://user.example/")
     cdp.addTarget(id: "agents-target", url: "https://agent.example/")
     let channel = cdp.channel()
     let client = CDPClient(channel: channel)
@@ -38,9 +39,11 @@ private func seededModel(agentOwned: Set<String>) async throws -> TabsModel {
     let service = await makeCDPBrowserTabsService(
         client: client, seed: false, chatId: "alohajet", seededTabsAreHuman: true,
         agentOwnedTabIds: ["agents-target"])
-    let tabs = try #require(service.window).tabs
-    #expect(tabs.getOrRestoreTab("agents-target", restoreIfNeeded: true)?.attribution.owner == .chat("alohajet"))
-    #expect(tabs.getOrRestoreTab("users-target", restoreIfNeeded: true)?.attribution.owner == .user)
+    let adopting = try #require(service.window?.tabs as? LivePageTargetAdopting)
+    let agents = await adopting.adoptLiveTarget("agents-target")
+    let users = await adopting.adoptLiveTarget("users-target")
+    #expect(agents?.attribution.owner == .chat("alohajet"))
+    #expect(users?.attribution.owner == .user)
 }
 
 @Test func recordedOwnershipIsIgnoredWhenTheBrowserIsNotTheOneItWasRecordedAgainst() {

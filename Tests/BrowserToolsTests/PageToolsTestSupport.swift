@@ -72,7 +72,6 @@ final class PageToolsStubTabsModel: TabsModel, LivePageTargetAdopting {
     func setActiveTabId(_ id: String?) { _activeTabId = id }
     var tabsById: [String: TabHandle] { handles }
     var orderedTabs: [TabHandle] { order.compactMap { handles[$0] } }
-    func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle? { handles[id] }
     func tab(_ id: String) -> TabHandle? { handles[id] }
 
     func createTab(_ spec: TabCreateSpec) -> TabHandle {

@@ -39,7 +39,6 @@ import ToolABI
     func setActiveTabId(_ id: String?) { activeTabId = id }
     var tabsById: [String: TabHandle] { Dictionary(uniqueKeysWithValues: handles.map { ($0.id, $0) }) }
     var orderedTabs: [TabHandle] { handles }
-    func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle? { tab(id) }
     func tab(_ id: String) -> TabHandle? { handles.first { $0.id == id } }
     func createTab(_ spec: TabCreateSpec) -> TabHandle {
         let handle = FakeTab(id: "new", url: spec.url, owner: spec.owner)

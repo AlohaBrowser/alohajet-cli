@@ -19,14 +19,26 @@ public struct TabRow: Equatable, Sendable {
         id = tab.id
         title = tab.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled"
         // Non-http(s) addresses are hidden so a row does not leak a local file path (the
-        // page tools refuse to act on such tabs; the path itself is the secret).
-        if case .rejected = validateTabUrl(TabUrlInput(url: tab.url)) {
+        // page tools refuse to act on such tabs; the path itself is the secret). A blank
+        // tab's address is no secret, and it is what tells the agent the tab is blank.
+        if tab.url != blankTabUrl, case .rejected = validateTabUrl(TabUrlInput(url: tab.url)) {
             url = "[non-web URL hidden]"
         } else {
             url = tab.url
         }
         attribution = tab.attribution
         inUse = tab.id == inUseTabId
+    }
+}
+
+/// The tabs the agent is shown, in the tabs model's order: every tab except a blank one
+/// (`about:blank`) that is neither the tab the user is looking at nor the tab in use. Such a
+/// tab is clutter; the blank tab in front or in use is the one the page tools act on, and an
+/// agent that cannot see it cannot load a page into it. `manage_tabs list` and alohajet's tab
+/// summary both show these, so the two never disagree about which tabs are open.
+public func tabsShownToAgent(_ tabs: TabsModel, inUseTabId: String?) -> [TabHandle] {
+    tabs.orderedTabs.filter { tab in
+        tab.url != blankTabUrl || tab.attribution.foreground == true || tab.id == inUseTabId
     }
 }
 

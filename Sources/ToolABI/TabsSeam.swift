@@ -17,7 +17,6 @@ public protocol TabsModel: AnyObject {
     var tabsById: [String: TabHandle] { get }
     /// The insertion-ordered tab handles.
     var orderedTabs: [TabHandle] { get }
-    func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle?
     func tab(_ id: String) -> TabHandle?
     func createTab(_ spec: TabCreateSpec) -> TabHandle
     func closeTab(_ id: String, skipConfirm: Bool) async
@@ -55,15 +54,16 @@ public protocol ClickSpawnedTabAdopting: AnyObject {
     func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab]
 }
 
-/// Bringing the model up to date with the live browser's listing: refreshing the cached
-/// url and title of every tracked tab, and adopting each page target the model does not
-/// track yet. Kept off ``TabsModel`` and probed with `as?`, like the seams around it: a
-/// model with no browser behind it has nothing to list.
+/// Bringing the model into line with the live browser's listing: the listing's url and
+/// title for every tracked tab, each page target the model does not track yet adopted, and
+/// each tracked tab the listing no longer names dropped. Kept off ``TabsModel`` and probed
+/// with `as?`, like the seams around it: a model with no browser behind it has nothing to
+/// list.
 public protocol LiveTabRefreshingAndAdopting: AnyObject {
-    /// Re-reads url and title for every tracked tab, and adopts every listed page target
-    /// the model does not track, except one it has just closed. A tracked tab the listing
-    /// leaves out is kept. One call for the whole window, so a list or a read pays one
-    /// round-trip rather than one per tab.
+    /// Takes the listing's url and title for every tracked tab, adopts every listed page
+    /// target the model does not track (except one it has just closed), and drops every
+    /// tracked tab the listing leaves out. One call for the whole window, so a list or a
+    /// read pays one round-trip rather than one per tab.
     func refreshAndAdoptTabs() async
 }
 

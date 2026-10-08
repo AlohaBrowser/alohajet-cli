@@ -41,6 +41,12 @@ final class CDPTabSession {
     private(set) var effectiveTargetId: String?
     var url: String
     var title: String?
+    /// The address the agent asked this tab to load, while that page is still arriving: the
+    /// one thing about the tab the browser cannot tell. `manage_tabs open` (``CDPTabsModel``'s
+    /// `createTab`) and `page_navigate` (``CDPTabHandle/navigateToURL(_:profileId:signal:)``)
+    /// write it; the page-load wait reads it and clears it when it ends. `nil` when nothing
+    /// was asked for.
+    var requestedURL: String?
     private(set) var isDestroyed = false
     private var networkEnabled = false
     private var pageEnabled = false

@@ -57,7 +57,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     private let snapshotting: CDPAgentDOMSnapshotting
     private let pacer: NavigationPacer?
 
-    private var constructedTitle: String?
     public let tabType: String
     private var networkRecorder: NetworkRecorder?
     private var cachedViewportBounds: TabViewportBounds?
@@ -78,7 +77,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     init(
         session: CDPTabSession,
         tabType: String,
-        title: String?,
         owner: TabOwner,
         attributionSource: TabAttributionSource?,
         pacer: NavigationPacer? = nil
@@ -93,7 +91,6 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         )
         self.snapshotting = CDPAgentDOMSnapshotting(service: domService)
         self.tabType = tabType
-        self.constructedTitle = title
         self.owner = owner
         self.attributionSource = attributionSource
         self.pacer = pacer
@@ -118,12 +115,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// nothing is reset, this is a reading of the document that is already there.
     func noteObservedURL(_ url: String) { if !url.isEmpty { session.url = url } }
 
-    /// Drops the title this handle was constructed with, so ``title`` reads the session's
-    /// live one. The constructor value is a snapshot of the moment the tab was seeded and
-    /// shadows every refresh after it.
-    func clearCachedTitle() { constructedTitle = nil }
-
-    public var title: String? { constructedTitle ?? session.title }
+    public var title: String? { session.title }
 
     public var faviconUrl: String? { nil }
 
@@ -282,9 +274,12 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     private func waitForMainFrameLoad(timeoutMs: Int, signal: AbortSignal?) async throws -> Bool {
         let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000)
         let transport = SessionScopedCDPTransport(session: session)
-        // The tab's intended target, captured before any poll can overwrite it,
-        // so the load flag can tell a real navigation from the initial blank doc.
-        let expectedURL = session.url
+        // The page the agent asked this tab to load, never the address the tab was last
+        // reported at: while one is asked for, a blank document is that page still on its
+        // way; with none, the wait takes the current document as it is, `about:blank`
+        // included. The wait ending, by seeing the page or by giving up, clears it.
+        let expectedURL = session.requestedURL ?? ""
+        defer { session.requestedURL = nil }
 
         // Subscribe BEFORE enabling lifecycle events / navigating-state probing so
         // no `load` emitted in the gap is missed.
@@ -340,8 +335,8 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
             // readyState pass once the live document is the real target (not the
             // initial `about:blank` of a freshly-opened tab), so the blank doc
             // never short-circuits the gate. Refresh the cached url/title only for
-            // a real document, so the poll never overwrites the expected target
-            // with the transient `about:blank`.
+            // a real document, so a blank document still on its way to the
+            // requested page is not reported as the tab's page.
             let probe: JSValue
             do {
                 // A frozen Aloha default-tab WKWebView hangs Runtime.evaluate until
@@ -413,10 +408,10 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     }
 
     /// Whether the live document `url` is the real committed target rather than
-    /// the pre-navigation blank/empty initial document, given the tab's
-    /// `expected` target. A tab whose expected target genuinely is `about:blank`
-    /// counts a blank document as real; a tab navigating to a real URL but still
-    /// showing `about:blank` does not.
+    /// the pre-navigation blank/empty initial document, given the address the
+    /// agent asked the tab to load (`expected`, empty when it asked for none). A
+    /// tab asked for nothing, or for `about:blank`, counts a blank document as
+    /// real; a tab navigating to a real URL but still showing `about:blank` does not.
     private func isRealCommittedURL(_ url: String, expected: String) -> Bool {
         if url.isEmpty { return false }
         if url == "about:blank" {
@@ -450,6 +445,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
             method: "Page.navigate",
             params: ["url": .string(url)],
             sessionId: sessionId)
+        session.requestedURL = url
         try await waitForTabLoad(timeoutMs: 15_000, signal: signal)
     }
 
@@ -647,8 +643,6 @@ public final class CDPTabsModel: TabsModel {
         case createdByTool(TabCreateSpec)
         /// Listed by the browser when the model seeded (``seedFromBrowser()``).
         case seeded
-        /// Addressed by an id the model does not track (``getOrRestoreTab(_:restoreIfNeeded:)``).
-        case restoredById
         /// Addressed by an id the model does not track, and found among the browser's page
         /// targets (``adoptLiveTarget(_:)``).
         case adoptedLive
@@ -663,8 +657,7 @@ public final class CDPTabsModel: TabsModel {
     /// The one way a tab enters this model. Every route builds its handle here, and the
     /// tab's owner is decided here. `targetId`, `url` and `title` are whatever the route has
     /// in hand: the provisional id and requested url of a tab opened through
-    /// ``createTab(_:)``, a restored tab's bare id, or the browser's listing of a seeded or
-    /// adopted target.
+    /// ``createTab(_:)``, or the browser's listing of a seeded or adopted target.
     private func admit(_ origin: TabOrigin, targetId: String, url: String, title: String?) -> CDPTabHandle {
         let owner: TabOwner
         switch origin {
@@ -672,7 +665,7 @@ public final class CDPTabsModel: TabsModel {
             owner = spec.owner
         case .adoptedAfterClick:
             owner = ownChatOrUser
-        case .seeded, .restoredById, .adoptedLive, .foundInListing:
+        case .seeded, .adoptedLive, .foundInListing:
             // A tab the browser already had is the user's, except in a browser the
             // alohajet-cli program launched and for the ids it already owns.
             owner = seededTabsAreHuman && !agentOwnedTabIds.contains(targetId) ? .user : ownChatOrUser
@@ -687,7 +680,6 @@ public final class CDPTabsModel: TabsModel {
         let handle = CDPTabHandle(
             session: session,
             tabType: spec?.tabType ?? "website",
-            title: title,
             owner: owner,
             attributionSource: attributionSource,
             pacer: navigationPacer)
@@ -704,15 +696,6 @@ public final class CDPTabsModel: TabsModel {
     public var tabsById: [String: TabHandle] { tabs.mapValues { $0 } }
 
     public var orderedTabs: [TabHandle] { order.compactMap { tabs[$0] } }
-
-    public func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle? {
-        if let existing = resolveLocked(id) { return existing }
-        guard restoreIfNeeded else { return nil }
-        // The id names a live Chrome page target not yet tracked here (e.g. a tab
-        // addressed by its real target id, or opened outside this model). Restore
-        // a handle bound to that existing target so it can be read/driven.
-        return admit(.restoredById, targetId: id, url: "", title: nil)
-    }
 
     public func tab(_ id: String) -> TabHandle? {
         resolveLocked(id)
@@ -732,7 +715,10 @@ public final class CDPTabsModel: TabsModel {
         // attach, so this returns a tab object synchronously before navigation
         // settles.
         let externalId = "tab-\(UUID().uuidString.prefix(12))"
-        return admit(.createdByTool(spec), targetId: externalId, url: spec.url, title: nil)
+        let handle = admit(.createdByTool(spec), targetId: externalId, url: spec.url, title: nil)
+        // Until this page commits, the new tab's blank first document is not it.
+        handle.session.requestedURL = spec.url
+        return handle
     }
 
     private func register(_ handle: CDPTabHandle) {
@@ -748,17 +734,26 @@ public final class CDPTabsModel: TabsModel {
         // found nothing and returned silently — a close that reported success and closed
         // nothing.
         guard let handle = resolveLocked(id) else { return }
-        let registeredId = tabs.first { $0.value === handle }?.key ?? id
-        tabs.removeValue(forKey: registeredId)
-        order.removeAll { $0 == registeredId }
-        if _activeTabId == registeredId || _activeTabId == id { _activeTabId = nil }
+        let registeredId = remove(handle)
         closedTargetIds.insert(registeredId)
         closedTargetIds.insert(id)
-        handle.session.markDestroyed()
         if let realTargetId = handle.session.effectiveTargetId {
             closedTargetIds.insert(realTargetId)
             _ = try? await client.send(method: "Target.closeTarget", params: ["targetId": .string(realTargetId)])
         }
+    }
+
+    /// Takes `handle` out of the list: its entry, its place in the order, and the in-use
+    /// pointer if that named it. The handle is marked gone, so anything still holding it
+    /// fails fast instead of reaching the browser. Returns the id it was registered under.
+    @discardableResult
+    private func remove(_ handle: CDPTabHandle) -> String {
+        let registeredId = tabs.first { $0.value === handle }?.key ?? handle.id
+        tabs.removeValue(forKey: registeredId)
+        order.removeAll { $0 == registeredId }
+        if _activeTabId == registeredId || _activeTabId == handle.id { _activeTabId = nil }
+        handle.session.markDestroyed()
+        return registeredId
     }
 
     public func getTabContext(windowId: String, tab: TabHandle, signal: AbortSignal?) async throws -> TabReadContext? {
@@ -806,46 +801,40 @@ public final class CDPTabsModel: TabsModel {
         }
     }
 
-    /// Brings the model up to date with the browser's live target list, in one
-    /// `Target.getTargets` for the whole window: a tracked tab gets its cached url and
-    /// title refreshed, and a page target the model does not track yet is adopted, except
-    /// one this model closed.
+    /// Brings the model into line with the browser's listing, in one `Target.getTargets` for
+    /// the whole window, so that the agent is told the tabs the browser has: every one it
+    /// lists, none it does not, each with the address and title it lists.
     ///
-    /// The url and title are caches. `url` is written by the navigation waiter, the read
-    /// probe and the click's live-URL read; `title` was written by the read probe ALONE,
-    /// and only on the polling leg of the load wait — so a tab that finished loading via
-    /// the lifecycle event kept the title it was born with (`nil`, rendered "Untitled"),
-    /// and a page the agent navigated kept the OLD page's title against the new URL.
-    /// Nothing else refreshes a tab the tools never touched. This does, for all of them,
-    /// for one round-trip.
-    ///
-    /// Adoption is how a tab that appeared without this model opening it, a `target=_blank`
-    /// link or a popup a click opened, reaches the agent. It goes through `admit`, so whose
-    /// the tab is follows the rule for a seeded tab, and it joins the order at the end. A
-    /// closed id is skipped because `Target.closeTarget` does not wait for the tab to go.
-    /// A tracked tab the listing leaves out is KEPT: the desktop's listing leaves out
-    /// grouped tabs, and a tab the agent knows stays known while it runs.
+    /// - A tracked tab takes the listing's address and title verbatim, `about:blank` and an
+    ///   empty title included: they are the browser's latest report, and the page-load wait
+    ///   reads the address the agent asked for, never this one.
+    /// - A listed tab the model does not track is adopted: a tab a `target=_blank` link or a
+    ///   popup opened, or one the user opened. It goes through `admit`, so whose the tab is
+    ///   follows the rule for a seeded tab, and it joins the order at the end. A closed id is
+    ///   skipped because `Target.closeTarget` does not wait for the tab to go.
+    /// - A tracked tab the listing does not name leaves (``remove(_:)``). A tab this model
+    ///   opened whose browser tab does not exist yet has no real id the listing could name,
+    ///   and stays.
     public func refreshAndAdoptTabs() async {
         guard let infos = await pageTargetInfos() else { return }
+        var listed: Set<String> = []
         for info in infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
+            listed.insert(targetId)
             let url = info["url"]?.stringValue ?? ""
             let title = info["title"]?.stringValue
             if let handle = resolveLocked(targetId) {
-                // A tab still on its initial blank document has not committed the URL it was
-                // opened for; overwriting the intended target with `about:blank` would make
-                // the load wait expect the wrong page.
-                if !url.isEmpty, url != "about:blank" || handle.session.url.isEmpty {
-                    handle.session.url = url
-                }
-                if let title, !title.isEmpty {
-                    handle.session.title = title
-                    handle.clearCachedTitle()
-                }
+                handle.session.url = url
+                handle.session.title = title
             } else if !closedTargetIds.contains(targetId) {
                 _ = admit(.foundInListing, targetId: targetId, url: url, title: title)
             }
         }
+        let gone = tabs.values.filter { handle in
+            guard let realId = handle.session.effectiveTargetId else { return false }
+            return !listed.contains(realId)
+        }
+        for handle in gone { remove(handle) }
     }
 }
 
@@ -980,8 +969,8 @@ final class DomStableTimestamp {
 /// the gate). `Page.frameNavigated` for the main frame records the committed URL,
 /// both to gate the load and to refresh the cached url without a final poll.
 ///
-/// `expectsRealURL` is the tab's intended target: when it is empty / `about:blank`
-/// the tab is *legitimately* a blank tab, so a load of `about:blank` does count.
+/// `expectedURL` is the address the agent asked the tab to load: when it is empty
+/// (nothing asked for) or `about:blank`, a load of `about:blank` does count.
 final class MainFrameLoadFlag {
     private var mainFrameId: String?
     private(set) var didLoad = false

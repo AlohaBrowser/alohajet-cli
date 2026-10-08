@@ -34,7 +34,7 @@ public func inUseTabId(session: ChatModeSession?, tabs: TabsModel) -> String? {
 /// Falls back to adopting a live page target on a miss. `nil` when nothing live carries the
 /// id — which is what keeps a typo a failure.
 func resolveOrAdoptTab(_ id: String, _ tabs: TabsModel) async -> TabHandle? {
-    if let tracked = tabs.getOrRestoreTab(id, restoreIfNeeded: false) { return tracked }
+    if let tracked = tabs.tab(id) { return tracked }
     return await (tabs as? LivePageTargetAdopting)?.adoptLiveTarget(id)
 }
 
