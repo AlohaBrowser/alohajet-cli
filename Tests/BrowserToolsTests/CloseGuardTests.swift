@@ -87,6 +87,15 @@ import ToolABI
     #expect(model.tab("users-tab") != nil)
 }
 
+@Test @MainActor func closeRefusesATabAnotherChatOpened() async {
+    let (model, window, ctx) = fixture()
+    model.handles.append(FakeTab(id: "other-chats-tab", url: "https://example.net/", owner: .chat("t")))
+    let result = await manageTabsClose("other-chats-tab", window, ctx)
+    #expect(result.isError)
+    #expect(model.closed.isEmpty)
+    #expect(model.tab("other-chats-tab") != nil)
+}
+
 @Test @MainActor func closeAllowsATabTheAgentOpened() async {
     let (model, window, ctx) = fixture()
     let result = await manageTabsClose("agents-tab", window, ctx)
