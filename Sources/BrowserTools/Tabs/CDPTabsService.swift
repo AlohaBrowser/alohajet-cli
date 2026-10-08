@@ -63,7 +63,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// Whose this tab is by the tabs model's own rule, decided once by its one entry
     /// function. It stands when the browser offers no source, and for a tab this model
     /// opened until the browser has made it.
-    private let owner: TabOwner
+    private let ownerByTabsModel: TabOwner
     /// Asked for what only the browser knows; `nil` when the browser offers no source.
     private let attributionSource: TabAttributionSource?
 
@@ -71,10 +71,12 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// read: the one place the attribution source's answers meet the tabs model's own
     /// rule.
     public var attribution: TabAttribution {
-        guard let attributionSource else { return TabAttribution(owner: owner) }
+        guard let attributionSource else { return TabAttribution(owner: ownerByTabsModel) }
         // The browser answers by the ids it serves. A tab this model opened has none until
         // the browser makes it, so the browser has nothing to say about it yet.
-        guard session.effectiveTargetId != nil else { return TabAttribution(owner: owner, foreground: false) }
+        guard session.effectiveTargetId != nil else {
+            return TabAttribution(owner: ownerByTabsModel, foreground: false)
+        }
         return TabAttribution(
             owner: attributionSource.owner(of: id),
             foreground: attributionSource.foregroundTabId == id)
@@ -83,7 +85,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     init(
         session: CDPTabSession,
         tabType: String,
-        owner: TabOwner,
+        ownerByTabsModel: TabOwner,
         attributionSource: TabAttributionSource?,
         pacer: NavigationPacer? = nil
     ) {
@@ -97,7 +99,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         )
         self.snapshotting = CDPAgentDOMSnapshotting(service: domService)
         self.tabType = tabType
-        self.owner = owner
+        self.ownerByTabsModel = ownerByTabsModel
         self.attributionSource = attributionSource
         self.pacer = pacer
     }
@@ -643,7 +645,7 @@ public final class CDPTabsModel: TabsModel {
     }
 
     /// The route by which a tab entered this model: what ``admit(_:targetId:url:title:)``
-    /// decides the tab's ownership from.
+    /// decides the tabs model's own owner for the tab from.
     private enum TabOrigin {
         /// Opened through ``createTab(_:)``, as `manage_tabs open` does.
         case createdByTool(TabCreateSpec)
@@ -661,7 +663,9 @@ public final class CDPTabsModel: TabsModel {
     }
 
     /// The one way a tab enters this model. Every route builds its handle here, and the
-    /// tab's owner is decided here. `targetId`, `url` and `title` are whatever the route has
+    /// tabs model's own owner for the tab is decided here; with an attribution source, the
+    /// browser's answer replaces it whenever the handle's ``CDPTabHandle/attribution`` is
+    /// read. `targetId`, `url` and `title` are whatever the route has
     /// in hand: the provisional id and requested url of a tab opened through
     /// ``createTab(_:)``, or the browser's listing of a seeded or adopted target.
     private func admit(_ origin: TabOrigin, targetId: String, url: String, title: String?) -> CDPTabHandle {
@@ -693,7 +697,7 @@ public final class CDPTabsModel: TabsModel {
         let handle = CDPTabHandle(
             session: session,
             tabType: spec?.tabType ?? "website",
-            owner: owner,
+            ownerByTabsModel: owner,
             attributionSource: attributionSource,
             pacer: navigationPacer)
         register(handle)
@@ -824,7 +828,8 @@ public final class CDPTabsModel: TabsModel {
     ///   reads the address the agent asked for, never this one.
     /// - A listed tab the model does not track is adopted: a tab a `target=_blank` link or a
     ///   popup opened, or one the user opened. It goes through `admit`, so whose the tab is
-    ///   follows the rule for a seeded tab, and it joins the order at the end. A closed id is
+    ///   follows the rule for a seeded tab when the browser offers no attribution source,
+    ///   and it joins the order at the end. A closed id is
     ///   skipped because `Target.closeTarget` does not wait for the tab to go.
     /// - A tracked tab the listing does not name leaves (``forget(_:)``). A tab this model
     ///   opened whose browser tab does not exist yet has no real id the listing could name,
@@ -862,7 +867,7 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     /// id), with a navigable non-blank url. Each adopted target is bound to a
     /// handle over the EXISTING target (no new target is created) and registered
     /// as the tab of the chat this model was built for, or the user's when it was built
-    /// for none.
+    /// for none, when the browser offers no attribution source.
     public func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab] {
         guard let infos = await pageTargetInfos() else { return [] }
         var adopted: [AdoptedTab] = []
@@ -899,7 +904,8 @@ extension CDPTabsModel: BrowserTabSyncing {}
 
 extension CDPTabsModel: LivePageTargetAdopting {
     /// Whose the tab is follows the rule for a seeded tab, in `admit` (like
-    /// ``seedFromBrowser``, unlike ``adoptSpawnedTabs``).
+    /// ``seedFromBrowser``, unlike ``adoptSpawnedTabs``), when the browser offers no
+    /// attribution source.
     public func adoptLiveTarget(_ id: String) async -> TabHandle? {
         if let existing = resolveLocked(id) { return existing }
         if closedTargetIds.contains(id) { return nil }
