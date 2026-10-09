@@ -264,8 +264,8 @@ private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: Man
     if let wakeFailure = await ensureTabAwake(tab, ctx.abortSignal) { return wakeFailure }
 
     // The title after the load, not the one the tab was born with. The load wait writes
-    // it only on its polling leg, so a tab that finished via the lifecycle event reached
-    // here titleless and its row read "Untitled" — for example.com, every time.
+    // it only on its polling leg, so a tab that finished via the lifecycle event arrives
+    // here with no title.
     if let live = tabsModel as? BrowserTabSyncing { await live.syncTabsWithBrowser() }
 
     do {
@@ -445,7 +445,7 @@ func manageTabsOpenUserControlled(_ url: String, _ tabsWindow: TabsWindow, _ ctx
     // never sees. The open waits for the browser tab to EXIST: until then the handle has only
     // its provisional id, so a listing in that gap would adopt the same tab a second time, and
     // the row below would name an id `list` never shows. A failed creation is retried by the
-    // wake, as before. The wake's load is not awaited: a background tab is throttled, so
+    // wake. The wake's load is not awaited: a background tab is throttled, so
     // waiting it out would stall the open for the whole wake budget for a page the agent is
     // not going to read.
     try? await (tab as? CDPTabHandle)?.createInBrowser()

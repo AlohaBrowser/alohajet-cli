@@ -4,10 +4,9 @@ import ToolABI
 import CDP
 @testable import BrowserTools
 
-// The agent's view of open tabs (docs_baych `tab_attribution/agent_tab_view/DESIGN.md`,
-// section 10): at every listing the tabs model is the browser's list, with the browser's
-// values; the page-load wait expects only the page the agent asked for; and a blank tab is
-// shown only while it is in front or in use.
+// The agent's view of open tabs: at every listing the tabs model is the browser's list, with
+// the browser's values; the page-load wait expects only the page the agent asked for; and a
+// blank tab is shown only while it is in front or in use.
 
 @MainActor private final class FakeAttributionSource: TabAttributionSource {
     var foregroundTabId: String?
@@ -41,7 +40,7 @@ import CDP
     #expect(tabs.tab("B") == nil)
     #expect(tabs.activeTabId == nil)
     // The held handle fails on its own, before it asks the browser anything: on the desktop,
-    // a command under a closed tab's id was answered by the tab in front (run 1).
+    // a command under a closed tab's id is answered by the tab in front.
     let heldWake = try await held.wake(nil)
     #expect(!heldWake.ok)
     #expect(cdp.commands(for: "Target.attachToTarget").isEmpty)
@@ -109,7 +108,7 @@ import CDP
         Set((manageTabsList(window, nil, askingChat: "c").tabs ?? []).map(\.id))
     }
     // The list's first line: its count, which must never be smaller than the tab strip
-    // without saying why (R8: "1 tab(s) open" told to a user with three tabs).
+    // without saying why.
     func countLine() -> String {
         (manageTabsList(window, nil, askingChat: "c").output ?? "").components(separatedBy: "\n")[0]
     }
@@ -126,7 +125,7 @@ import CDP
     #expect(shown() == ["A", "C"])
     #expect(countLine() == "2 tab(s) open (1 empty tab not shown):")
 
-    // Nothing hidden: the count line is what it always was.
+    // Nothing hidden: the count line carries no note.
     source.foregroundTabId = "B"
     #expect(shown() == ["A", "B", "C"])
     #expect(countLine() == "3 tab(s) open:")
