@@ -54,11 +54,9 @@ public protocol ClickSpawnedTabAdopting: AnyObject {
     func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab]
 }
 
-/// Bringing the model into line with the live browser's listing: the listing's url and
-/// title for every tracked tab, each page target the model does not track yet adopted, and
-/// each tracked tab the listing no longer names dropped. Kept off ``TabsModel`` and probed
-/// with `as?`, like the seams around it: a model with no browser behind it has nothing to
-/// list.
+/// Bringing the model into line with the live browser's listing. Kept off ``TabsModel`` and
+/// probed with `as?`, like the seams around it: a model with no browser behind it has
+/// nothing to list.
 public protocol BrowserTabSyncing: AnyObject {
     /// Takes the listing's url and title for every tracked tab, adopts every listed page
     /// target the model does not track (except one it has just closed), and drops every
