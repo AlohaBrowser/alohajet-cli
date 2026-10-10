@@ -15,9 +15,8 @@ public protocol TabsModel: AnyObject {
     var activeTabId: String? { get }
     func setActiveTabId(_ id: String?)
     var tabsById: [String: TabHandle] { get }
-    /// The insertion-ordered tab handles (used by list + same-URL reuse).
+    /// The insertion-ordered tab handles.
     var orderedTabs: [TabHandle] { get }
-    func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle?
     func tab(_ id: String) -> TabHandle?
     func createTab(_ spec: TabCreateSpec) -> TabHandle
     func closeTab(_ id: String, skipConfirm: Bool) async
@@ -48,20 +47,22 @@ public protocol ClickSpawnedTabAdopting: AnyObject {
     /// Snapshots the live page target ids before an action, so the post-action
     /// diff can tell a genuinely-new target from one that already existed.
     func currentPageTargetIds() async -> Set<String>
-    /// Adopts each live page target not in `previous` (and not already tracked)
-    /// as an agent-controlled background tab, returning the adopted tabs. Already
+    /// Adopts each live page target not in `previous` (and not already tracked),
+    /// returning the adopted tabs. Already
     /// known / previously-seen targets are skipped, so a repeated identical click
     /// adopts nothing.
     func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab]
 }
 
-/// Refreshing the cached per-tab metadata (url and title) from the live browser. Kept
-/// off ``TabsModel`` and probed with `as?`, like the seams around it: a model with no
-/// browser behind it has nothing to refresh from.
-public protocol LiveTabMetadataRefreshing: AnyObject {
-    /// Re-reads url and title for every tracked tab. One call for the whole window, so a
-    /// list or a read pays one round-trip rather than one per tab.
-    func refreshTabMetadata() async
+/// Bringing the model into line with the live browser's listing. Kept off ``TabsModel`` and
+/// probed with `as?`, like the seams around it: a model with no browser behind it has
+/// nothing to list.
+public protocol BrowserTabSyncing: AnyObject {
+    /// Takes the listing's url and title for every tracked tab, adopts every listed page
+    /// target the model does not track (except one it has just closed), and drops every
+    /// tracked tab the listing leaves out. One call for the whole window, so a list or a
+    /// read pays one round-trip rather than one per tab.
+    func syncTabsWithBrowser() async
 }
 
 /// Addressing a live page target the model never saw. Kept off ``TabsModel`` and
@@ -88,23 +89,15 @@ public protocol PageReadRemediating: AnyObject {
     func remediateAfterRead(_ signal: AbortSignal?) async -> Bool
 }
 
-public protocol TabHandle: AgentControllableTab {
+public protocol TabHandle: AnyObject, Sendable {
     var id: String { get }
     var title: String? { get }
     var url: String { get }
-    /// Whether this tab belongs to the user rather than the agent: it was already
-    /// open when the session attached, or restored/adopted as a live browser
-    /// target. `false` only for tabs this session opened itself. `manage_tabs
-    /// close` refuses a tab whose value is `true`.
-    ///
-    /// This replaced an `isPinned` flag: pinning is a browser-UI concept the
-    /// DevTools protocol does not expose (`Target.TargetInfo` has no such field),
-    /// so every CDP-backed tab reported `false` and the close guard that tested it
-    /// never fired once.
-    var openedByHuman: Bool { get }
+    /// Whose the tab is and whether it is the foreground tab. A required member, not a
+    /// capability probed with `as?`: every tab has an attribution.
+    var attribution: TabAttribution { get }
     var tabType: String { get }
     var faviconUrl: String? { get }
-    var userTookOver: Bool { get }
     var agentDOM: AgentDOMSnapshotting? { get }
     /// Wakes the tab: ensures a website tab is loaded with live web contents
     /// before snapshotting; non-website tabs are always ready.
@@ -129,16 +122,69 @@ public nonisolated struct TabViewportBounds: Sendable {
 public nonisolated struct TabCreateSpec: Sendable {
     public var tabType: String
     public var url: String
-    public var openedByHuman: Bool
-    public var agentControllerId: String?
-    public var sessionId: String?
-    public init(tabType: String, url: String, openedByHuman: Bool, agentControllerId: String? = nil, sessionId: String? = nil) {
+    /// Whose the new tab is: the chat that opens it to work in, or the user's for a tab
+    /// opened for the user (`controlled_by: "user"`).
+    public var owner: TabOwner
+    public init(tabType: String, url: String, owner: TabOwner) {
         self.tabType = tabType
         self.url = url
-        self.openedByHuman = openedByHuman
-        self.agentControllerId = agentControllerId
-        self.sessionId = sessionId
+        self.owner = owner
     }
+}
+
+// MARK: - Attribution
+
+/// Whose a tab is: the user's, or one chat's. A tab has exactly one owner.
+public nonisolated enum TabOwner: Sendable, Equatable {
+    case user
+    /// The chat's id, the one the tools receive as `sessionId`.
+    case chat(String)
+}
+
+/// A tab's owner and whether it is the foreground tab: the two facts the browser owns
+/// that the agent reads. Which tab is in use is not part of it: that is the agent's own
+/// state, kept on the agent's side.
+///
+/// What a chat may do with the tab, and how it is told whose the tab is, are worked out
+/// from the value and the asking chat's id when a close is decided or a tab is described;
+/// never stored.
+public nonisolated struct TabAttribution: Sendable, Equatable {
+    public var owner: TabOwner
+    /// Whether the tab is the one shown in the browser window now; `nil` when the
+    /// browser does not say.
+    public var foreground: Bool?
+
+    public init(owner: TabOwner, foreground: Bool? = nil) {
+        self.owner = owner
+        self.foreground = foreground
+    }
+
+    /// Whether the asking chat may close the tab: only a tab its own chat owns. Reads the
+    /// owner alone.
+    public func mayClose(askingChat: String) -> Bool {
+        owner == .chat(askingChat)
+    }
+}
+
+/// The one object through which the browser tells the tabs model what only the browser
+/// knows about its tabs, and the tabs model tells the browser that a tab it opened is its
+/// chat's. Inside Aloha Desktop the desktop implements it and hands it to the chat runner.
+/// A browser with none (Chrome, and programs that drive the desktop from outside its app)
+/// leaves the tabs model to its own rule, and the foreground unknown.
+///
+/// Only the tabs model asks it, and it asks at the moment it needs an answer, so nothing it
+/// says is copied anywhere to go stale.
+@MainActor
+public protocol TabAttributionSource: AnyObject {
+    /// The id of the tab shown in the browser window now; `nil` when it shows none.
+    var foregroundTabId: String? { get }
+    /// Whose the tab is, as the browser knows it now: the chat it recorded for the tab, or
+    /// the user when it recorded none.
+    func owner(of tabId: String) -> TabOwner
+    /// Tells the browser that the tab the tabs model has just opened for the chat to work
+    /// in is that chat's. Called once per such tab, as soon as the browser has returned the
+    /// tab's id; never for a tab opened for the user, which stays the user's.
+    func attribute(_ tabId: String, to chatId: String)
 }
 
 /// The legacy/non-interactive tab read context.

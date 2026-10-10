@@ -86,8 +86,7 @@ public struct ToolResultFormatContext: Sendable {
     /// and stripping that suffix is what finds the owning chat loop. Empty by default:
     /// nothing in this package routes feedback, so the field is carried, not read.
     public var sessionKey: String
-    /// The chat session this call belongs to, when there is one — the same id a tab is
-    /// stamped with (``AgentControllableTab/chatSessionId``). `nil` off a chat.
+    /// The chat session this call belongs to, when there is one. `nil` off a chat.
     public var chatSessionId: String?
     public var toolCallId: String
     public init(sessionId: String, sessionKey: String = "", chatSessionId: String? = nil, toolCallId: String) {

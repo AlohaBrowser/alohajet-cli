@@ -147,6 +147,12 @@ final class MockCDP {
         targets[id] = FakeTarget(targetId: id, url: url, title: title, type: type)
     }
 
+    /// Drops a target from `Target.getTargets`, as the browser does when the user closes
+    /// its tab.
+    func removeTarget(id: String) {
+        targets.removeValue(forKey: id)
+    }
+
     // MARK: Channel
 
     /// A ``CDPMessageChannel`` view of this fake browser to hand `CDPClient`.

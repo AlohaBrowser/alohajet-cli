@@ -100,7 +100,7 @@ import ToolABI
         ], context)
 
         let opened = try #require(model.orderedTabs.last)
-        #expect(!opened.openedByHuman)
+        #expect(opened.attribution.owner != .user)
         #expect(session.active == nil)
         #expect(manageTabsLegacyWireHits["focus", default: 0] == before["focus", default: 0] + 1)
     }
@@ -116,8 +116,7 @@ import ToolABI
         ], context)
 
         let opened = try #require(model.orderedTabs.last)
-        #expect(opened.openedByHuman)
-        #expect(opened.browserAgentControlledAgentId == nil)
+        #expect(opened.attribution.owner == .user)
         // Never taken into use, even though `use` defaults to true.
         #expect(session.active == nil)
         #expect(result.output.contains("This tab is the user's"))
@@ -134,7 +133,7 @@ import ToolABI
         let closed = try await call(["action": .string("close"), "tab_id": .string(openedId)], context)
 
         #expect(closed.isError == true)
-        #expect(closed.output.contains("the user's tab"))
+        #expect(closed.output.contains("it is the user's tab, not yours"))
         #expect(model.tab(openedId) != nil)
     }
 
@@ -144,7 +143,7 @@ import ToolABI
         _ = try await call(["action": .string("open"), "url": .string("https://example.com/")], context)
 
         let opened = try #require(model.orderedTabs.last)
-        #expect(!opened.openedByHuman)
+        #expect(opened.attribution.owner != .user)
         #expect(session.active == opened.id)
     }
 

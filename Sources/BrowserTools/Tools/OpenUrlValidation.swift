@@ -27,6 +27,12 @@ public let urlCredentialsReason = "URL not allowed: URLs containing 'user:passwo
 
 public let urlMalformedReason = "URL not allowed: malformed or oversized URL."
 
+/// The address of a blank tab: a new tab before its first page, and the desktop's start page.
+let blankTabUrl = "about:blank"
+
+/// Why the tab gate refuses a blank tab: it has no page, which is no malformed address.
+public let urlBlankTabReason = "This tab is blank (about:blank): it has no page, so there is nothing to read."
+
 public enum OpenUrlValidation: Equatable, Sendable {
     case ok(normalized: String)
     case rejected(reason: String)
@@ -56,8 +62,11 @@ public func validateOpenUrl(_ value: String?) -> OpenUrlValidation {
     return .ok(normalized: parsed.href)
 }
 
+/// The gate `manage_tabs read` and `use` and the page tools run on the tab's own address: the
+/// open gate's rules, except that a blank tab is refused as blank.
 public func validateTabUrl(_ tab: TabUrlInput) -> OpenUrlValidation {
-    validateOpenUrl(tab.url)
+    if tab.url == blankTabUrl { return .rejected(reason: urlBlankTabReason) }
+    return validateOpenUrl(tab.url)
 }
 
 public struct TabUrlInput: Equatable, Sendable {

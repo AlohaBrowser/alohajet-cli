@@ -14,28 +14,21 @@ import CDP
 // every one of the seven tools shares (`resolveActivePageTab` in
 // `PageToolsSupport.swift`) without needing a live CDP connection.
 
-final class PageToolsStubTabHandle: TabHandle {
+@MainActor final class PageToolsStubTabHandle: TabHandle {
     let id: String
     var title: String?
     var url: String
-    var openedByHuman: Bool
+    var attribution: TabAttribution
     var tabType: String
     var faviconUrl: String?
-    var userTookOver: Bool
 
-    private var _chatSessionId: String?
-    private var _aiControlled = false
-    private var _browserControlled = false
-    private var _agentId: String?
-
-    init(id: String, url: String, title: String? = nil, tabType: String = "website", openedByHuman: Bool = false) {
+    init(id: String, url: String, title: String? = nil, tabType: String = "website", owner: TabOwner = .chat("test-session")) {
         self.id = id
         self.url = url
         self.title = title
         self.tabType = tabType
-        self.openedByHuman = openedByHuman
+        self.attribution = TabAttribution(owner: owner)
         self.faviconUrl = nil
-        self.userTookOver = false
     }
 
     var agentDOM: AgentDOMSnapshotting? { nil }
@@ -47,19 +40,6 @@ final class PageToolsStubTabHandle: TabHandle {
     }
     func viewportBounds() -> TabViewportBounds? { nil }
     func startNetworkRecording(logPath: String) {}
-
-    var browserAgentControlledAgentId: String? { _agentId }
-    var chatSessionId: String? {
-        get { _chatSessionId }
-        set { _chatSessionId = newValue }
-    }
-    var isAIControlledTab: Bool { _aiControlled }
-    var isBrowserAgentControlled: Bool { _browserControlled }
-    func setAIControlledTab(_ controlled: Bool, agentId: String?) {
-        _aiControlled = controlled
-        _browserControlled = !controlled
-        _agentId = agentId
-    }
 }
 
 final class PageToolsStubTabsModel: TabsModel, LivePageTargetAdopting {
@@ -92,13 +72,12 @@ final class PageToolsStubTabsModel: TabsModel, LivePageTargetAdopting {
     func setActiveTabId(_ id: String?) { _activeTabId = id }
     var tabsById: [String: TabHandle] { handles }
     var orderedTabs: [TabHandle] { order.compactMap { handles[$0] } }
-    func getOrRestoreTab(_ id: String, restoreIfNeeded: Bool) -> TabHandle? { handles[id] }
     func tab(_ id: String) -> TabHandle? { handles[id] }
 
     func createTab(_ spec: TabCreateSpec) -> TabHandle {
         let handle = PageToolsStubTabHandle(
             id: "stub-\(handles.count)", url: spec.url, tabType: spec.tabType,
-            openedByHuman: spec.openedByHuman)
+            owner: spec.owner)
         handles[handle.id] = handle
         order.append(handle.id)
         return handle
@@ -229,7 +208,7 @@ func makePageToolsCDPFixture(url: String = "https://example.com") async throws -
     try await client.connect()
     let tabsService = await makeCDPBrowserTabsService(client: client, seed: false)
     let tabs = try #require(tabsService.window).tabs
-    let tab = tabs.createTab(TabCreateSpec(tabType: "website", url: url, openedByHuman: false))
+    let tab = tabs.createTab(TabCreateSpec(tabType: "website", url: url, owner: .chat("test-session")))
     tabs.setActiveTabId(tab.id)
     return PageToolsCDPFixture(cdp: cdp, client: client, tabsService: tabsService, tabId: tab.id)
 }
