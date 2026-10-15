@@ -312,4 +312,95 @@ import CDP
         #expect(live?.attribution.owner == .user)
     }
 
+    enum PartialConsumer: CaseIterable, Sendable {
+        case none, missingLookup, liveAdmission, noPopup, seed
+    }
+
+    // A partial consumer can observe the same removal without applying it. Full
+    // reconciliation must still finish, even when that consumer's reply is newer.
+    @Test(arguments: PartialConsumer.allCases)
+    func partialAdmissionDoesNotCancelFullRemoval(consumer: PartialConsumer) async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "closed", url: "https://example.com/closed")
+        cdp.addTarget(id: "survivor", url: "https://example.com/survivor")
+        let model = try await model(cdp, seed: consumer != .seed)
+        if consumer == .seed { await model.syncTabsWithBrowser() }
+        let closed = try #require(model.tab("closed") as? CDPTabHandle)
+        let survivor = try #require(model.tab("survivor"))
+        let before = await model.currentPageTargetIds()
+        model.setActiveTabId("closed")
+        cdp.removeTarget(id: "closed")
+        cdp.holdNextMethod = "Target.getTargets"
+        let listing = Task { await model.syncTabsWithBrowser() }
+        try await held(cdp)
+        switch consumer {
+        case .missingLookup:
+            #expect(await model.adoptLiveTarget("missing") == nil)
+        case .liveAdmission:
+            cdp.addTarget(id: "new-live", url: "https://example.com/new")
+            #expect(await model.adoptLiveTarget("new-live") != nil)
+        case .noPopup:
+            #expect(await model.adoptSpawnedTabs(notIn: before).isEmpty)
+        case .seed:
+            await model.seedFromBrowser()
+        case .none: break // Uncontended response control.
+        }
+        let admitted = model.tab("new-live")
+        cdp.releaseHeldReply()
+        await listing.value
+        #expect(model.tab("closed") == nil)
+        #expect(closed.session.isDestroyed)
+        #expect(model.activeTabId == nil)
+        #expect(model.tab("survivor") === survivor)
+        if consumer == .liveAdmission { #expect(model.tab("new-live") === admitted) }
+        #expect(model.orderedTabs.count == (consumer == .liveAdmission ? 2 : 1))
+        #expect(cdp.commands(for: "Target.getTargets").count == (consumer == .none ? 3 : 5))
+        // A subsequent uncontended reconciliation preserves the same identities.
+        await model.syncTabsWithBrowser()
+        #expect(model.tab("closed") == nil)
+        #expect(model.tab("survivor") === survivor)
+        if consumer == .liveAdmission { #expect(model.tab("new-live") === admitted) }
+    }
+
+    @Test(arguments: [false, true])
+    func fullRemovalRefreshesAgainWhenPartialReadSupersedesRetry(createDuringRetry: Bool) async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "closed", url: "https://example.com/closed")
+        cdp.addTarget(id: "survivor", url: "https://example.com/old")
+        let model = try await model(cdp)
+        let closed = try #require(model.tab("closed") as? CDPTabHandle)
+        let survivor = try #require(model.tab("survivor"))
+        model.setActiveTabId("closed")
+        cdp.removeTarget(id: "closed")
+        cdp.holdNextMethod = "Target.getTargets"
+        let listing = Task { await model.syncTabsWithBrowser() }
+        try await held(cdp)
+        #expect(await model.adoptLiveTarget("missing") == nil)
+        cdp.holdNextMethod = "Target.getTargets"
+        cdp.releaseHeldReply()
+        try await held(cdp) // The full sync's refresh is also delayed.
+        cdp.addTarget(id: "survivor", url: "https://example.com/new", title: "New")
+        #expect(await model.adoptSpawnedTabs(notIn: ["survivor"]).isEmpty)
+        // Creation during the retry must retain its original handle and ownership.
+        let created = createDuringRetry ? try open(model) : nil
+        let provisional = created?.id
+        try await created?.createInBrowser()
+        cdp.releaseHeldReply()
+        await listing.value
+        #expect(model.tab("closed") == nil)
+        #expect(closed.session.isDestroyed)
+        #expect(model.activeTabId == nil)
+        #expect(model.tab("survivor") === survivor)
+        #expect(survivor.url == "https://example.com/new")
+        #expect(survivor.title == "New")
+        if let created, let provisional {
+            #expect(model.tab(provisional) === created)
+            #expect(model.tab(created.id) === created)
+            #expect(!created.session.isDestroyed)
+            #expect(created.attribution.owner == .chat("chat-A"))
+        }
+        #expect(Set(model.orderedTabs.map(\.id)).count == (createDuringRetry ? 2 : 1))
+        #expect(cdp.commands(for: "Target.getTargets").count == 6)
+    }
+
 }

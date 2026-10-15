@@ -876,7 +876,11 @@ public final class CDPTabsModel: TabsModel {
     public func syncTabsWithBrowser() async {
         // An older reply cannot remove handles admitted while its request was in flight.
         let candidates = tabs.values.filter { $0.session.effectiveTargetId != nil }
-        guard let snapshot = await pageTargetInfos(), accept(snapshot) else { return }
+        // A newer partial consumer (seed, live lookup or popup adoption) advances
+        // freshness without reconciling removals. Refresh a superseded full sync
+        // so its removal work still completes, using current metadata and the
+        // original candidates to protect handles admitted during the request.
+        guard let snapshot = await pageTargetInfos(refreshIfSuperseded: true), accept(snapshot) else { return }
         var listed: Set<String> = []
         for info in snapshot.infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
@@ -961,8 +965,8 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
             guard let result = try? await client.send(method: "Target.getTargets", params: [:]),
                   let infos = result["targetInfos"]?.arrayValue else { return nil }
             if epoch != creationEpoch { continue }
-            // Click provenance can still be valid when a newer listing won the race.
-            // Refresh rather than lose a live popup's result or revive a removed one.
+            // A superseded consumer may still owe removal reconciliation or a
+            // click result. Refresh rather than drop that work or apply stale data.
             if refreshIfSuperseded && sequence < appliedTargetSequence { continue }
             return PageTargetSnapshot(sequence: sequence, infos: infos.filter { $0["type"]?.stringValue == "page" })
         }
