@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Dispatch
 @testable import CDP
 import ToolABI
 
@@ -96,4 +97,81 @@ import ToolABI
             "process must remain reaped after a repeated terminate()"
         )
     }
+    #if os(macOS) || os(Linux)
+    @Test func terminateWaitsForProfileWriterAfterBrowserLeaderExits() throws {
+        let sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alohajet-helper-teardown-\(UUID().uuidString)")
+        let profile = sandbox.appendingPathComponent("profile")
+        let ready = sandbox.appendingPathComponent("ready")
+        let release = sandbox.appendingPathComponent("release")
+        let wrote = sandbox.appendingPathComponent("wrote")
+        let leaderExit = sandbox.appendingPathComponent("leader-exit")
+        try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sandbox) }
+
+        // A real descendant remains in the browser's private process group after
+        // its leader exits. It can still write (and recreate) the profile until
+        // released, just like Chrome's utility processes during shutdown.
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", """
+            trap '' TERM INT
+            /bin/sh -c '
+                trap "" TERM INT
+                touch "$1"
+                while [ ! -f "$2" ]; do sleep 0.01; done
+                mkdir -p "$3"
+                echo late > "$3/late-write"
+                touch "$4"
+            ' helper "$1" "$2" "$3" "$4" &
+            while [ ! -f "$5" ]; do sleep 0.01; done
+            """, "browser", ready.path, release.path, profile.path, wrote.path, leaderExit.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let handle = ChromeLauncher.Handle(process: process, port: 0, userDataDir: profile, ownsUserDataDir: true)
+        // Always release the helper, even when a precondition/assertion fails.
+        defer {
+            _ = FileManager.default.createFile(atPath: leaderExit.path, contents: nil)
+            _ = FileManager.default.createFile(atPath: release.path, contents: nil)
+            handle.terminate()
+        }
+        func waitFor(_ predicate: () -> Bool) -> Bool {
+            let deadline = Date().addingTimeInterval(5)
+            while !predicate() && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            return predicate()
+        }
+        try #require(waitFor { FileManager.default.fileExists(atPath: ready.path) })
+        // Release the leader explicitly: the regression concerns descendant
+        // lifetime after leader exit, independently of inherited signal masks.
+        _ = FileManager.default.createFile(atPath: leaderExit.path, contents: nil)
+        try #require(waitFor {
+            if !process.isRunning { return true }
+            #if os(Linux)
+            // Corelibs keeps isRunning true for a zombie leader until its group
+            // exits. Confirm actual leader exit without releasing the helper.
+            let status = try? String(contentsOfFile: "/proc/\(process.processIdentifier)/status", encoding: .utf8)
+            return status?.split(separator: "\n").first { $0.hasPrefix("State:") }?.contains("Z") == true
+            #else
+            return false
+            #endif
+        })
+        let completed = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            handle.terminate()
+            completed.signal()
+        }
+        let earlyCompletion = completed.wait(timeout: .now() + 0.1)
+        #expect(earlyCompletion == .timedOut, "teardown must await the live profile writer, not just its exited leader")
+        #expect(FileManager.default.fileExists(atPath: profile.path), "profile removal must follow helper exit")
+        _ = FileManager.default.createFile(atPath: release.path, contents: nil)
+        if earlyCompletion == .timedOut {
+            try #require(completed.wait(timeout: .now() + 5) == .success)
+        }
+        #expect(waitFor { FileManager.default.fileExists(atPath: wrote.path) }, "control: the helper actually wrote after the leader exited")
+        #expect(!FileManager.default.fileExists(atPath: profile.path), "the late profile write must also be cleaned up")
+        #expect(!process.isRunning)
+    }
+    #endif
+
 }
