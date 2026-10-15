@@ -221,10 +221,27 @@ final class MockCDP {
 
     // MARK: Request handling (called by the channel)
 
-    /// Handles one inbound JSON-RPC frame, returning the reply frame(s) to send
-    /// back. A command (`id` present) yields a single response; anything else is
-    /// dropped.
+    /// Hold a reply AFTER applying its browser-side effects, to control response order.
+    var holdNextMethod: String?
+    private(set) var heldReplies: [[String]] = []
+
+    func releaseHeldReply(at index: Int = 0) {
+        let replies = heldReplies.remove(at: index)
+        for reply in replies { eventSink?(reply) }
+    }
+
+    /// Handles one inbound JSON-RPC frame, returning its reply unless held by the test.
     func handle(frame: String) -> [String] {
+        let replies = makeReplies(frame: frame)
+        if let method = JSValue.parse(frame)?["method"]?.stringValue, method == holdNextMethod {
+            holdNextMethod = nil
+            heldReplies.append(replies)
+            return []
+        }
+        return replies
+    }
+
+    private func makeReplies(frame: String) -> [String] {
         guard case .object = JSValue.parse(frame), let message = JSValue.parse(frame) else { return [] }
         guard let id = message["id"]?.intValue, let method = message["method"]?.stringValue else { return [] }
         let params = message["params"] ?? .object([])

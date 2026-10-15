@@ -47,10 +47,10 @@ public protocol ClickSpawnedTabAdopting: AnyObject {
     /// Snapshots the live page target ids before an action, so the post-action
     /// diff can tell a genuinely-new target from one that already existed.
     func currentPageTargetIds() async -> Set<String>
-    /// Adopts each live page target not in `previous` (and not already tracked),
-    /// returning the adopted tabs. Already
-    /// known / previously-seen targets are skipped, so a repeated identical click
-    /// adopts nothing.
+    /// Adopts each live page target not in `previous`, returning the adopted tabs.
+    /// A target discovered by an overlapping browser sync may already have a handle;
+    /// it still belongs in this result. Targets already recognized by an earlier
+    /// adoption are skipped, so repeating the same adoption returns nothing.
     func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab]
 }
 
@@ -60,8 +60,9 @@ public protocol ClickSpawnedTabAdopting: AnyObject {
 public protocol BrowserTabSyncing: AnyObject {
     /// Takes the listing's url and title for every tracked tab, adopts every listed page
     /// target the model does not track (except one it has just closed), and drops every
-    /// tracked tab the listing leaves out. One call for the whole window, so a list or a
-    /// read pays one round-trip rather than one per tab.
+    /// tracked tab the listing leaves out, except those created or admitted while the
+    /// request was in flight. Reads the whole window rather than one target at a time;
+    /// an implementation may retry a snapshot that overlaps unresolved creation.
     func syncTabsWithBrowser() async
 }
 

@@ -60,10 +60,11 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     public let tabType: String
     private var networkRecorder: NetworkRecorder?
     private var cachedViewportBounds: TabViewportBounds?
-    /// Whose this tab is by the tabs model's own rule, decided once by its one entry
-    /// function. It stands when the browser offers no source, and for a tab this model
-    /// opened until the browser has made it.
-    private let ownerByTabsModel: TabOwner
+    /// Whose this tab is by the tabs model's own rule, initially decided by its entry
+    /// function and refined when a listing discovery is recognized after a click. It stands
+    /// when the browser offers no source, and for a tab this model opened until the
+    /// browser has made it.
+    private var ownerByTabsModel: TabOwner
     /// Asked for what only the browser knows; `nil` when the browser offers no source.
     private let attributionSource: TabAttributionSource?
 
@@ -103,6 +104,9 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         self.attributionSource = attributionSource
         self.pacer = pacer
     }
+
+    /// Refines fallback provenance after a click; the browser source still wins.
+    fileprivate func noteAdoptedAfterClick(owner: TabOwner) { ownerByTabsModel = owner }
 
     // MARK: TabHandle identity
 
@@ -594,6 +598,23 @@ public final class CDPTabsModel: TabsModel {
     private var order: [String] = []
     private var _activeTabId: String?
     private var seeded = false
+    private var creationsInFlight = 0
+    private var creationEpoch = 0
+    private var creationWaiters: [CheckedContinuation<Void, Never>] = []
+    private var syncSequence = 0
+    private var appliedSyncSequence = 0
+    /// Only listing discoveries may later be recognized as the result of a click.
+    private var listingDiscoveries: Set<String> = []
+
+    private func creationStateChanged(_ started: Bool) {
+        creationEpoch += 1
+        creationsInFlight += started ? 1 : -1
+        if creationsInFlight == 0 {
+            let waiters = creationWaiters
+            creationWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
+        }
+    }
 
     /// Ids ``closeTab`` closed. `Target.closeTarget` is fire-and-forget, so a browser
     /// that still lists a closed target must not let ``adoptLiveTarget`` or a listing
@@ -693,7 +714,9 @@ public final class CDPTabsModel: TabsModel {
         }
         let session = CDPTabSession(
             client: client, targetId: targetId, sessionId: nil, url: url, title: title,
-            createOnAttach: spec != nil, onCreatedInBrowser: attributeToChat)
+            createOnAttach: spec != nil,
+            creationStateChanged: { [weak self] in self?.creationStateChanged($0) },
+            onCreatedInBrowser: attributeToChat)
         let handle = CDPTabHandle(
             session: session,
             tabType: spec?.tabType ?? "website",
@@ -701,6 +724,7 @@ public final class CDPTabsModel: TabsModel {
             attributionSource: attributionSource,
             pacer: navigationPacer)
         register(handle)
+        if case .foundInListing = origin { listingDiscoveries.insert(targetId) }
         return handle
     }
 
@@ -767,6 +791,7 @@ public final class CDPTabsModel: TabsModel {
     @discardableResult
     private func forget(_ handle: CDPTabHandle) -> String {
         let registeredId = tabs.first { $0.value === handle }?.key ?? handle.id
+        listingDiscoveries.remove(handle.id)
         tabs.removeValue(forKey: registeredId)
         order.removeAll { $0 == registeredId }
         if _activeTabId == registeredId || _activeTabId == handle.id { _activeTabId = nil }
@@ -815,6 +840,7 @@ public final class CDPTabsModel: TabsModel {
         guard let infos = await pageTargetInfos() else { return }
         for info in infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
+            guard resolveLocked(targetId) == nil, !closedTargetIds.contains(targetId) else { continue }
             _ = admit(.seeded, targetId: targetId, url: info["url"]?.stringValue ?? "", title: info["title"]?.stringValue)
         }
     }
@@ -831,11 +857,16 @@ public final class CDPTabsModel: TabsModel {
     ///   follows the rule for a seeded tab when the browser offers no attribution source,
     ///   and it joins the order at the end. A closed id is
     ///   skipped because `Target.closeTarget` does not wait for the tab to go.
-    /// - A tracked tab the listing does not name leaves (``forget(_:)``). A tab this model
-    ///   opened whose browser tab does not exist yet has no real id the listing could name,
-    ///   and stays.
+    /// - A tracked tab present before the request that the listing does not name leaves
+    ///   (``forget(_:)``). Creation identities are settled before a snapshot is applied;
+    ///   a tab created or admitted during the request cannot be removed by that snapshot.
     public func syncTabsWithBrowser() async {
-        guard let infos = await pageTargetInfos() else { return }
+        syncSequence += 1
+        let sequence = syncSequence
+        // An older reply cannot remove handles admitted while its request was in flight.
+        let candidates = tabs.values.filter { $0.session.effectiveTargetId != nil }
+        guard let infos = await pageTargetInfos(), sequence > appliedSyncSequence else { return }
+        appliedSyncSequence = sequence
         var listed: Set<String> = []
         for info in infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
@@ -849,7 +880,7 @@ public final class CDPTabsModel: TabsModel {
                 _ = admit(.foundInListing, targetId: targetId, url: url, title: title)
             }
         }
-        let gone = tabs.values.filter { handle in
+        let gone = candidates.filter { handle in
             guard let realId = handle.session.effectiveTargetId else { return false }
             return !listed.contains(realId)
         }
@@ -863,8 +894,9 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     }
 
     /// Re-reads the browser's page targets and adopts each one that is genuinely
-    /// new: not in `previous`, not already tracked (by registered or real target
-    /// id), with a navigable non-blank url. Each adopted target is bound to a
+    /// new: not in `previous`, with a navigable non-blank url. A target discovered by
+    /// an overlapping listing keeps its handle and is still reported once here.
+    /// Each otherwise untracked target is bound to a
     /// handle over the EXISTING target (no new target is created) and registered
     /// as the tab of the chat this model was built for, or the user's when it was built
     /// for none, when the browser offers no attribution source.
@@ -874,12 +906,23 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
         for info in infos {
             guard let targetId = info["targetId"]?.stringValue, !targetId.isEmpty else { continue }
             if previous.contains(targetId) { continue }
-            if resolveLocked(targetId) != nil { continue }
+            if closedTargetIds.contains(targetId) { continue }
+            let existing = resolveLocked(targetId)
+            if existing != nil && !listingDiscoveries.contains(targetId) { continue }
             let url = info["url"]?.stringValue ?? ""
             let trimmedUrl = url.trimmingCharacters(in: .whitespaces)
             if trimmedUrl.isEmpty || trimmedUrl == "about:blank" { continue }
             if case .rejected = validateOpenUrl(url) { continue }
-            let handle = admit(.adoptedAfterClick, targetId: targetId, url: url, title: info["title"]?.stringValue)
+            let handle: CDPTabHandle
+            if let existing {
+                handle = existing
+                handle.session.url = url
+                handle.session.title = info["title"]?.stringValue
+                handle.noteAdoptedAfterClick(owner: ownChatOrUser)
+                listingDiscoveries.remove(targetId)
+            } else {
+                handle = admit(.adoptedAfterClick, targetId: targetId, url: url, title: info["title"]?.stringValue)
+            }
             adopted.append(AdoptedTab(id: handle.id, url: handle.url, title: handle.title))
         }
         return adopted
@@ -894,9 +937,19 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     /// or `nil` when the call fails (so a transport error is not mistaken for "no
     /// tabs spawned").
     private func pageTargetInfos() async -> [JSValue]? {
-        guard let result = try? await client.send(method: "Target.getTargets", params: [:]),
-              let infos = result["targetInfos"]?.arrayValue else { return nil }
-        return infos.filter { $0["type"]?.stringValue == "page" }
+        // A target can be visible before createTarget returns its id. Wait for those
+        // identities before listing; if creation overlaps the request, take a fresh
+        // snapshot. Failure also releases the barrier, so unrelated targets stay usable.
+        while true {
+            while creationsInFlight > 0 {
+                await withCheckedContinuation { creationWaiters.append($0) }
+            }
+            let epoch = creationEpoch
+            guard let result = try? await client.send(method: "Target.getTargets", params: [:]),
+                  let infos = result["targetInfos"]?.arrayValue else { return nil }
+            if epoch != creationEpoch { continue }
+            return infos.filter { $0["type"]?.stringValue == "page" }
+        }
     }
 }
 
@@ -912,6 +965,8 @@ extension CDPTabsModel: LivePageTargetAdopting {
         guard let infos = await pageTargetInfos(),
               let info = infos.first(where: { $0["targetId"]?.stringValue == id })
         else { return nil }
+        if let existing = resolveLocked(id) { return existing }
+        if closedTargetIds.contains(id) { return nil }
         return admit(.adoptedLive, targetId: id, url: info["url"]?.stringValue ?? "", title: info["title"]?.stringValue)
     }
 }
