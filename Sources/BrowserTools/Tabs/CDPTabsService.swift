@@ -982,12 +982,21 @@ extension CDPTabsModel: LivePageTargetAdopting {
     public func adoptLiveTarget(_ id: String) async -> TabHandle? {
         if let existing = resolveLocked(id) { return existing }
         if closedTargetIds.contains(id) { return nil }
-        guard let snapshot = await pageTargetInfos(), accept(snapshot),
-              let info = snapshot.infos.first(where: { $0["targetId"]?.stringValue == id })
-        else { return nil }
-        if let existing = resolveLocked(id) { return existing }
-        if closedTargetIds.contains(id) { return nil }
-        return admit(.adoptedLive, targetId: id, url: info["url"]?.stringValue ?? "", title: info["title"]?.stringValue)
+        while true {
+            let snapshot = await pageTargetInfos()
+            // A newer lookup or full sync may have registered this target while
+            // we waited. Return its stable handle even if our read failed or is
+            // obsolete; a concurrent close must still prevent re-admission.
+            if let existing = resolveLocked(id) { return existing }
+            if closedTargetIds.contains(id) { return nil }
+            guard let snapshot else { return nil }
+            // A newer partial lookup can advance freshness without registering
+            // this id. Preserve our lookup work with a fresh read, never by
+            // admitting from the obsolete snapshot (which may predate removal).
+            guard accept(snapshot) else { continue }
+            guard let info = snapshot.infos.first(where: { $0["targetId"]?.stringValue == id }) else { return nil }
+            return admit(.adoptedLive, targetId: id, url: info["url"]?.stringValue ?? "", title: info["title"]?.stringValue)
+        }
     }
 }
 

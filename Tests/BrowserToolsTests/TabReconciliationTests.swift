@@ -58,6 +58,120 @@ import CDP
         try #require(model.createTab(.init(tabType: "website", url: "https://example.com", owner: .chat("chat-A"))) as? CDPTabHandle)
     }
 
+    @Test(arguments: [false, true], ["none", "missing", "live", "sync"])
+    func supersededLiveLookupPreservesLiveTarget(removeTarget: Bool, consumer: String) async throws {
+        let cdp = MockCDP()
+        let source = ReconciliationSource()
+        source.owners["live"] = .chat("chat-B")
+        let model = try await model(cdp, source: source)
+        cdp.addTarget(id: "live", url: "https://example.com/old")
+        cdp.holdNextMethod = "Target.getTargets"
+        let lookup = Task { await model.adoptLiveTarget("live") }
+        try await held(cdp)
+        if removeTarget {
+            cdp.removeTarget(id: "live")
+        } else {
+            cdp.addTarget(id: "live", url: "https://example.com/current")
+        }
+        var registered: TabHandle?
+        if consumer == "sync" {
+            await model.syncTabsWithBrowser()
+            registered = model.tab("live")
+        } else if consumer != "none" {
+            registered = await model.adoptLiveTarget(consumer)
+            #expect((registered != nil) == (consumer == "live" && !removeTarget))
+        }
+        let beforeRelease = cdp.commands(for: "Target.getTargets").count
+        cdp.releaseHeldReply()
+        let result = await lookup.value
+        // With no newer observation, the held snapshot is still authoritative.
+        let shouldResolve = consumer == "none" || !removeTarget
+        #expect((result != nil) == shouldResolve)
+        #expect(model.orderedTabs.count == (shouldResolve ? 1 : 0))
+        if let result {
+            #expect(model.tab("live") === result)
+            #expect(result.attribution.owner == .chat("chat-B"))
+            #expect(result.url == (consumer == "none" ? "https://example.com/old" : "https://example.com/current"))
+            if let registered { #expect(result === registered) }
+        }
+        // Existing live registration needs no extra request; unresolved obsolete
+        // snapshots need exactly one fresh observation, including genuine removal.
+        let needsRefresh = consumer != "none" && registered == nil
+        #expect(cdp.commands(for: "Target.getTargets").count == beforeRelease + (needsRefresh ? 1 : 0))
+        #expect(cdp.commands(for: "Target.createTarget").isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func liveLookupRefreshCanBeSupersededAgain(closeDuringRefresh: Bool) async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        cdp.addTarget(id: "live", url: "https://example.com/old")
+        cdp.holdNextMethod = "Target.getTargets"
+        let lookup = Task { await model.adoptLiveTarget("live") }
+        try await held(cdp)
+        #expect(await model.adoptLiveTarget("missing") == nil)
+        cdp.holdNextMethod = "Target.getTargets"
+        cdp.releaseHeldReply()
+        try await held(cdp)
+        cdp.addTarget(id: "live", url: "https://example.com/new")
+        let registered = try #require(await model.adoptLiveTarget("live") as? CDPTabHandle)
+        if closeDuringRefresh {
+            await model.closeTab("live", skipConfirm: true)
+            // A delayed browser close still listing the ID must not resurrect it.
+            cdp.addTarget(id: "live", url: "https://example.com/new")
+        }
+        cdp.releaseHeldReply()
+        let result = await lookup.value
+        #expect(closeDuringRefresh ? result == nil : result === registered)
+        #expect(registered.session.isDestroyed == closeDuringRefresh)
+        #expect(model.orderedTabs.count == (closeDuringRefresh ? 0 : 1))
+        #expect(cdp.commands(for: "Target.getTargets").count == 5) // seed + four reads
+    }
+
+    @Test(arguments: [false, true])
+    func failedLiveReadStillReturnsConcurrentRegistration(registerTarget: Bool) async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        cdp.addTarget(id: "live", url: "https://example.com/live")
+        cdp.methodsNotImplemented.insert("Target.getTargets")
+        cdp.holdNextMethod = "Target.getTargets"
+        let lookup = Task { await model.adoptLiveTarget("live") }
+        try await held(cdp)
+        cdp.methodsNotImplemented.remove("Target.getTargets")
+        var registered: TabHandle?
+        if registerTarget { registered = await model.adoptLiveTarget("live") }
+        cdp.releaseHeldReply()
+        let result = await lookup.value
+        #expect(registerTarget ? result === registered : result == nil)
+        #expect(model.orderedTabs.count == (registerTarget ? 1 : 0))
+    }
+
+    @Test(arguments: [false, true])
+    func liveLookupAcrossCreationKeepsStableAliases(failCreation: Bool) async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        let created = try open(model)
+        let provisional = created.id
+        // Begin with an unknown real ID and an empty snapshot, then create it
+        // while the response is held. pageTargetInfos must retry its old epoch.
+        cdp.holdNextMethod = "Target.getTargets"
+        let lookup = Task { await model.adoptLiveTarget("target-1") }
+        try await held(cdp)
+        if failCreation { cdp.methodsNotImplemented.insert("Target.createTarget") }
+        do {
+            try await created.createInBrowser()
+            #expect(!failCreation)
+        } catch { #expect(failCreation) }
+        cdp.releaseHeldReply()
+        let result = await lookup.value
+        #expect(failCreation ? result == nil : result === created)
+        #expect(model.tab(provisional) === created)
+        #expect(!created.session.isDestroyed)
+        #expect(created.attribution.owner == .chat("chat-A"))
+        #expect(model.orderedTabs.count == 1)
+        if !failCreation { #expect(model.tab("target-1") === created) }
+    }
+
     @Test func visibleCreationKeepsItsOriginalHandleAndOwner() async throws {
         let cdp = MockCDP()
         let source = ReconciliationSource()
@@ -309,7 +423,6 @@ import CDP
         #expect(handle.url == "https://example.com/new")
         #expect(handle.attribution.owner == .chat("chat-A"))
     }
-
 
     @Test(arguments: [false, true])
     func delayedSeedOrLiveAdmissionCannotReviveRemovedTarget(seedAdmission: Bool) async throws {
