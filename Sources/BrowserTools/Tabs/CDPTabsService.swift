@@ -601,8 +601,21 @@ public final class CDPTabsModel: TabsModel {
     private var creationsInFlight = 0
     private var creationEpoch = 0
     private var creationWaiters: [CheckedContinuation<Void, Never>] = []
-    private var syncSequence = 0
-    private var appliedSyncSequence = 0
+    private var targetRequestSequence = 0
+    private var appliedTargetSequence = 0
+
+    private struct PageTargetSnapshot {
+        let sequence: Int
+        let infos: [JSValue]
+    }
+
+    /// Every admission path shares this watermark. A delayed response must not
+    /// restore targets or metadata superseded by a newer applied snapshot.
+    private func accept(_ snapshot: PageTargetSnapshot) -> Bool {
+        guard snapshot.sequence > appliedTargetSequence else { return false }
+        appliedTargetSequence = snapshot.sequence
+        return true
+    }
     /// Only listing discoveries may later be recognized as the result of a click.
     private var listingDiscoveries: Set<String> = []
 
@@ -837,8 +850,8 @@ public final class CDPTabsModel: TabsModel {
     public func seedFromBrowser() async {
         guard !seeded else { return }
         seeded = true
-        guard let infos = await pageTargetInfos() else { return }
-        for info in infos {
+        guard let snapshot = await pageTargetInfos(), accept(snapshot) else { return }
+        for info in snapshot.infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
             guard resolveLocked(targetId) == nil, !closedTargetIds.contains(targetId) else { continue }
             _ = admit(.seeded, targetId: targetId, url: info["url"]?.stringValue ?? "", title: info["title"]?.stringValue)
@@ -861,14 +874,11 @@ public final class CDPTabsModel: TabsModel {
     ///   (``forget(_:)``). Creation identities are settled before a snapshot is applied;
     ///   a tab created or admitted during the request cannot be removed by that snapshot.
     public func syncTabsWithBrowser() async {
-        syncSequence += 1
-        let sequence = syncSequence
         // An older reply cannot remove handles admitted while its request was in flight.
         let candidates = tabs.values.filter { $0.session.effectiveTargetId != nil }
-        guard let infos = await pageTargetInfos(), sequence > appliedSyncSequence else { return }
-        appliedSyncSequence = sequence
+        guard let snapshot = await pageTargetInfos(), accept(snapshot) else { return }
         var listed: Set<String> = []
-        for info in infos {
+        for info in snapshot.infos {
             guard let targetId = info["targetId"]?.stringValue else { continue }
             listed.insert(targetId)
             let url = info["url"]?.stringValue ?? ""
@@ -901,9 +911,9 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     /// as the tab of the chat this model was built for, or the user's when it was built
     /// for none, when the browser offers no attribution source.
     public func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab] {
-        guard let infos = await pageTargetInfos() else { return [] }
+        guard let snapshot = await pageTargetInfos(refreshIfSuperseded: true), accept(snapshot) else { return [] }
         var adopted: [AdoptedTab] = []
-        for info in infos {
+        for info in snapshot.infos {
             guard let targetId = info["targetId"]?.stringValue, !targetId.isEmpty else { continue }
             if previous.contains(targetId) { continue }
             if closedTargetIds.contains(targetId) { continue }
@@ -929,14 +939,14 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     }
 
     private func pageTargetIds() async -> Set<String> {
-        guard let infos = await pageTargetInfos() else { return [] }
-        return Set(infos.compactMap { $0["targetId"]?.stringValue })
+        guard let snapshot = await pageTargetInfos() else { return [] }
+        return Set(snapshot.infos.compactMap { $0["targetId"]?.stringValue })
     }
 
     /// Reads `Target.getTargets` and returns the `page`-type target info entries,
     /// or `nil` when the call fails (so a transport error is not mistaken for "no
     /// tabs spawned").
-    private func pageTargetInfos() async -> [JSValue]? {
+    private func pageTargetInfos(refreshIfSuperseded: Bool = false) async -> PageTargetSnapshot? {
         // A target can be visible before createTarget returns its id. Wait for those
         // identities before listing; if creation overlaps the request, take a fresh
         // snapshot. Failure also releases the barrier, so unrelated targets stay usable.
@@ -945,10 +955,16 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
                 await withCheckedContinuation { creationWaiters.append($0) }
             }
             let epoch = creationEpoch
+            // Allocate at the actual request, including every creation-epoch retry.
+            targetRequestSequence += 1
+            let sequence = targetRequestSequence
             guard let result = try? await client.send(method: "Target.getTargets", params: [:]),
                   let infos = result["targetInfos"]?.arrayValue else { return nil }
             if epoch != creationEpoch { continue }
-            return infos.filter { $0["type"]?.stringValue == "page" }
+            // Click provenance can still be valid when a newer listing won the race.
+            // Refresh rather than lose a live popup's result or revive a removed one.
+            if refreshIfSuperseded && sequence < appliedTargetSequence { continue }
+            return PageTargetSnapshot(sequence: sequence, infos: infos.filter { $0["type"]?.stringValue == "page" })
         }
     }
 }
@@ -962,8 +978,8 @@ extension CDPTabsModel: LivePageTargetAdopting {
     public func adoptLiveTarget(_ id: String) async -> TabHandle? {
         if let existing = resolveLocked(id) { return existing }
         if closedTargetIds.contains(id) { return nil }
-        guard let infos = await pageTargetInfos(),
-              let info = infos.first(where: { $0["targetId"]?.stringValue == id })
+        guard let snapshot = await pageTargetInfos(), accept(snapshot),
+              let info = snapshot.infos.first(where: { $0["targetId"]?.stringValue == id })
         else { return nil }
         if let existing = resolveLocked(id) { return existing }
         if closedTargetIds.contains(id) { return nil }
