@@ -11,7 +11,9 @@ import CDP
     func attribute(_ tabId: String, to chatId: String) { owners[tabId] = .chat(chatId) }
 }
 
-@Suite @MainActor struct TabReconciliationTests {
+// The event-based ordering waits below are cancellable; a missing request must
+// fail the whole test rather than leave an unstructured fixture task hanging.
+@Suite(.timeLimit(.minutes(1))) @MainActor struct TabReconciliationTests {
     private func model(_ cdp: MockCDP, source: TabAttributionSource? = nil, chatId: String? = "chat-A", seed: Bool = true) async throws -> CDPTabsModel {
         let channel = cdp.channel()
         let client = CDPClient(channel: channel)
@@ -21,9 +23,35 @@ import CDP
     }
 
     private func held(_ cdp: MockCDP, count: Int = 1) async throws {
-        let deadline = Date().addingTimeInterval(5)
-        while cdp.heldReplies.count < count && Date() < deadline { await Task.yield() }
+        try await cdp.waitUntilHoldingReplies(count: count)
         try #require(cdp.heldReplies.count == count)
+    }
+
+    @Test(arguments: [false, true])
+    func missingHeldReplyWaitCanBeCancelled(cancelBeforeStart: Bool) async throws {
+        let cdp = MockCDP()
+        var started = false
+        let waiting = Task {
+            started = true
+            try await cdp.waitUntilHoldingReplies(count: 1)
+        }
+        defer { waiting.cancel() }
+        if !cancelBeforeStart {
+            // The task registers its waiter before its first suspension, so
+            // observing started also establishes that it is waiting for a reply.
+            while !started {
+                try Task.checkCancellation()
+                await Task.yield()
+            }
+        }
+        waiting.cancel()
+        do {
+            try await waiting.value
+            Issue.record("a missing held reply must unwind on cancellation")
+        } catch {
+            #expect(error is CancellationError)
+        }
+        #expect(cdp.heldReplies.isEmpty)
     }
 
     private func open(_ model: CDPTabsModel) throws -> CDPTabHandle {

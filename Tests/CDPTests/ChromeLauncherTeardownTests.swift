@@ -156,11 +156,19 @@ import ToolABI
             return false
             #endif
         })
+        let started = DispatchSemaphore(value: 0)
         let completed = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
+        // Other synchronous tests can occupy all shared Dispatch workers. A
+        // queued teardown would then look like a correctly held helper, before
+        // timing out without ever running. Give this blocking work its own
+        // thread and confirm it started before testing the helper's lifetime.
+        let teardown = Thread {
+            started.signal()
             handle.terminate()
             completed.signal()
         }
+        teardown.start()
+        try #require(started.wait(timeout: .now() + 5) == .success)
         let earlyCompletion = completed.wait(timeout: .now() + 0.1)
         #expect(earlyCompletion == .timedOut, "teardown must await the live profile writer, not just its exited leader")
         #expect(FileManager.default.fileExists(atPath: profile.path), "profile removal must follow helper exit")

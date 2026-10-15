@@ -224,6 +224,27 @@ final class MockCDP {
     /// Hold a reply AFTER applying its browser-side effects, to control response order.
     var holdNextMethod: String?
     private(set) var heldReplies: [[String]] = []
+    private var heldReplyWaiters: [UUID: (count: Int, continuation: AsyncStream<Void>.Continuation)] = [:]
+
+    /// Suspend until the request actually reaches the fake browser. Polling with
+    /// a wall-clock deadline can expire while unrelated tests occupy MainActor,
+    /// before the task sending the request has had a chance to run.
+    func waitUntilHoldingReplies(count: Int) async throws {
+        if heldReplies.count >= count { return }
+        let id = UUID()
+        let signal = AsyncStream<Void>.makeStream()
+        // Registration and handle(frame:) share MainActor, so no notification can
+        // be lost between the count check and this registration.
+        heldReplyWaiters[id] = (count, signal.continuation)
+        defer {
+            heldReplyWaiters.removeValue(forKey: id)
+            signal.continuation.finish()
+        }
+        for await _ in signal.stream { return }
+        // AsyncStream wakes on cancellation too. A test time limit must unwind
+        // a missing-request wait instead of leaving the suite stuck.
+        throw CancellationError()
+    }
 
     func releaseHeldReply(at index: Int = 0) {
         let replies = heldReplies.remove(at: index)
@@ -236,6 +257,10 @@ final class MockCDP {
         if let method = JSValue.parse(frame)?["method"]?.stringValue, method == holdNextMethod {
             holdNextMethod = nil
             heldReplies.append(replies)
+            for waiter in heldReplyWaiters.values where heldReplies.count >= waiter.count {
+                waiter.continuation.yield(())
+                waiter.continuation.finish()
+            }
             return []
         }
         return replies
