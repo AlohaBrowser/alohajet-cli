@@ -41,22 +41,37 @@ final class CDPTabSession {
     private(set) var effectiveTargetId: String?
     var url: String
     var title: String?
+    /// The address the agent asked this tab to load, while that page is still arriving: the
+    /// one thing about the tab the browser cannot tell. `manage_tabs open` (``CDPTabsModel``'s
+    /// `createTab`) and `page_navigate` (``CDPTabHandle/navigateToURL(_:profileId:signal:)``)
+    /// write it; the page-load wait reads it and clears it when it ends. `nil` when nothing
+    /// was asked for.
+    var requestedURL: String?
     private(set) var isDestroyed = false
     private var networkEnabled = false
     private var pageEnabled = false
     /// The single in-flight first-attach task. Concurrent ``ensureAttached()``
     /// callers share this so the real target is created exactly once.
     private var attachTask: Task<String, Error>?
+    private let creationStateChanged: (@MainActor (Bool) -> Void)?
     private let createOnAttach: Bool
+    /// Called with the browser's id as soon as ``performAttach()`` has created the tab in the
+    /// browser, before the id reaches any caller.
+    private let onCreatedInBrowser: (@MainActor (String) -> Void)?
 
-    init(client: CDPClient, targetId: String, sessionId: String?, url: String, title: String? = nil, createOnAttach: Bool = false) {
+    init(
+        client: CDPClient, targetId: String, sessionId: String?, url: String, title: String? = nil,
+        createOnAttach: Bool = false, creationStateChanged: (@MainActor (Bool) -> Void)? = nil, onCreatedInBrowser: (@MainActor (String) -> Void)? = nil
+    ) {
         self.client = client
         self.targetId = targetId
         self.effectiveTargetId = createOnAttach ? nil : targetId
         self.sessionId = sessionId
         self.url = url
         self.title = title
+        self.creationStateChanged = creationStateChanged
         self.createOnAttach = createOnAttach
+        self.onCreatedInBrowser = onCreatedInBrowser
     }
 
     func markDestroyed() {
@@ -91,7 +106,11 @@ final class CDPTabSession {
     private func performAttach() async throws -> String {
         guard !isDestroyed else { throw CDPError.notConnected }
         if effectiveTargetId == nil {
-            effectiveTargetId = try await client.openTab(url: url)
+            creationStateChanged?(true)
+            defer { creationStateChanged?(false) }
+            let created = try await client.openTab(url: url)
+            effectiveTargetId = created
+            onCreatedInBrowser?(created)
         }
         guard let resolved = effectiveTargetId else { throw CDPError.notConnected }
         let session = try await client.attachToTarget(targetId: resolved)

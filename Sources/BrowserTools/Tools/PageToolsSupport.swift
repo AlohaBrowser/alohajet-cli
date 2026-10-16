@@ -21,17 +21,20 @@ enum ResolvePageTabOutcome {
     case failure(RawToolResult)
 }
 
-/// THE active-tab chain for the seven atomic page tools, which must never name
-/// different pages in one turn. Session store first, so an in-turn
-/// `manage_tabs use` outranks the foreground pin `pinForegroundTab` writes.
-func activeTabIdForPageTools(_ session: ChatModeSession?, _ tabsWindow: TabsWindow) -> String? {
-    session?.getActiveBrowserTabId() ?? tabsWindow.tabs.activeTabId
+/// THE in-use chain: the tab the page tools act on. Public so that every reader of "in
+/// use", in this package or a host's (alohajet's `upload_file`), reads this one rule and no
+/// two of them name different pages in one turn. Session store first, so an in-turn
+/// `manage_tabs use` outranks the foreground pin `pinForegroundTab` writes to the model.
+/// Nothing after the model's pointer: `nil` means no tab is in use, and a tool that acts on
+/// a page then refuses rather than picking one.
+public func inUseTabId(session: ChatModeSession?, tabs: TabsModel) -> String? {
+    session?.getActiveBrowserTabId() ?? tabs.activeTabId
 }
 
 /// Falls back to adopting a live page target on a miss. `nil` when nothing live carries the
 /// id — which is what keeps a typo a failure.
 func resolveOrAdoptTab(_ id: String, _ tabs: TabsModel) async -> TabHandle? {
-    if let tracked = tabs.getOrRestoreTab(id, restoreIfNeeded: false) { return tracked }
+    if let tracked = tabs.tab(id) { return tracked }
     return await (tabs as? LivePageTargetAdopting)?.adoptLiveTarget(id)
 }
 
@@ -58,7 +61,7 @@ func resolveActivePageTab(
     guard let tabsWindow = context.services?.tabsService?.window else {
         return .failure(RawToolResult(output: "\(toolName) failed: the tabs service is not available.", isError: true))
     }
-    guard let activeTabId = activeTabIdForPageTools(context.services?.session, tabsWindow) else {
+    guard let activeTabId = inUseTabId(session: context.services?.session, tabs: tabsWindow.tabs) else {
         return .failure(RawToolResult(
             output: "\(toolName) failed: no active browser tab. Take one first (manage_tabs action \"use\", or open one).",
             isError: true))

@@ -86,15 +86,9 @@ func withHeadlessBrowser<T>(_ body: (BrowserToolSession) async throws -> T) asyn
     }
 }
 
-/// The tab id off the metadata channel the tool fills, falling back to the `Tab ID:` line
-/// it prints — the CLI reads it the same two ways.
+/// The tab id off the metadata channel the tool fills, the one the CLI reads.
 func tabIdentifier(_ result: RawToolResult) -> String? {
     if case let .string(id)? = result.metadata?["tabId"], !id.isEmpty { return id }
-    for line in result.output.split(separator: "\n") {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("Tab ID: ") { return String(trimmed.dropFirst("Tab ID: ".count)) }
-        if trimmed.hasPrefix("ID: ") { return String(trimmed.dropFirst("ID: ".count)) }
-    }
     return nil
 }
 

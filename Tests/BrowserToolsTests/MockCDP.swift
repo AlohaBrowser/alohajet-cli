@@ -147,6 +147,12 @@ final class MockCDP {
         targets[id] = FakeTarget(targetId: id, url: url, title: title, type: type)
     }
 
+    /// Drops a target from `Target.getTargets`, as the browser does when the user closes
+    /// its tab.
+    func removeTarget(id: String) {
+        targets.removeValue(forKey: id)
+    }
+
     // MARK: Channel
 
     /// A ``CDPMessageChannel`` view of this fake browser to hand `CDPClient`.
@@ -215,10 +221,52 @@ final class MockCDP {
 
     // MARK: Request handling (called by the channel)
 
-    /// Handles one inbound JSON-RPC frame, returning the reply frame(s) to send
-    /// back. A command (`id` present) yields a single response; anything else is
-    /// dropped.
+    /// Hold a reply AFTER applying its browser-side effects, to control response order.
+    var holdNextMethod: String?
+    private(set) var heldReplies: [[String]] = []
+    private var heldReplyWaiters: [UUID: (count: Int, continuation: AsyncStream<Void>.Continuation)] = [:]
+
+    /// Suspend until the request actually reaches the fake browser. Polling with
+    /// a wall-clock deadline can expire while unrelated tests occupy MainActor,
+    /// before the task sending the request has had a chance to run.
+    func waitUntilHoldingReplies(count: Int) async throws {
+        if heldReplies.count >= count { return }
+        let id = UUID()
+        let signal = AsyncStream<Void>.makeStream()
+        // Registration and handle(frame:) share MainActor, so no notification can
+        // be lost between the count check and this registration.
+        heldReplyWaiters[id] = (count, signal.continuation)
+        defer {
+            heldReplyWaiters.removeValue(forKey: id)
+            signal.continuation.finish()
+        }
+        for await _ in signal.stream { return }
+        // AsyncStream wakes on cancellation too. A test time limit must unwind
+        // a missing-request wait instead of leaving the suite stuck.
+        throw CancellationError()
+    }
+
+    func releaseHeldReply(at index: Int = 0) {
+        let replies = heldReplies.remove(at: index)
+        for reply in replies { eventSink?(reply) }
+    }
+
+    /// Handles one inbound JSON-RPC frame, returning its reply unless held by the test.
     func handle(frame: String) -> [String] {
+        let replies = makeReplies(frame: frame)
+        if let method = JSValue.parse(frame)?["method"]?.stringValue, method == holdNextMethod {
+            holdNextMethod = nil
+            heldReplies.append(replies)
+            for waiter in heldReplyWaiters.values where heldReplies.count >= waiter.count {
+                waiter.continuation.yield(())
+                waiter.continuation.finish()
+            }
+            return []
+        }
+        return replies
+    }
+
+    private func makeReplies(frame: String) -> [String] {
         guard case .object = JSValue.parse(frame), let message = JSValue.parse(frame) else { return [] }
         guard let id = message["id"]?.intValue, let method = message["method"]?.stringValue else { return [] }
         let params = message["params"] ?? .object([])

@@ -13,19 +13,11 @@ import ToolABI
 struct NetworkLogPrivacyTests {
     @Test("no network log directory unless the environment asks for one")
     func offByDefault() {
-        unsetenv("ALOHAJET_NETWORK_LOG")
-        #expect(environmentNetworkLogDirectory(sessionId: "s") == nil)
-
-        setenv("ALOHAJET_NETWORK_LOG", "off", 1)
-        #expect(environmentNetworkLogDirectory(sessionId: "s") == nil)
-
-        setenv("ALOHAJET_NETWORK_LOG", "/tmp/aj-log-test", 1)
-        #expect(environmentNetworkLogDirectory(sessionId: "s") == "/tmp/aj-log-test")
-
-        setenv("ALOHAJET_NETWORK_LOG", "1", 1)
-        #expect(environmentNetworkLogDirectory(sessionId: "s")?.hasSuffix("alohajet/s/network") == true)
-
-        unsetenv("ALOHAJET_NETWORK_LOG")
+        #expect(networkLogDirectory(sessionId: "s", value: nil) == nil)
+        #expect(networkLogDirectory(sessionId: "s", value: "off") == nil)
+        let ownedPath = temporaryDirectory.appendingPathComponent("aj-log-test").path
+        #expect(networkLogDirectory(sessionId: "s", value: ownedPath) == ownedPath)
+        #expect(networkLogDirectory(sessionId: "s", value: "1")?.hasSuffix("alohajet/s/network") == true)
     }
 
     @Test("credential headers and request bodies never reach the log")

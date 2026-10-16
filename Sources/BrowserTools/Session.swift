@@ -258,8 +258,7 @@ public struct AgentOwnedTabs: Sendable {
         // exists for the user's tabs must not fire on our own `about:blank`.
         let tabsService = await makeCDPBrowserTabsService(
             client: client,
-            agentControllerId: sessionId,
-            sessionId: sessionId,
+            chatId: sessionId,
             seededTabsAreHuman: !ownsBrowser,
             agentOwnedTabIds: agentOwnedTabs?.ids(matching: endpoint) ?? [])
         let networkDir = networkLogDirectory ?? environmentNetworkLogDirectory(sessionId: sessionId)
@@ -272,6 +271,11 @@ public struct AgentOwnedTabs: Sendable {
     public var toolNames: [String] { nativeAgentToolNames }
     public var toolSchemas: [NativeToolSchema] { getNativeAgentToolSchemas() }
     public func toolSchema(_ name: String) -> NativeToolSchema? { getNativeAgentToolSchema(name) }
+
+    /// The tabs model the tools act on, for a caller that needs the tabs themselves rather
+    /// than a tool's text about them. For reading: opening and closing tabs stays the
+    /// tools' job.
+    public var tabs: TabsModel? { tabsService.window?.tabs }
 
     /// Execute one tool call. Never throws: a thrown tool error comes back as an error
     /// result, because that is what both front ends have to render anyway.
@@ -527,10 +531,15 @@ public struct AgentOwnedTabs: Sendable {
 ///
 /// `ALOHAJET_NETWORK_LOG=<dir>` logs into `<dir>`; `=1`/`true`/`yes`/`on` logs into
 /// the old default under the temp directory. Read via `getenv`, matching
-/// `ALOHAJET_CREDENTIAL_GUARD`, so a test's `setenv` is observed immediately.
+/// `ALOHAJET_CREDENTIAL_GUARD`.
 public func environmentNetworkLogDirectory(sessionId: String) -> String? {
-    guard let raw = getenv("ALOHAJET_NETWORK_LOG") else { return nil }
-    let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+    networkLogDirectory(sessionId: sessionId, value: getenv("ALOHAJET_NETWORK_LOG").map { String(cString: $0) })
+}
+
+// Value seam keeps environment-policy tests from mutating concurrent fixtures' inputs.
+func networkLogDirectory(sessionId: String, value: String?) -> String? {
+    guard let raw = value else { return nil }
+    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     switch value.lowercased() {
     case "", "0", "false", "no", "off": return nil
     case "1", "true", "yes", "on":

@@ -1,0 +1,713 @@
+import Foundation
+import Testing
+import ToolABI
+import CDP
+@testable import BrowserTools
+
+@MainActor private final class ReconciliationSource: TabAttributionSource {
+    var foregroundTabId: String?
+    var owners: [String: TabOwner] = [:]
+    func owner(of tabId: String) -> TabOwner { owners[tabId] ?? .user }
+    func attribute(_ tabId: String, to chatId: String) { owners[tabId] = .chat(chatId) }
+}
+
+@MainActor private final class ReconciliationSession: ChatModeSession {
+    func sessionNetworkDir() -> String? { nil }
+    func registerNetworkRecordingTab(_ tab: TabHandle) {}
+    func unregisterNetworkRecordingTab(_ tabId: String) {}
+    func setActiveBrowserTab(_ tabId: String?) {}
+    func getActiveBrowserTabId() -> String? { nil }
+    func clearActiveBrowserTabIfMatches(_ tabId: String) {}
+}
+
+// The event-based ordering waits below are cancellable; a missing request must
+// fail the whole test rather than leave an unstructured fixture task hanging.
+@Suite(.timeLimit(.minutes(1))) @MainActor struct TabReconciliationTests {
+    private func model(_ cdp: MockCDP, source: TabAttributionSource? = nil, chatId: String? = "chat-A", seed: Bool = true) async throws -> CDPTabsModel {
+        let channel = cdp.channel()
+        let client = CDPClient(channel: channel)
+        try await client.connect()
+        let service = await makeCDPBrowserTabsService(client: client, seed: seed, chatId: chatId, attributionSource: source)
+        return try #require(service.window?.tabs as? CDPTabsModel)
+    }
+
+    private func held(_ cdp: MockCDP, count: Int = 1) async throws {
+        try await cdp.waitUntilHoldingReplies(count: count)
+        try #require(cdp.heldReplies.count == count)
+    }
+
+    @Test(arguments: [false, true])
+    func missingHeldReplyWaitCanBeCancelled(cancelBeforeStart: Bool) async throws {
+        let cdp = MockCDP()
+        var started = false
+        let waiting = Task {
+            started = true
+            try await cdp.waitUntilHoldingReplies(count: 1)
+        }
+        defer { waiting.cancel() }
+        if !cancelBeforeStart {
+            // The task registers its waiter before its first suspension, so
+            // observing started also establishes that it is waiting for a reply.
+            while !started {
+                try Task.checkCancellation()
+                await Task.yield()
+            }
+        }
+        waiting.cancel()
+        do {
+            try await waiting.value
+            Issue.record("a missing held reply must unwind on cancellation")
+        } catch {
+            #expect(error is CancellationError)
+        }
+        #expect(cdp.heldReplies.isEmpty)
+    }
+
+    private func open(_ model: CDPTabsModel) throws -> CDPTabHandle {
+        try #require(model.createTab(.init(tabType: "website", url: "https://example.com", owner: .chat("chat-A"))) as? CDPTabHandle)
+    }
+
+    @Test(arguments: [false, true], ["none", "missing", "live", "sync"])
+    func supersededLiveLookupPreservesLiveTarget(removeTarget: Bool, consumer: String) async throws {
+        let cdp = MockCDP()
+        let source = ReconciliationSource()
+        source.owners["live"] = .chat("chat-B")
+        let model = try await model(cdp, source: source)
+        cdp.addTarget(id: "live", url: "https://example.com/old")
+        cdp.holdNextMethod = "Target.getTargets"
+        let lookup = Task { await model.adoptLiveTarget("live") }
+        try await held(cdp)
+        if removeTarget {
+            cdp.removeTarget(id: "live")
+        } else {
+            cdp.addTarget(id: "live", url: "https://example.com/current")
+        }
+        var registered: TabHandle?
+        if consumer == "sync" {
+            await model.syncTabsWithBrowser()
+            registered = model.tab("live")
+        } else if consumer != "none" {
+            registered = await model.adoptLiveTarget(consumer)
+            #expect((registered != nil) == (consumer == "live" && !removeTarget))
+        }
+        let beforeRelease = cdp.commands(for: "Target.getTargets").count
+        cdp.releaseHeldReply()
+        let result = await lookup.value
+        // With no newer observation, the held snapshot is still authoritative.
+        let shouldResolve = consumer == "none" || !removeTarget
+        #expect((result != nil) == shouldResolve)
+        #expect(model.orderedTabs.count == (shouldResolve ? 1 : 0))
+        if let result {
+            #expect(model.tab("live") === result)
+            #expect(result.attribution.owner == .chat("chat-B"))
+            #expect(result.url == (consumer == "none" ? "https://example.com/old" : "https://example.com/current"))
+            if let registered { #expect(result === registered) }
+        }
+        // Existing live registration needs no extra request; unresolved obsolete
+        // snapshots need exactly one fresh observation, including genuine removal.
+        let needsRefresh = consumer != "none" && registered == nil
+        #expect(cdp.commands(for: "Target.getTargets").count == beforeRelease + (needsRefresh ? 1 : 0))
+        #expect(cdp.commands(for: "Target.createTarget").isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func liveLookupRefreshCanBeSupersededAgain(closeDuringRefresh: Bool) async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        cdp.addTarget(id: "live", url: "https://example.com/old")
+        cdp.holdNextMethod = "Target.getTargets"
+        let lookup = Task { await model.adoptLiveTarget("live") }
+        try await held(cdp)
+        #expect(await model.adoptLiveTarget("missing") == nil)
+        cdp.holdNextMethod = "Target.getTargets"
+        cdp.releaseHeldReply()
+        try await held(cdp)
+        cdp.addTarget(id: "live", url: "https://example.com/new")
+        let registered = try #require(await model.adoptLiveTarget("live") as? CDPTabHandle)
+        if closeDuringRefresh {
+            await model.closeTab("live", skipConfirm: true)
+            // A delayed browser close still listing the ID must not resurrect it.
+            cdp.addTarget(id: "live", url: "https://example.com/new")
+        }
+        cdp.releaseHeldReply()
+        let result = await lookup.value
+        #expect(closeDuringRefresh ? result == nil : result === registered)
+        #expect(registered.session.isDestroyed == closeDuringRefresh)
+        #expect(model.orderedTabs.count == (closeDuringRefresh ? 0 : 1))
+        #expect(cdp.commands(for: "Target.getTargets").count == 5) // seed + four reads
+    }
+
+    @Test(arguments: [false, true])
+    func failedLiveReadStillReturnsConcurrentRegistration(registerTarget: Bool) async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        cdp.addTarget(id: "live", url: "https://example.com/live")
+        cdp.methodsNotImplemented.insert("Target.getTargets")
+        cdp.holdNextMethod = "Target.getTargets"
+        let lookup = Task { await model.adoptLiveTarget("live") }
+        try await held(cdp)
+        cdp.methodsNotImplemented.remove("Target.getTargets")
+        var registered: TabHandle?
+        if registerTarget { registered = await model.adoptLiveTarget("live") }
+        cdp.releaseHeldReply()
+        let result = await lookup.value
+        #expect(registerTarget ? result === registered : result == nil)
+        #expect(model.orderedTabs.count == (registerTarget ? 1 : 0))
+    }
+
+    @Test(arguments: [false, true])
+    func liveLookupAcrossCreationKeepsStableAliases(failCreation: Bool) async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        let created = try open(model)
+        let provisional = created.id
+        // Begin with an unknown real ID and an empty snapshot, then create it
+        // while the response is held. pageTargetInfos must retry its old epoch.
+        cdp.holdNextMethod = "Target.getTargets"
+        let lookup = Task { await model.adoptLiveTarget("target-1") }
+        try await held(cdp)
+        if failCreation { cdp.methodsNotImplemented.insert("Target.createTarget") }
+        do {
+            try await created.createInBrowser()
+            #expect(!failCreation)
+        } catch { #expect(failCreation) }
+        cdp.releaseHeldReply()
+        let result = await lookup.value
+        #expect(failCreation ? result == nil : result === created)
+        #expect(model.tab(provisional) === created)
+        #expect(!created.session.isDestroyed)
+        #expect(created.attribution.owner == .chat("chat-A"))
+        #expect(model.orderedTabs.count == 1)
+        if !failCreation { #expect(model.tab("target-1") === created) }
+    }
+
+    @Test func visibleCreationKeepsItsOriginalHandleAndOwner() async throws {
+        let cdp = MockCDP()
+        let source = ReconciliationSource()
+        let model = try await model(cdp, source: source)
+        let tab = try open(model)
+        let provisional = tab.id
+        cdp.holdNextMethod = "Target.createTarget"
+        let creating = Task { try await tab.createInBrowser() }
+        try await held(cdp)
+        var listingStarted = false
+        let listing = Task {
+            listingStarted = true
+            await model.syncTabsWithBrowser()
+        }
+        // MainActor runs the listing through its first suspension before this resumes.
+        while !listingStarted { await Task.yield() }
+        // The browser already lists the target but its creator does not yet know its id.
+        #expect(model.orderedTabs.count == 1)
+        cdp.releaseHeldReply()
+        try await creating.value
+        await listing.value
+        #expect(model.orderedTabs.count == 1)
+        #expect(model.tab(tab.id) === tab)
+        #expect(model.tab(provisional) === tab)
+        #expect(!tab.session.isDestroyed)
+        #expect(tab.attribution.owner == .chat("chat-A"))
+        source.owners[tab.id] = .user
+        #expect(tab.attribution.owner == .user)
+        #expect(cdp.commands(for: "Target.createTarget").count == 1)
+    }
+
+    @Test func overlappingCreationsKeepBothHandlesWhileSyncWaitsForTheirIds() async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        let first = try open(model)
+        let second = try open(model)
+        cdp.holdNextMethod = "Target.createTarget"
+        let firstCreation = Task { try await first.createInBrowser() }
+        try await held(cdp)
+        cdp.holdNextMethod = "Target.createTarget"
+        let secondCreation = Task { try await second.createInBrowser() }
+        try await held(cdp, count: 2)
+        let listing = Task { await model.syncTabsWithBrowser() }
+        cdp.releaseHeldReply(at: 1)
+        try await secondCreation.value
+        #expect(model.orderedTabs.count == 2)
+        cdp.releaseHeldReply()
+        try await firstCreation.value
+        await listing.value
+        #expect(model.orderedTabs.count == 2)
+        #expect(Set(model.orderedTabs.map(\.id)).count == 2)
+        #expect(model.tab(first.id) === first)
+        #expect(model.tab(second.id) === second)
+        #expect(model.orderedTabs.allSatisfy { $0.attribution.owner == .chat("chat-A") })
+    }
+
+    @Test func snapshotBeforeCreationCannotDestroyNewHandle() async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "old", url: "https://old.example")
+        let model = try await model(cdp)
+        cdp.removeTarget(id: "old")
+        cdp.holdNextMethod = "Target.getTargets"
+        let listing = Task { await model.syncTabsWithBrowser() }
+        try await held(cdp)
+        let tab = try open(model)
+        try await tab.createInBrowser()
+        cdp.releaseHeldReply()
+        await listing.value
+        #expect(model.tab(tab.id) === tab)
+        #expect(!tab.session.isDestroyed)
+        #expect(model.tab("old") == nil) // Real removals still reconcile.
+        #expect(model.orderedTabs.count == 1)
+    }
+
+    @Test func olderSyncCannotUndoNewerSync() async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "old", url: "https://old.example")
+        let model = try await model(cdp)
+        cdp.holdNextMethod = "Target.getTargets"
+        let oldListing = Task { await model.syncTabsWithBrowser() }
+        try await held(cdp)
+        cdp.removeTarget(id: "old")
+        cdp.addTarget(id: "new", url: "https://new.example")
+        await model.syncTabsWithBrowser()
+        let new = try #require(model.tab("new"))
+        cdp.releaseHeldReply()
+        await oldListing.value
+        #expect(model.tab("old") == nil)
+        #expect(model.tab("new") === new)
+        #expect(model.orderedTabs.count == 1)
+    }
+
+    @Test func failedCreationReleasesListingBarrierAndCanRetry() async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        let tab = try open(model)
+        cdp.methodsNotImplemented.insert("Target.createTarget")
+        cdp.holdNextMethod = "Target.createTarget"
+        let creating = Task { try await tab.createInBrowser() }
+        try await held(cdp)
+        let listing = Task { await model.syncTabsWithBrowser() }
+        cdp.addTarget(id: "unrelated", url: "https://other.example")
+        cdp.releaseHeldReply()
+        do { try await creating.value; Issue.record("creation should fail") } catch {}
+        await listing.value
+        #expect(model.tab("unrelated") != nil)
+        #expect(!tab.session.isDestroyed)
+        cdp.methodsNotImplemented.remove("Target.createTarget")
+        try await tab.createInBrowser()
+        await model.syncTabsWithBrowser()
+        #expect(model.tab(tab.id) === tab)
+        #expect(model.orderedTabs.count == 2)
+    }
+
+    // A successful click that opens no popup must not claim a previously listed
+    // user tab merely because the pre-click transport read failed once.
+    @Test(arguments: [false, true], ["fallback", "source-user", "source-foreign", "fallback-no-chat", "source-user-no-chat", "source-foreign-no-chat"])
+    func failedPreClickSnapshotPreservesExistingAuthority(failSnapshot: Bool, configuration: String) async throws {
+        let chatScoped = !configuration.hasSuffix("-no-chat")
+        let ownership = configuration.replacingOccurrences(of: "-no-chat", with: "")
+        let cdp = MockCDP()
+        let source = ReconciliationSource()
+        source.owners["existing"] = ownership == "source-foreign" ? .chat("chat-B") : .user
+        let model = try await model(cdp, source: ownership == "fallback" ? nil : source,
+                                    chatId: chatScoped ? "chat-A" : nil)
+        cdp.addTarget(id: "existing", url: "https://example.com/user")
+        await model.syncTabsWithBrowser()
+        let existing = try #require(model.tab("existing"))
+        let owner = existing.attribution.owner
+        let adopter: ClickSpawnedTabAdopting = model
+        if failSnapshot { cdp.methodsNotImplemented.insert("Target.getTargets") }
+        let before = await adopter.currentPageTargetIds()
+        #expect((before == nil) == failSnapshot)
+        if !failSnapshot { #expect(before == ["existing"]) }
+        cdp.methodsNotImplemented.remove("Target.getTargets")
+        let reads = cdp.commands(for: "Target.getTargets").count
+        #expect(await adopter.adoptSpawnedTabs(notIn: before).isEmpty)
+        #expect(cdp.commands(for: "Target.getTargets").count == reads + (failSnapshot ? 0 : 1))
+        #expect(model.tab("existing") === existing)
+        #expect(existing.attribution.owner == owner)
+        #expect(!existing.attribution.mayClose(askingChat: "chat-A"))
+        let close = await manageTabsClose("existing", CDPTabsWindow(id: "window", model: model),
+            ManageTabsActionContext(sessionId: "chat-A", toolCallId: "close", session: ReconciliationSession(), abortSignal: nil))
+        #expect(close.isError == true)
+        #expect(cdp.commands(for: "Target.closeTarget").isEmpty)
+        #expect(model.tab("existing") === existing)
+    }
+
+    @Test(arguments: ["sync", "live"], ["fallback", "source-user", "source-foreign", "fallback-no-chat", "source-user-no-chat", "source-foreign-no-chat"])
+    func supersededPreClickSnapshotPreservesObservedAuthority(consumer: String, configuration: String) async throws {
+        let chatScoped = !configuration.hasSuffix("-no-chat")
+        let ownership = configuration.replacingOccurrences(of: "-no-chat", with: "")
+        let cdp = MockCDP()
+        let source = ReconciliationSource()
+        source.owners["existing"] = ownership == "source-foreign" ? .chat("chat-B") : .user
+        let model = try await model(cdp, source: ownership == "fallback" ? nil : source,
+                                    chatId: chatScoped ? "chat-A" : nil)
+        cdp.holdNextMethod = "Target.getTargets"
+        let baseline = Task { await model.currentPageTargetIds() }
+        defer { baseline.cancel() }
+        try await held(cdp) // Successful empty snapshot, not a transport failure.
+        cdp.addTarget(id: "existing", url: "https://example.com/user")
+        if consumer == "sync" {
+            await model.syncTabsWithBrowser()
+        } else {
+            _ = await model.adoptLiveTarget("existing")
+        }
+        let existing = try #require(model.tab("existing"))
+        let owner = existing.attribution.owner
+        cdp.releaseHeldReply()
+        let before = await baseline.value
+        #expect(before == ["existing"])
+        // The click opens nothing: even a listing discovery is pre-click here.
+        #expect(await model.adoptSpawnedTabs(notIn: before).isEmpty)
+        #expect(model.tab("existing") === existing)
+        #expect(existing.attribution.owner == owner)
+        let close = await manageTabsClose("existing", CDPTabsWindow(id: "window", model: model),
+            ManageTabsActionContext(sessionId: "chat-A", toolCallId: "close", session: ReconciliationSession(), abortSignal: nil))
+        #expect(close.isError == true)
+        #expect(cdp.commands(for: "Target.closeTarget").isEmpty)
+        #expect(model.tab("existing") === existing)
+        #expect(!existing.attribution.mayClose(askingChat: "chat-A"))
+    }
+
+    @Test func refreshedPreClickBaselineStillAdoptsOnlyGenuinePopup() async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        cdp.holdNextMethod = "Target.getTargets"
+        let baseline = Task { await model.currentPageTargetIds() }
+        defer { baseline.cancel() }
+        try await held(cdp)
+        cdp.addTarget(id: "existing", url: "https://example.com/user")
+        await model.syncTabsWithBrowser()
+        let existing = try #require(model.tab("existing"))
+        cdp.releaseHeldReply()
+        let before = await baseline.value
+        #expect(before == ["existing"])
+        // Only this target appears after baseline completes and the click runs.
+        cdp.addTarget(id: "popup", url: "https://example.com/popup")
+        await model.syncTabsWithBrowser()
+        let popup = try #require(model.tab("popup"))
+        #expect(await model.adoptSpawnedTabs(notIn: before).map(\.id) == ["popup"])
+        #expect(model.tab("popup") === popup)
+        #expect(popup.attribution.owner == .chat("chat-A"))
+        #expect(await model.adoptSpawnedTabs(notIn: before).isEmpty)
+        let close = await manageTabsClose("popup", CDPTabsWindow(id: "window", model: model),
+            ManageTabsActionContext(sessionId: "chat-A", toolCallId: "close", session: ReconciliationSession(), abortSignal: nil))
+        #expect(close.isError != true)
+        #expect(cdp.commands(for: "Target.closeTarget").count == 1)
+        #expect(cdp.commands(for: "Target.closeTarget").first?.params["targetId"]?.stringValue == "popup")
+        #expect(model.tab("popup") == nil)
+        #expect(model.tab("existing") === existing)
+        #expect(existing.attribution.owner == .user)
+    }
+
+    @Test(arguments: [false, true])
+    func preClickRefreshHandlesFailureAndRepeatedSupersession(failRefresh: Bool) async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        cdp.holdNextMethod = "Target.getTargets"
+        let baseline = Task { await model.currentPageTargetIds() }
+        defer { baseline.cancel() }
+        try await held(cdp)
+        cdp.addTarget(id: "existing", url: "https://example.com/user")
+        await model.syncTabsWithBrowser()
+        let existing = try #require(model.tab("existing"))
+        cdp.holdNextMethod = "Target.getTargets"
+        if failRefresh { cdp.methodsNotImplemented.insert("Target.getTargets") }
+        cdp.releaseHeldReply()
+        try await held(cdp) // The baseline's refresh is now held too.
+        cdp.methodsNotImplemented.remove("Target.getTargets")
+        cdp.addTarget(id: "second", url: "https://example.com/second")
+        await model.syncTabsWithBrowser()
+        let second = try #require(model.tab("second"))
+        cdp.releaseHeldReply()
+        let before = await baseline.value
+        #expect(failRefresh ? before == nil : before == ["existing", "second"])
+        let reads = cdp.commands(for: "Target.getTargets").count
+        #expect(await model.adoptSpawnedTabs(notIn: before).isEmpty)
+        #expect(cdp.commands(for: "Target.getTargets").count == reads + (failRefresh ? 0 : 1))
+        #expect(model.tab("existing") === existing)
+        #expect(model.tab("second") === second)
+        #expect(model.orderedTabs.count == 2)
+        #expect(existing.attribution.owner == .user)
+        #expect(second.attribution.owner == .user)
+    }
+
+    @Test func failedBaselineSkipsNewPopupButNextValidEmptyBaselineCanAdopt() async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        cdp.methodsNotImplemented.insert("Target.getTargets")
+        let unknown = await model.currentPageTargetIds()
+        #expect(unknown == nil)
+        cdp.methodsNotImplemented.remove("Target.getTargets")
+        cdp.addTarget(id: "unproven", url: "https://example.com/unproven")
+        #expect(await model.adoptSpawnedTabs(notIn: unknown).isEmpty)
+        #expect(model.tab("unproven") == nil)
+        cdp.removeTarget(id: "unproven")
+        let empty = await model.currentPageTargetIds()
+        #expect(empty == []) // Successful empty is distinct from unknown.
+        cdp.addTarget(id: "popup", url: "https://example.com/popup")
+        await model.syncTabsWithBrowser()
+        let listed = try #require(model.tab("popup"))
+        #expect(listed.attribution.owner == .user)
+        #expect(await model.adoptSpawnedTabs(notIn: empty).map(\.id) == ["popup"])
+        #expect(model.tab("popup") === listed)
+        #expect(listed.attribution.owner == .chat("chat-A"))
+        #expect(listed.attribution.mayClose(askingChat: "chat-A"))
+        #expect(await model.adoptSpawnedTabs(notIn: empty).isEmpty)
+    }
+
+    @Test(arguments: [false, true], [false, true]) func listingDoesNotSuppressPopupResult(useSource: Bool, chatScoped: Bool) async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "parent", url: "https://example.com")
+        let source = ReconciliationSource()
+        let model = try await model(cdp, source: useSource ? source : nil, chatId: chatScoped ? "chat-A" : nil)
+        let before = await model.currentPageTargetIds()
+        cdp.addTarget(id: "popup", url: "https://example.com/popup")
+        source.owners["popup"] = .chat("chat-B")
+        await model.syncTabsWithBrowser()
+        let discovered = try #require(model.tab("popup"))
+        cdp.addTarget(id: "popup", url: "https://example.com/settled")
+        let adopted = await model.adoptSpawnedTabs(notIn: before)
+        #expect(adopted.map(\.id) == ["popup"])
+        #expect(adopted.map(\.url) == ["https://example.com/settled"])
+        #expect(model.tab("popup") === discovered)
+        #expect(discovered.attribution.owner == (useSource ? .chat("chat-B") : (chatScoped ? .chat("chat-A") : .user)))
+        #expect(model.tab("parent")?.attribution.owner == .user)
+        #expect(await model.adoptSpawnedTabs(notIn: before).isEmpty)
+        #expect(cdp.commands(for: "Target.createTarget").isEmpty)
+    }
+
+    @Test func preexistingAndClosedTargetsAreNeverAdoptedAsPopups() async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        cdp.addTarget(id: "existing", url: "https://example.com")
+        await model.syncTabsWithBrowser()
+        let before = await model.currentPageTargetIds()
+        #expect(await model.adoptSpawnedTabs(notIn: before).isEmpty)
+        #expect(model.tab("existing")?.attribution.owner == .user)
+        await model.closeTab("existing", skipConfirm: true)
+        cdp.addTarget(id: "existing", url: "https://example.com") // delayed close visibility
+        #expect(await model.adoptSpawnedTabs(notIn: []).isEmpty)
+        #expect(model.tab("existing") == nil)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func retriedSyncIsOrderedByItsActualRequest(removeTarget: Bool, failedCreation: Bool) async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "existing", url: "https://example.com/old")
+        let model = try await model(cdp)
+        let existing = try #require(model.tab("existing") as? CDPTabHandle)
+        cdp.holdNextMethod = "Target.getTargets"
+        let first = Task { await model.syncTabsWithBrowser() }
+        try await held(cdp)
+
+        let created = try open(model)
+        let provisional = created.id
+        if failedCreation { cdp.methodsNotImplemented.insert("Target.createTarget") }
+        do {
+            try await created.createInBrowser()
+            #expect(!failedCreation)
+        } catch { #expect(failedCreation) }
+        cdp.methodsNotImplemented.remove("Target.createTarget")
+        cdp.holdNextMethod = "Target.getTargets"
+        let second = Task { await model.syncTabsWithBrowser() }
+        try await held(cdp, count: 2)
+        if removeTarget {
+            cdp.removeTarget(id: "existing")
+        } else {
+            cdp.addTarget(id: "existing", url: "https://example.com/new", title: "New title")
+        }
+        cdp.releaseHeldReply()
+        await first.value // Epoch retry now applies a newer actual request than second.
+        #expect(model.tab("existing")?.url == (removeTarget ? nil : "https://example.com/new"))
+        cdp.releaseHeldReply()
+        await second.value
+        #expect(model.tab("existing")?.url == (removeTarget ? nil : "https://example.com/new"))
+        #expect(existing.session.isDestroyed == removeTarget)
+        if !removeTarget {
+            #expect(model.tab("existing") === existing)
+            #expect(existing.title == "New title")
+        }
+        #expect(model.tab(provisional) === created)
+        #expect(model.tab(created.id) === created)
+        #expect(!created.session.isDestroyed)
+        #expect(Set(model.orderedTabs.map(\.id)).count == model.orderedTabs.count)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func delayedPopupAdoptionRefreshesAfterNewerListing(popupRemainsLive: Bool, useSource: Bool) async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "parent", url: "https://example.com")
+        let source = ReconciliationSource()
+        let model = try await model(cdp, source: useSource ? source : nil)
+        let before = await model.currentPageTargetIds()
+        cdp.addTarget(id: "popup", url: "https://example.com/popup")
+        source.owners["popup"] = .chat("chat-B")
+        await model.syncTabsWithBrowser()
+        let original = try #require(model.tab("popup") as? CDPTabHandle)
+        model.setActiveTabId("popup")
+        cdp.holdNextMethod = "Target.getTargets"
+        let adoption = Task { await model.adoptSpawnedTabs(notIn: before) }
+        try await held(cdp)
+        if popupRemainsLive {
+            cdp.addTarget(id: "popup", url: "https://example.com/settled", title: "Settled")
+        } else {
+            cdp.removeTarget(id: "popup")
+        }
+        await model.syncTabsWithBrowser()
+        #expect(original.session.isDestroyed == !popupRemainsLive)
+        cdp.releaseHeldReply()
+        let adopted = await adoption.value
+        if popupRemainsLive {
+            #expect(adopted.map(\.id) == ["popup"])
+            #expect(adopted.map(\.url) == ["https://example.com/settled"])
+            #expect(adopted.map(\.title) == ["Settled"])
+            #expect(model.tab("popup") === original)
+            #expect(original.attribution.owner == .chat(useSource ? "chat-B" : "chat-A"))
+            #expect(model.activeTabId == "popup")
+        } else {
+            #expect(adopted.isEmpty)
+            #expect(model.tab("popup") == nil)
+            #expect(model.activeTabId == nil)
+        }
+        #expect(await model.adoptSpawnedTabs(notIn: before).isEmpty)
+        #expect(model.tab("parent") != nil)
+        #expect(cdp.commands(for: "Target.createTarget").isEmpty)
+    }
+
+    @Test func newerPopupAdoptionSupersedesOlderListingMetadata() async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        let before = await model.currentPageTargetIds()
+        cdp.addTarget(id: "popup", url: "https://example.com/old")
+        cdp.holdNextMethod = "Target.getTargets"
+        let listing = Task { await model.syncTabsWithBrowser() }
+        try await held(cdp)
+        cdp.addTarget(id: "popup", url: "https://example.com/new")
+        let adopted = await model.adoptSpawnedTabs(notIn: before)
+        let handle = try #require(model.tab("popup"))
+        #expect(adopted.map(\.id) == ["popup"])
+        cdp.releaseHeldReply()
+        await listing.value
+        #expect(model.tab("popup") === handle)
+        #expect(handle.url == "https://example.com/new")
+        #expect(handle.attribution.owner == .chat("chat-A"))
+    }
+
+    @Test(arguments: [false, true])
+    func delayedSeedOrLiveAdmissionCannotReviveRemovedTarget(seedAdmission: Bool) async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "existing", url: "https://example.com")
+        let model = try await model(cdp, seed: false)
+        cdp.holdNextMethod = "Target.getTargets"
+        let admission = Task {
+            if seedAdmission {
+                await model.seedFromBrowser()
+                return model.tab("existing")
+            }
+            return await model.adoptLiveTarget("existing")
+        }
+        try await held(cdp)
+        await model.syncTabsWithBrowser()
+        let original = try #require(model.tab("existing") as? CDPTabHandle)
+        cdp.removeTarget(id: "existing")
+        await model.syncTabsWithBrowser()
+        #expect(original.session.isDestroyed)
+        cdp.releaseHeldReply()
+        #expect(await admission.value == nil)
+        #expect(model.tab("existing") == nil)
+        #expect(model.orderedTabs.isEmpty)
+        cdp.addTarget(id: "live-control", url: "https://example.com/live")
+        let live = await model.adoptLiveTarget("live-control")
+        #expect(live?.id == "live-control")
+        #expect(live?.attribution.owner == .user)
+    }
+
+    enum PartialConsumer: CaseIterable, Sendable {
+        case none, missingLookup, liveAdmission, noPopup, seed
+    }
+
+    // A partial consumer can observe the same removal without applying it. Full
+    // reconciliation must still finish, even when that consumer's reply is newer.
+    @Test(arguments: PartialConsumer.allCases)
+    func partialAdmissionDoesNotCancelFullRemoval(consumer: PartialConsumer) async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "closed", url: "https://example.com/closed")
+        cdp.addTarget(id: "survivor", url: "https://example.com/survivor")
+        let model = try await model(cdp, seed: consumer != .seed)
+        if consumer == .seed { await model.syncTabsWithBrowser() }
+        let closed = try #require(model.tab("closed") as? CDPTabHandle)
+        let survivor = try #require(model.tab("survivor"))
+        let before = await model.currentPageTargetIds()
+        model.setActiveTabId("closed")
+        cdp.removeTarget(id: "closed")
+        cdp.holdNextMethod = "Target.getTargets"
+        let listing = Task { await model.syncTabsWithBrowser() }
+        try await held(cdp)
+        switch consumer {
+        case .missingLookup:
+            #expect(await model.adoptLiveTarget("missing") == nil)
+        case .liveAdmission:
+            cdp.addTarget(id: "new-live", url: "https://example.com/new")
+            #expect(await model.adoptLiveTarget("new-live") != nil)
+        case .noPopup:
+            #expect(await model.adoptSpawnedTabs(notIn: before).isEmpty)
+        case .seed:
+            await model.seedFromBrowser()
+        case .none: break // Uncontended response control.
+        }
+        let admitted = model.tab("new-live")
+        cdp.releaseHeldReply()
+        await listing.value
+        #expect(model.tab("closed") == nil)
+        #expect(closed.session.isDestroyed)
+        #expect(model.activeTabId == nil)
+        #expect(model.tab("survivor") === survivor)
+        if consumer == .liveAdmission { #expect(model.tab("new-live") === admitted) }
+        #expect(model.orderedTabs.count == (consumer == .liveAdmission ? 2 : 1))
+        #expect(cdp.commands(for: "Target.getTargets").count == (consumer == .none ? 3 : 5))
+        // A subsequent uncontended reconciliation preserves the same identities.
+        await model.syncTabsWithBrowser()
+        #expect(model.tab("closed") == nil)
+        #expect(model.tab("survivor") === survivor)
+        if consumer == .liveAdmission { #expect(model.tab("new-live") === admitted) }
+    }
+
+    @Test(arguments: [false, true])
+    func fullRemovalRefreshesAgainWhenPartialReadSupersedesRetry(createDuringRetry: Bool) async throws {
+        let cdp = MockCDP()
+        cdp.addTarget(id: "closed", url: "https://example.com/closed")
+        cdp.addTarget(id: "survivor", url: "https://example.com/old")
+        let model = try await model(cdp)
+        let closed = try #require(model.tab("closed") as? CDPTabHandle)
+        let survivor = try #require(model.tab("survivor"))
+        model.setActiveTabId("closed")
+        cdp.removeTarget(id: "closed")
+        cdp.holdNextMethod = "Target.getTargets"
+        let listing = Task { await model.syncTabsWithBrowser() }
+        try await held(cdp)
+        #expect(await model.adoptLiveTarget("missing") == nil)
+        cdp.holdNextMethod = "Target.getTargets"
+        cdp.releaseHeldReply()
+        try await held(cdp) // The full sync's refresh is also delayed.
+        cdp.addTarget(id: "survivor", url: "https://example.com/new", title: "New")
+        #expect(await model.adoptSpawnedTabs(notIn: ["survivor"]).isEmpty)
+        // Creation during the retry must retain its original handle and ownership.
+        let created = createDuringRetry ? try open(model) : nil
+        let provisional = created?.id
+        try await created?.createInBrowser()
+        cdp.releaseHeldReply()
+        await listing.value
+        #expect(model.tab("closed") == nil)
+        #expect(closed.session.isDestroyed)
+        #expect(model.activeTabId == nil)
+        #expect(model.tab("survivor") === survivor)
+        #expect(survivor.url == "https://example.com/new")
+        #expect(survivor.title == "New")
+        if let created, let provisional {
+            #expect(model.tab(provisional) === created)
+            #expect(model.tab(created.id) === created)
+            #expect(!created.session.isDestroyed)
+            #expect(created.attribution.owner == .chat("chat-A"))
+        }
+        #expect(Set(model.orderedTabs.map(\.id)).count == (createDuringRetry ? 2 : 1))
+        #expect(cdp.commands(for: "Target.getTargets").count == 6)
+    }
+
+}

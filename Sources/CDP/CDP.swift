@@ -630,6 +630,11 @@ public struct ChromeLauncher: Sendable {
         /// caller-provided real profile is never written into. Read it with
         /// ``stderrTail(maxBytes:)`` BEFORE calling ``terminate()``, which deletes it.
         public let stderrLogURL: URL?
+        #if os(macOS) || os(Linux)
+        /// Foundation launches the browser in a private process group. Capture it
+        /// while the leader is alive; helpers can outlive that leader at shutdown.
+        private let processGroup: Int32?
+        #endif
 
         init(process: Process, port: Int, userDataDir: URL, ownsUserDataDir: Bool, stderrLogURL: URL? = nil) {
             self.process = process
@@ -637,6 +642,10 @@ public struct ChromeLauncher: Sendable {
             self.userDataDir = userDataDir
             self.ownsUserDataDir = ownsUserDataDir
             self.stderrLogURL = stderrLogURL
+            #if os(macOS) || os(Linux)
+            let group = getpgid(process.processIdentifier)
+            self.processGroup = group == process.processIdentifier ? group : nil
+            #endif
         }
 
         /// Stop claiming this profile, so ``ChromeLauncher/reapStaleProfiles()`` leaves it —
@@ -707,6 +716,20 @@ public struct ChromeLauncher: Sendable {
             // Only remove a throwaway temp profile we created — never a user's real
             // Chrome profile, which we merely borrowed.
             if ownsUserDataDir {
+                #if os(macOS) || os(Linux)
+                // The browser leader can exit before its utility processes finish
+                // writing. Removing the profile then can succeed, only for a helper
+                // to recreate it after this method returns. Wait on the private
+                // process group, not a fixed delay, before deleting owned storage.
+                // This never signals a group, and stays bounded for a stuck helper.
+                if let processGroup {
+                    let deadline = Date().addingTimeInterval(2)
+                    while kill(-processGroup, 0) == 0 || errno == EPERM {
+                        if Date() >= deadline { break }
+                        Thread.sleep(forTimeInterval: 0.02)
+                    }
+                }
+                #endif
                 try? FileManager.default.removeItem(at: userDataDir)
             }
             if let stderrLogURL {
@@ -737,7 +760,8 @@ public struct ChromeLauncher: Sendable {
                 if Date() >= limit { return false }
                 Thread.sleep(forTimeInterval: 0.02)
             }
-            process.waitUntilExit()
+            // `isRunning == false` already observes the reaped state. Foundation's
+            // waitUntilExit can miss its wakeup when other children exit concurrently.
             return true
         }
     }
@@ -767,8 +791,13 @@ public struct ChromeLauncher: Sendable {
     /// because a pid recorded five days ago may belong to something else entirely by the
     /// time anyone reads it, while `--user-data-dir=<our uuid>` cannot.
     public static func reapStaleProfiles() {
+        reapStaleProfiles(in: temporaryDirectory)
+    }
+
+    // Per-call fixture boundary; the public entry point keeps the production root.
+    // No process-wide environment mutation is needed to exercise the real reaper.
+    static func reapStaleProfiles(in tmp: URL) {
         let manager = FileManager.default
-        let tmp = temporaryDirectory
         guard let entries = try? manager.contentsOfDirectory(atPath: tmp.path) else { return }
         for name in entries where name.hasPrefix("alohajet-cdp-") {
             let dir = tmp.appendingPathComponent(name, isDirectory: true)

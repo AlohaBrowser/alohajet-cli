@@ -4,11 +4,11 @@ import CDP
 import ToolABI
 @testable import BrowserTools
 
-// The seams `makeCDPBrowserTabsService` hands a host — the navigation pacer, the
-// per-handle creation hook, the control-state hook — exist so a host does not have to
-// fork this file to attach its own behaviour to a tab. Each of them fails SILENTLY when
-// it is wrong: a tab built down a path nobody announced simply has no sealed-region
-// handling and no navigation guard, and a navigation that leaves by the door the pacer
+// The seams `makeCDPBrowserTabsService` hands a host — the navigation pacer and the
+// per-handle creation hook — exist so a host does not have to fork this file to attach
+// its own behaviour to a tab. Each of them fails SILENTLY when it is wrong: a tab built
+// down a path nobody announced simply has no sealed-region handling, and a navigation
+// that leaves by the door the pacer
 // does not watch is simply never metered. Nothing throws, nothing logs. These tests are
 // the only thing that notices.
 
@@ -56,8 +56,7 @@ struct TabsInjectionSeamTests {
         // Path 2 of 4: the tab this session opens. Its real Chrome target does not exist
         // yet, so it is announced under the provisional id.
         let created = model.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com/opened", openedByHuman: false,
-            agentControllerId: "agent-1", sessionId: "agent-1"))
+            tabType: "website", url: "https://example.com/opened", owner: .chat("agent-1")))
 
         // Path 3 of 4: a live target this model never saw, addressed by id.
         cdp.addTarget(id: "live-target", url: "https://example.com/live", title: "Live")
@@ -82,28 +81,6 @@ struct TabsInjectionSeamTests {
         #expect(log.handles.count == 4, "a re-adoption announced an already-known tab")
     }
 
-    @Test("onTabCreated runs before the control flags are written, so the first transition is seen")
-    @MainActor
-    func onTabCreatedPrecedesTheFirstControlTransition() async throws {
-        let (_, client) = try await connectedMock()
-        let log = SeamLog()
-        let service = await makeCDPBrowserTabsService(
-            client: client,
-            seed: false,
-            onTabCreated: { handle in
-                handle.onControlStateChange = { isAI, isAgent in log.record("\(isAI)", "\(isAgent)") }
-            })
-        _ = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com", openedByHuman: false,
-            agentControllerId: "agent-1", sessionId: "agent-1"))
-
-        // `createTab` puts the tab under the agent immediately, and that is the only such
-        // call a read ever makes (`markTabAgentControlled` finds it already owned and
-        // returns). Announce the handle after it and a host's navigation guard never
-        // learns the tab became its own.
-        #expect(log.lines == ["false|true"])
-    }
-
     @Test("the pacer gates the open path: a refused turn creates no target")
     @MainActor
     func pacerGatesTheOpenPath() async throws {
@@ -117,7 +94,7 @@ struct TabsInjectionSeamTests {
                 throw SimpleBrowserError("no turn")
             })
         let tab = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com/opened", openedByHuman: false))
+            tabType: "website", url: "https://example.com/opened", owner: .chat("agent-1")))
 
         let result = try await tab.wake(nil)
 
@@ -142,7 +119,7 @@ struct TabsInjectionSeamTests {
                 throw SimpleBrowserError("no turn")
             })
         let tab = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com", openedByHuman: false))
+            tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
         let handle = try #require(tab as? CDPTabHandle)
 
         let bridge = AgentBrowserBridge(backend: CDPAgentBridgeBackend(tab: handle))
@@ -164,7 +141,7 @@ struct TabsInjectionSeamTests {
             seed: false,
             navigationPacer: { url, profileId, _ in log.record(url, profileId) })
         let tab = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com", openedByHuman: false))
+            tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
         let handle = try #require(tab as? CDPTabHandle)
 
         let woke = try await handle.wake(nil)
@@ -187,7 +164,7 @@ struct TabsInjectionSeamTests {
             seed: false,
             navigationPacer: { url, profileId, _ in log.record(url, profileId) })
         let tab = service.window!.tabs.createTab(TabCreateSpec(
-            tabType: "website", url: "https://example.com", openedByHuman: false))
+            tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
 
         _ = try await tab.wake(nil)
         _ = try await tab.wake(nil)

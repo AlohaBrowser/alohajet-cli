@@ -110,8 +110,9 @@ let commandHelp: [String: String] = [
         """,
     "tabs": """
         alohajet tabs
-          List open tabs with their ids and URLs. ● marks the tab in use. A tab
-          marked [the user's tab] was open before alohajet attached; close refuses it.
+          List open tabs, one per line: title, [url], (tab-id: <id>), then whose tab
+          it is. "your tab" is one alohajet opened; "the user's tab" was open before
+          alohajet attached, and close refuses it. "in use" marks the tab in use.
         """,
     "close": """
         alohajet close <id>
@@ -511,26 +512,19 @@ func quitSharedBrowser() async -> Int32 {
 /// that landed there was a leak and a `goto`/`type` that landed there drove their tab;
 /// the caller is told to open one or name one with `--tab` instead.
 ///
-/// KNOWN CEILING: scrapes the `ID:`/`URL:` lines out of `manage_tabs list`'s prose, because
-/// the tab list is not exposed any other way. Swap it for a structured accessor if one
-/// ever lands on the session.
+/// Reads the tabs from the session's tabs model, never from `manage_tabs list`'s text: that
+/// text is written for the agent, and nothing parses it.
 func resolveTab(_ session: BrowserToolSession, _ explicit: String?) async -> String? {
     if let explicit { return explicit }
     if let active = session.getActiveBrowserTabId() { return active }
-    let listing = await session.run("manage_tabs", arguments: ["action": "list"])
-    guard listing.isError != true else { return nil }
-
-    var tabs: [(id: String, url: String)] = []
-    for line in listing.output.split(separator: "\n", omittingEmptySubsequences: false) {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("ID: ") {
-            tabs.append((String(trimmed.dropFirst(4)), ""))
-        } else if trimmed.hasPrefix("URL: "), !tabs.isEmpty {
-            tabs[tabs.count - 1].url = String(trimmed.dropFirst(5))
-        }
+    guard let tabs = session.tabs else { return nil }
+    // The addresses are caches, so they are refreshed from the browser first, as
+    // `manage_tabs list` does before it lists.
+    if let live = tabs as? BrowserTabSyncing {
+        await live.syncTabsWithBrowser()
     }
     let web = Set(
-        tabs.lazy
+        tabs.orderedTabs.lazy
             .filter { $0.url.hasPrefix("http://") || $0.url.hasPrefix("https://") }
             .map(\.id))
     guard !web.isEmpty else { return nil }
