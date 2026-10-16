@@ -45,13 +45,15 @@ public struct AdoptedTab: Sendable {
 /// path probes for it with `model as? ClickSpawnedTabAdopting`.
 public protocol ClickSpawnedTabAdopting: AnyObject {
     /// Snapshots the live page target ids before an action, so the post-action
-    /// diff can tell a genuinely-new target from one that already existed.
-    func currentPageTargetIds() async -> Set<String>
+    /// diff can tell a genuinely-new target from one that already existed. Returns
+    /// `nil` when the snapshot fails; an unknown baseline must never grant ownership.
+    func currentPageTargetIds() async -> Set<String>?
     /// Adopts each live page target not in `previous`, returning the adopted tabs.
+    /// A `nil` baseline skips adoption without changing ownership.
     /// A target discovered by an overlapping browser sync may already have a handle;
     /// it still belongs in this result. Targets already recognized by an earlier
     /// adoption are skipped, so repeating the same adoption returns nothing.
-    func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab]
+    func adoptSpawnedTabs(notIn previous: Set<String>?) async -> [AdoptedTab]
 }
 
 /// Bringing the model into line with the live browser's listing. Kept off ``TabsModel`` and

@@ -903,7 +903,7 @@ public final class CDPTabsModel: TabsModel {
 }
 
 extension CDPTabsModel: ClickSpawnedTabAdopting {
-    public func currentPageTargetIds() async -> Set<String> {
+    public func currentPageTargetIds() async -> Set<String>? {
         await pageTargetIds()
     }
 
@@ -914,7 +914,10 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     /// handle over the EXISTING target (no new target is created) and registered
     /// as the tab of the chat this model was built for, or the user's when it was built
     /// for none, when the browser offers no attribution source.
-    public func adoptSpawnedTabs(notIn previous: Set<String>) async -> [AdoptedTab] {
+    public func adoptSpawnedTabs(notIn previous: Set<String>?) async -> [AdoptedTab] {
+        // A failed pre-click read says nothing about which targets are new.
+        // In particular, old listing discoveries must retain their prior owner.
+        guard let previous else { return [] }
         guard let snapshot = await pageTargetInfos(refreshIfSuperseded: true), accept(snapshot) else { return [] }
         var adopted: [AdoptedTab] = []
         for info in snapshot.infos {
@@ -942,8 +945,8 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
         return adopted
     }
 
-    private func pageTargetIds() async -> Set<String> {
-        guard let snapshot = await pageTargetInfos() else { return [] }
+    private func pageTargetIds() async -> Set<String>? {
+        guard let snapshot = await pageTargetInfos() else { return nil }
         return Set(snapshot.infos.compactMap { $0["targetId"]?.stringValue })
     }
 

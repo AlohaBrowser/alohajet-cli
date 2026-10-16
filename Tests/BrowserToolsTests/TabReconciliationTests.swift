@@ -11,6 +11,15 @@ import CDP
     func attribute(_ tabId: String, to chatId: String) { owners[tabId] = .chat(chatId) }
 }
 
+@MainActor private final class ReconciliationSession: ChatModeSession {
+    func sessionNetworkDir() -> String? { nil }
+    func registerNetworkRecordingTab(_ tab: TabHandle) {}
+    func unregisterNetworkRecordingTab(_ tabId: String) {}
+    func setActiveBrowserTab(_ tabId: String?) {}
+    func getActiveBrowserTabId() -> String? { nil }
+    func clearActiveBrowserTabIfMatches(_ tabId: String) {}
+}
+
 // The event-based ordering waits below are cancellable; a missing request must
 // fail the whole test rather than leave an unstructured fixture task hanging.
 @Suite(.timeLimit(.minutes(1))) @MainActor struct TabReconciliationTests {
@@ -284,6 +293,64 @@ import CDP
         await model.syncTabsWithBrowser()
         #expect(model.tab(tab.id) === tab)
         #expect(model.orderedTabs.count == 2)
+    }
+
+    // A successful click that opens no popup must not claim a previously listed
+    // user tab merely because the pre-click transport read failed once.
+    @Test(arguments: [false, true], ["fallback", "source-user", "source-foreign", "fallback-no-chat", "source-user-no-chat", "source-foreign-no-chat"])
+    func failedPreClickSnapshotPreservesExistingAuthority(failSnapshot: Bool, configuration: String) async throws {
+        let chatScoped = !configuration.hasSuffix("-no-chat")
+        let ownership = configuration.replacingOccurrences(of: "-no-chat", with: "")
+        let cdp = MockCDP()
+        let source = ReconciliationSource()
+        source.owners["existing"] = ownership == "source-foreign" ? .chat("chat-B") : .user
+        let model = try await model(cdp, source: ownership == "fallback" ? nil : source,
+                                    chatId: chatScoped ? "chat-A" : nil)
+        cdp.addTarget(id: "existing", url: "https://example.com/user")
+        await model.syncTabsWithBrowser()
+        let existing = try #require(model.tab("existing"))
+        let owner = existing.attribution.owner
+        let adopter: ClickSpawnedTabAdopting = model
+        if failSnapshot { cdp.methodsNotImplemented.insert("Target.getTargets") }
+        let before = await adopter.currentPageTargetIds()
+        #expect((before == nil) == failSnapshot)
+        if !failSnapshot { #expect(before == ["existing"]) }
+        cdp.methodsNotImplemented.remove("Target.getTargets")
+        let reads = cdp.commands(for: "Target.getTargets").count
+        #expect(await adopter.adoptSpawnedTabs(notIn: before).isEmpty)
+        #expect(cdp.commands(for: "Target.getTargets").count == reads + (failSnapshot ? 0 : 1))
+        #expect(model.tab("existing") === existing)
+        #expect(existing.attribution.owner == owner)
+        #expect(!existing.attribution.mayClose(askingChat: "chat-A"))
+        let close = await manageTabsClose("existing", CDPTabsWindow(id: "window", model: model),
+            ManageTabsActionContext(sessionId: "chat-A", toolCallId: "close", session: ReconciliationSession(), abortSignal: nil))
+        #expect(close.isError == true)
+        #expect(cdp.commands(for: "Target.closeTarget").isEmpty)
+        #expect(model.tab("existing") === existing)
+    }
+
+    @Test func failedBaselineSkipsNewPopupButNextValidEmptyBaselineCanAdopt() async throws {
+        let cdp = MockCDP()
+        let model = try await model(cdp)
+        cdp.methodsNotImplemented.insert("Target.getTargets")
+        let unknown = await model.currentPageTargetIds()
+        #expect(unknown == nil)
+        cdp.methodsNotImplemented.remove("Target.getTargets")
+        cdp.addTarget(id: "unproven", url: "https://example.com/unproven")
+        #expect(await model.adoptSpawnedTabs(notIn: unknown).isEmpty)
+        #expect(model.tab("unproven") == nil)
+        cdp.removeTarget(id: "unproven")
+        let empty = await model.currentPageTargetIds()
+        #expect(empty == []) // Successful empty is distinct from unknown.
+        cdp.addTarget(id: "popup", url: "https://example.com/popup")
+        await model.syncTabsWithBrowser()
+        let listed = try #require(model.tab("popup"))
+        #expect(listed.attribution.owner == .user)
+        #expect(await model.adoptSpawnedTabs(notIn: empty).map(\.id) == ["popup"])
+        #expect(model.tab("popup") === listed)
+        #expect(listed.attribution.owner == .chat("chat-A"))
+        #expect(listed.attribution.mayClose(askingChat: "chat-A"))
+        #expect(await model.adoptSpawnedTabs(notIn: empty).isEmpty)
     }
 
     @Test(arguments: [false, true], [false, true]) func listingDoesNotSuppressPopupResult(useSource: Bool, chatScoped: Bool) async throws {
