@@ -89,8 +89,28 @@ struct MCPSignalTeardownTests {
         // The launched browser's throwaway profile lands here, which is how the checks
         // below can name it. Only honoured because the CLI reads `$TMPDIR` — see
         // `ToolABI.temporaryDirectory`.
-        let browserTemp = sandbox.appendingPathComponent("browser-temp")
-        try FileManager.default.createDirectory(at: browserTemp, withIntermediateDirectories: true)
+        // Chrome appends com.google.Chrome.XXXXXX/SingletonSocket to TMPDIR.
+        // Keep that AF_UNIX path short even when /tmp canonicalizes to /private/tmp;
+        // the longer diagnostic sandbox must not contribute to the socket path.
+        // mkdtemp atomically creates a fresh 0700 directory without reading host data.
+        var template = Array("/tmp/ajm-XXXXXX".utf8CString)
+        let browserTemp = try template.withUnsafeMutableBufferPointer { buffer -> URL in
+            guard let path = mkdtemp(buffer.baseAddress!) else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            return URL(fileURLWithPath: String(cString: path), isDirectory: true)
+        }
+        phase("browser-temp=\(browserTemp.path)")
+        defer {
+            if completed {
+                // Profile disappearance is asserted before removing this root.
+                // Remove only the exact mkdtemp child, never its canonical /tmp parent.
+                do { try FileManager.default.removeItem(at: browserTemp) }
+                catch { Issue.record("could not remove owned browser temp: \(error)") }
+            } else {
+                phase("browser-temp-retained-at=\(browserTemp.path)")
+            }
+        }
         environment["TMPDIR"] = browserTemp.path
         for key in ["BASH_ENV", "ENV", "ZDOTDIR"] { environment.removeValue(forKey: key) }
         // exec preserves the actual browser PID/signals. Redirect at its owned launch
@@ -126,6 +146,7 @@ struct MCPSignalTeardownTests {
                     _ = waitForExit(process, within: 2)
                 }
             }
+            if !completed { stopOwnedBrowser(pidFile: browserPID) }
             phase(process.isRunning ? "cli-still-running" : "cli-exit-status=\(process.terminationStatus)")
         }
 
@@ -167,7 +188,6 @@ struct MCPSignalTeardownTests {
         // gracefully — `terminate()` alone may spend 7s escalating on a loaded machine.
         guard waitForExit(process, within: 20) else {
             kill(process.processIdentifier, SIGKILL)
-            for profile in profiles { pkill(matching: profile.path) }
             Issue.record("alohajet mcp did not exit within 20s of \(ending)")
             return
         }
@@ -175,7 +195,9 @@ struct MCPSignalTeardownTests {
         #expect(process.terminationStatus == expectedStatus)
         let profilesGone = launchedProfiles(in: browserTemp).isEmpty
         #expect(profilesGone, "the throwaway profile outlived the server")
-        completed = !profiles.isEmpty && process.terminationStatus == expectedStatus && profilesGone
+        let browserGone = !ownedBrowserIsAlive(pidFile: browserPID)
+        #expect(browserGone, "the owned browser process outlived the server")
+        completed = !profiles.isEmpty && process.terminationStatus == expectedStatus && profilesGone && browserGone
     }
 
     private func launchedProfiles(in sandbox: URL) -> [URL] {
@@ -203,19 +225,29 @@ struct MCPSignalTeardownTests {
         return true
     }
 
-    /// Best effort: kill a browser left behind by a server that failed to reap it, found
-    /// by the `--user-data-dir` it was launched with.
-    private func pkill(matching pattern: String) {
-        let killer = Process()
-        killer.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        killer.arguments = ["-f", pattern]
-        killer.standardOutput = FileHandle.nullDevice
-        killer.standardError = FileHandle.nullDevice
-        if (try? killer.run()) != nil, !waitForExit(killer, within: 5) {
-            kill(killer.processIdentifier, SIGKILL)
-            _ = waitForExit(killer, within: 2)
-        }
+    private func ownedBrowserPID(pidFile: URL) -> Int32? {
+        (try? String(contentsOf: pidFile, encoding: .utf8))
+            .flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .flatMap { $0 > 0 ? $0 : nil }
     }
+
+    private func ownedBrowserIsAlive(pidFile: URL) -> Bool {
+        guard let pid = ownedBrowserPID(pidFile: pidFile) else { return false }
+        return kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    /// On failure, signal only the PID recorded by our exec wrapper. Retain both
+    /// owned roots for diagnosis; never search host processes or temporary roots.
+    private func stopOwnedBrowser(pidFile: URL) {
+        guard let pid = ownedBrowserPID(pidFile: pidFile), ownedBrowserIsAlive(pidFile: pidFile) else { return }
+        kill(pid, SIGTERM)
+        let deadline = Date().addingTimeInterval(2)
+        while ownedBrowserIsAlive(pidFile: pidFile), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if ownedBrowserIsAlive(pidFile: pidFile) { kill(pid, SIGKILL) }
+    }
+
 }
 
 /// Newline-delimited reads off a pipe, with a deadline. A blocking `read` on the test
