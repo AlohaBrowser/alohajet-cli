@@ -946,7 +946,10 @@ extension CDPTabsModel: ClickSpawnedTabAdopting {
     }
 
     private func pageTargetIds() async -> Set<String>? {
-        guard let snapshot = await pageTargetInfos() else { return nil }
+        // A newer applied listing may already have observed a user-opened tab
+        // while this pre-click read was in flight. Refresh before dropping the
+        // sequence, or that known existing tab could be claimed as a popup.
+        guard let snapshot = await pageTargetInfos(refreshIfSuperseded: true) else { return nil }
         return Set(snapshot.infos.compactMap { $0["targetId"]?.stringValue })
     }
 
