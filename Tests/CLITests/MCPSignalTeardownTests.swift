@@ -3,6 +3,8 @@ import Foundation
 import Glibc
 #endif
 import Dispatch
+import CDP
+import ToolABI
 import Testing
 
 // A signalled `alohajet mcp --launch` must DIE. Not "kill the browser and keep
@@ -55,8 +57,29 @@ struct MCPSignalTeardownTests {
         let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("alohajet-mcp-signal-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: sandbox) }
+        try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        var completed = false
+        let started = DispatchTime.now().uptimeNanoseconds
+        let browserStderr = sandbox.appendingPathComponent("browser.stderr")
+        let browserPID = sandbox.appendingPathComponent("browser.pid")
+        let cliStderr = sandbox.appendingPathComponent("cli.stderr")
+        func phase(_ name: String) {
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000_000
+            diagnostic("ending=\(ending) phase=\(name) elapsed=\(elapsed)s")
+        }
+        defer {
+            phase(completed ? "complete" : "failed-retained-at=\(sandbox.path)")
+            if completed {
+                try? FileManager.default.removeItem(at: sandbox)
+            } else {
+                // Only files created by this fixture; never look for a host log.
+                for url in [cliStderr, browserStderr] {
+                    let tail = ((try? Data(contentsOf: url)) ?? Data()).suffix(4_096)
+                    diagnostic("\(url.lastPathComponent): \(String(decoding: tail, as: UTF8.self))")
+                }
+            }
+        }
 
         let stdin = Pipe(), stdout = Pipe()
         let process = Process()
@@ -66,23 +89,61 @@ struct MCPSignalTeardownTests {
         // The launched browser's throwaway profile lands here, which is how the checks
         // below can name it. Only honoured because the CLI reads `$TMPDIR` — see
         // `ToolABI.temporaryDirectory`.
-        environment["TMPDIR"] = sandbox.path
+        let browserTemp = sandbox.appendingPathComponent("browser-temp")
+        try FileManager.default.createDirectory(at: browserTemp, withIntermediateDirectories: true)
+        environment["TMPDIR"] = browserTemp.path
+        for key in ["BASH_ENV", "ENV", "ZDOTDIR"] { environment.removeValue(forKey: key) }
+        // exec preserves the actual browser PID/signals. Redirect at its owned launch
+        // boundary so production cleanup cannot unlink the sole diagnostic copy.
+        // The fixture opens only about:blank, with a throwaway profile.
+        let browserExecutable = environment["ALOHAJET_BROWSER"] ?? ChromeLauncher.defaultExecutablePath
+        if ChromeLauncher(executablePath: browserExecutable).isAvailable {
+            let wrapper = sandbox.appendingPathComponent("chrome-with-diagnostics")
+            func quoted(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'" }
+            let script = "#!/bin/sh\numask 077\nprintf '%s\\n' \"$$\" > \(quoted(browserPID.path))\nexec \(quoted(browserExecutable)) \"$@\" 2> \(quoted(browserStderr.path))\n"
+            try script.write(to: wrapper, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: wrapper.path)
+            environment["ALOHAJET_BROWSER"] = wrapper.path
+        }
         process.environment = environment
         process.standardInput = stdin
         process.standardOutput = stdout
-        process.standardError = FileHandle.nullDevice
+        FileManager.default.createFile(atPath: cliStderr.path, contents: nil,
+                                       attributes: [.posixPermissions: 0o600])
+        let stderrSink = try FileHandle(forWritingTo: cliStderr)
+        defer { try? stderrSink.close() }
+        process.standardError = stderrSink
         try process.run()
+        phase("cli-started-pid=\(process.processIdentifier)")
+        let progress = FixtureProgress(process: process, browserPID: browserPID, started: started)
+        defer {
+            progress.stop()
+            // Also reap our own CLI on an early #require failure.
+            if process.isRunning {
+                process.terminate()
+                if !waitForExit(process, within: 10) {
+                    kill(process.processIdentifier, SIGKILL)
+                    _ = waitForExit(process, within: 2)
+                }
+            }
+            phase(process.isRunning ? "cli-still-running" : "cli-exit-status=\(process.terminationStatus)")
+        }
 
         let reader = LineReader(stdout.fileHandleForReading)
         func send(_ json: String) { try? stdin.fileHandleForWriting.write(contentsOf: Data((json + "\n").utf8)) }
 
+        phase("initialize-send")
         send(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#)
         _ = try #require(reader.line(within: 15), "no answer to initialize")
 
+        phase("initialize-received")
+
         // The browser is built on the first tools/call, and only then is the signal
         // reaper installed. A server with no browser has nothing to hang on.
+        phase("tools-call-send")
         send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"manage_tabs","arguments":{"action":"open","url":"about:blank"}}}"#)
         let answer = try #require(reader.line(within: 90), "no answer to tools/call")
+        phase("tools-call-received")
         if answer.contains("Could not reach a browser") {
             process.terminate()
             _ = waitForExit(process, within: 10)
@@ -91,9 +152,10 @@ struct MCPSignalTeardownTests {
             return
         }
 
-        let profiles = launchedProfiles(in: sandbox)
+        let profiles = launchedProfiles(in: browserTemp)
         #expect(!profiles.isEmpty, "the tools/call launched no browser profile under \(sandbox.path)")
 
+        phase("ending-send")
         switch ending {
         case .signal(let number): kill(process.processIdentifier, number)
         case .eof: try? stdin.fileHandleForWriting.close()
@@ -109,8 +171,11 @@ struct MCPSignalTeardownTests {
             Issue.record("alohajet mcp did not exit within 20s of \(ending)")
             return
         }
+        phase("exit-observed-status=\(process.terminationStatus)")
         #expect(process.terminationStatus == expectedStatus)
-        #expect(launchedProfiles(in: sandbox).isEmpty, "the throwaway profile outlived the server")
+        let profilesGone = launchedProfiles(in: browserTemp).isEmpty
+        #expect(profilesGone, "the throwaway profile outlived the server")
+        completed = !profiles.isEmpty && process.terminationStatus == expectedStatus && profilesGone
     }
 
     private func launchedProfiles(in sandbox: URL) -> [URL] {
@@ -146,7 +211,10 @@ struct MCPSignalTeardownTests {
         killer.arguments = ["-f", pattern]
         killer.standardOutput = FileHandle.nullDevice
         killer.standardError = FileHandle.nullDevice
-        try? killer.run()
+        if (try? killer.run()) != nil, !waitForExit(killer, within: 5) {
+            kill(killer.processIdentifier, SIGKILL)
+            _ = waitForExit(killer, within: 2)
+        }
     }
 }
 
@@ -185,4 +253,63 @@ private final class LineReader: @unchecked Sendable {
         } while Date() < deadline
         return nil
     }
+}
+
+/// Progress from a private timer queue remains visible when MainActor is occupied.
+/// Only one actor probe may be pending, and stopping cancels further probes.
+private final class FixtureProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+    private var pending = false
+    private var probe: Task<Void, Never>?
+    private var lastAck: UInt64
+    private let timer: DispatchSourceTimer
+
+    init(process: Process, browserPID: URL, started: UInt64) {
+        lastAck = started
+        timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "mcp-fixture-progress"))
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard !self.stopped else { return }
+            let now = DispatchTime.now().uptimeNanoseconds
+            let pid = (try? String(contentsOf: browserPID, encoding: .utf8))
+                .flatMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            let browserAlive = pid.map { kill($0, 0) == 0 || errno == EPERM }
+            diagnostic("progress elapsed=\(Double(now - started) / 1e9)s cliPID=\(process.processIdentifier) running=\(process.isRunning) ownBrowserPID=\(String(describing: pid)) alive=\(String(describing: browserAlive)) mainActorAckAge=\(Double(now - self.lastAck) / 1e9)s")
+            if !self.pending {
+                self.pending = true
+                self.probe = Task { @MainActor [weak self] in
+                    guard !Task.isCancelled else { return }
+                    self?.acknowledge()
+                }
+            }
+        }
+        timer.resume()
+    }
+
+    private func acknowledge() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !stopped else { return }
+        lastAck = DispatchTime.now().uptimeNanoseconds
+        pending = false
+        probe = nil
+    }
+
+    func stop() {
+        lock.lock()
+        stopped = true
+        let activeProbe = probe
+        probe = nil
+        lock.unlock()
+        activeProbe?.cancel()
+        timer.cancel()
+    }
+}
+
+private func diagnostic(_ message: String) {
+    writeToStandardError("[mcp-fixture] " + message + "\n")
 }

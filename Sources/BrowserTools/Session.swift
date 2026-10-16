@@ -531,10 +531,15 @@ public struct AgentOwnedTabs: Sendable {
 ///
 /// `ALOHAJET_NETWORK_LOG=<dir>` logs into `<dir>`; `=1`/`true`/`yes`/`on` logs into
 /// the old default under the temp directory. Read via `getenv`, matching
-/// `ALOHAJET_CREDENTIAL_GUARD`, so a test's `setenv` is observed immediately.
+/// `ALOHAJET_CREDENTIAL_GUARD`.
 public func environmentNetworkLogDirectory(sessionId: String) -> String? {
-    guard let raw = getenv("ALOHAJET_NETWORK_LOG") else { return nil }
-    let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
+    networkLogDirectory(sessionId: sessionId, value: getenv("ALOHAJET_NETWORK_LOG").map { String(cString: $0) })
+}
+
+// Value seam keeps environment-policy tests from mutating concurrent fixtures' inputs.
+func networkLogDirectory(sessionId: String, value: String?) -> String? {
+    guard let raw = value else { return nil }
+    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     switch value.lowercased() {
     case "", "0", "false", "no", "off": return nil
     case "1", "true", "yes", "on":

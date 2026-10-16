@@ -791,8 +791,13 @@ public struct ChromeLauncher: Sendable {
     /// because a pid recorded five days ago may belong to something else entirely by the
     /// time anyone reads it, while `--user-data-dir=<our uuid>` cannot.
     public static func reapStaleProfiles() {
+        reapStaleProfiles(in: temporaryDirectory)
+    }
+
+    // Per-call fixture boundary; the public entry point keeps the production root.
+    // No process-wide environment mutation is needed to exercise the real reaper.
+    static func reapStaleProfiles(in tmp: URL) {
         let manager = FileManager.default
-        let tmp = temporaryDirectory
         guard let entries = try? manager.contentsOfDirectory(atPath: tmp.path) else { return }
         for name in entries where name.hasPrefix("alohajet-cdp-") {
             let dir = tmp.appendingPathComponent(name, isDirectory: true)
