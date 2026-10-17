@@ -184,7 +184,7 @@ struct PageAfterActionTests {
         ]
         let services = NativeToolServices(tabsService: fixture.tabsService, session: SnapshotSession())
         let context = makePageToolContext(services: services)
-        let tab = try #require(fixture.tabsService.window?.tabs.getOrRestoreTab(fixture.tabId, restoreIfNeeded: false))
+        let tab = try #require(fixture.tabsService.window?.tabs.tab(fixture.tabId))
         let cdpTab = try #require(tab as? CDPTabHandle)
         let resolved = ResolvedPageTab(tab: tab, cdpTab: cdpTab)
         let failed = RawToolResult(output: "Typed into element \"t\", but submitting Enter failed: no focus.", isError: true)
@@ -215,7 +215,7 @@ struct PageAfterActionTests {
         let fixture = try await makePageToolsCDPFixture()
         let services = NativeToolServices(tabsService: fixture.tabsService, session: SnapshotSession())
         let context = makePageToolContext(services: services)
-        let tab = try #require(fixture.tabsService.window?.tabs.getOrRestoreTab(fixture.tabId, restoreIfNeeded: false))
+        let tab = try #require(fixture.tabsService.window?.tabs.tab(fixture.tabId))
         let cdpTab = try #require(tab as? CDPTabHandle)
         let resolved = ResolvedPageTab(tab: tab, cdpTab: cdpTab)
 
