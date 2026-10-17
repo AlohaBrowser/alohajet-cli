@@ -113,7 +113,7 @@ struct AnswerPageTrackerTests {
         tracker.beginTurn(deferringCloses: false)
         let result = try await tracker.tracking {
             try await GetTextExecutorTool().execute(
-                .object(["aloha_id": .string("d61f-6c0653d")]), makePageToolContext(services: services))
+                .object(["aloha_id": .string("only-this-test-1")]), makePageToolContext(services: services))
         }
         #expect(result.isError != true)
         let window = try #require(fixture.tabsService.window)
@@ -122,9 +122,11 @@ struct AnswerPageTrackerTests {
         let observed = try #require(tracker.observedTab(in: window))
         #expect(observed.id == targetId)
         #expect(tracker.observedTargetId == targetId)
-        #expect(tracker.readIds(onTarget: targetId) == ["d61f-6c0653d"])
-        // The process-wide tracker was not touched by this bound turn.
-        #expect(AnswerPageTracker.shared.readIds(onTarget: targetId).isEmpty)
+        #expect(tracker.readIds(onTarget: targetId) == ["only-this-test-1"])
+        // The process-wide tracker was not touched by this bound turn. (Other tests' page tools
+        // note into it concurrently, on MockCDP tabs with the same target ids, so only this test's
+        // own read is looked for.)
+        #expect(!AnswerPageTracker.shared.readIds(onTarget: targetId).contains("only-this-test-1"))
     }
 
     /// `manage_tabs close` of the observed tab, while a runner defers: answered as closed, the tab
