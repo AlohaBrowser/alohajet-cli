@@ -218,13 +218,19 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     }
 
     private func write(_ client: Int32, status: Int, json: String, mcp: Bool = false) {
+        #if os(Linux)
+        // The pinned SDK forwards SSE bodies verbatim on Linux. Exercise its JSON
+        // response path here; macOS still covers the native server's SSE framing.
+        let sse = false
+        #else
         let sse = mcp && status == 200
+        #endif
         let body = Data((sse ? "event: message\ndata: \(json)\n\n" : json).utf8)
         var head = "HTTP/1.1 \(status) Response\r\n"
         if status != 202 {
             head += "Content-Type: \(sse ? "text/event-stream" : "application/json")\r\n"
         }
-        if sse { head += "Mcp-Session-Id: \(Self.mcpSession)\r\n" }
+        if mcp && status == 200 { head += "Mcp-Session-Id: \(Self.mcpSession)\r\n" }
         head += "Content-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         let response = Data(head.utf8) + body
         response.withUnsafeBytes { buffer in
