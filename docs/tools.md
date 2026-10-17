@@ -74,7 +74,7 @@ Click an element on the active tab by its aloha-id. click_type selects single/do
 
 `readOnlyHint: false` · `destructiveHint: true` · `openWorldHint: true`
 
-Type text into input/textarea/contenteditable elements by aloha-id. To fill a FORM, pass all of its fields in one call as "fields": [{"aloha_id":"1f3a9c2b","text":"..."},{"aloha_id":"7b21e40d","text":"..."}] (up to 20, filled in order) with submit:true to press Enter once at the end — one call instead of one per field. For a single field, pass aloha_id and text directly. One of the two shapes is required: either aloha_id with text, or fields.
+Type text into input/textarea/contenteditable elements by aloha-id. To fill a FORM, pass all of its fields in one call as "fields": [{"aloha_id":"7959-1f3a9c2b","text":"..."},{"aloha_id":"7959-7b21e40d","text":"..."}] (up to 20, filled in order) with submit:true to press Enter once at the end — one call instead of one per field. For a single field, pass aloha_id and text directly. One of the two shapes is required: either aloha_id with text, or fields.
 
 | parameter | type | required | notes |
 | --- | --- | --- | --- |
@@ -107,11 +107,11 @@ Select an option in a &lt;select&gt; dropdown on the active tab by its aloha-id,
 
 `readOnlyHint: true` · `destructiveHint: false` · `openWorldHint: true`
 
-Read the visible text (or input value) of elements on the active tab by aloha-id. Pass SEVERAL ids at once as a comma-separated list ("1f3a9c2b,7b21e40d,3c8f95a1", up to 20) and each is returned labelled with its id — one call instead of one per element.
+Read the visible text (or input value) of elements on the active tab by aloha-id. Pass SEVERAL ids at once as a comma-separated list ("7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1", up to 20) and each is returned labelled with its id — one call instead of one per element.
 
 | parameter | type | required | notes |
 | --- | --- | --- | --- |
-| `aloha_id` | `string` | yes | One aloha-id, or several as a comma-separated list ("1f3a9c2b,7b21e40d,3c8f95a1", up to 20 per call). Reading a whole list of rows in one call costs one round instead of one round each. |
+| `aloha_id` | `string` | yes | One aloha-id, or several as a comma-separated list ("7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1", up to 20 per call). Reading a whole list of rows in one call costs one round instead of one round each. |
 | `max_chars` | `integer` | no | Total character budget for the text returned, split evenly across the ids read. A read that hits it is truncated and says so. Raise it deliberately: reading a container element can return an entire page. default `20000`, min 1 |
 
 ---
