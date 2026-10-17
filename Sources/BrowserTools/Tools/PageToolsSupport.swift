@@ -91,7 +91,10 @@ func resolveActivePageTab(
 }
 
 func makePageBridge(_ cdpTab: CDPTabHandle, _ signal: AbortSignal) -> AgentBrowserBridge {
-    AgentBrowserBridge(backend: CDPAgentBridgeBackend(tab: cdpTab, signal: signal))
+    // Every page tool comes through here, so this is where "the page the agent last looked at"
+    // is noted (see `AnswerPageTracker`).
+    AnswerPageTracker.current.noteObservation(targetId: cdpTab.id)
+    return AgentBrowserBridge(backend: CDPAgentBridgeBackend(tab: cdpTab, signal: signal))
 }
 
 // MARK: - The id is on another tab
