@@ -275,6 +275,16 @@ that has to be replayed as `Mcp-Session-Id`. The bearer token is read per run, n
 pasted, and plaintext `http` off this machine is refused outright (exit 2) — the same rules
 `-p` follows, written out in [docs/agent-endpoint.md](docs/agent-endpoint.md).
 
+#### `mcp-stdio` — compatibility for saved desktop entries
+
+Older desktop versions saved `"args": ["mcp-stdio"]`. This command uses the same HTTP
+relay as `mcp --endpoint`, defaulting to `http://127.0.0.1:8765`. An explicit
+`--endpoint <url>` overrides that default with the same URL validation and token rules.
+It always relays to the app's MCP server and serves no standalone tools, even if the
+endpoint is unavailable or authentication fails. Keep Aloha running: the relay launches
+neither the app nor Chromium. Use the explicit `mcp --endpoint <url>` form above for new
+configurations, with the running app's automation endpoint.
+
 ## The two browser lanes
 
 `--browser chromium` (the default) drives a Chromium. `--browser aloha` attaches to the

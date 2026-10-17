@@ -24,7 +24,7 @@ struct CLIArgumentTests {
 
     static let commands = [
         "open", "read", "tabs", "close", "quit", "click", "type",
-        "select", "text", "goto", "back", "keys", "wait", "upload", "mcp",
+        "select", "text", "goto", "back", "keys", "wait", "upload", "mcp", "mcp-stdio",
     ]
 
     @Test func helpAloneSucceeds() throws {

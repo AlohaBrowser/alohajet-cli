@@ -6,11 +6,10 @@ import Testing
 //   alohajet mcp                    this package's MCP server, its own tools and Chromium
 //   alohajet mcp --endpoint <url>   a PIPE onto the MCP server a running Aloha browser
 //                                   already mounts at <url>/mcp — no tools, no browser
+//   alohajet mcp-stdio              the legacy relay entry, defaulting to loopback:8765
 //
-// Nothing here can reach a live app, so the cases below are the ones settled before a
-// socket matters: which lane the flag picks, and the endpoint rules. The pipe itself is
-// the SDK's two transports end to end (`MCPRelay.run`), which is the reason there is no
-// framing to test — the relay parses no frame it moves.
+// A loopback fixture exercises the real subprocess and SDK transports. Its responses
+// are synthetic; these tests do not launch the desktop app or use a user's browser.
 //
 // `.serialized` for the same reason as every other suite here: each case blocks its
 // thread in `waitUntilExit`.
@@ -25,6 +24,101 @@ struct MCPRelayLaneTests {
     /// `--endpoint` never reaches a real one: a token is pinned so the developer's own
     /// `~/Library/Application Support/Aloha/automation-token` is neither read nor sent.
     private static let pinnedToken = ["ALOHAJET_AGENT_TOKEN": "test-token"]
+
+    // MARK: - Saved desktop entries
+
+    /// The default case executes EXACTLY the already-saved args, with a listener we
+    /// own on the legacy port. The other cases pin endpoint override and modern relay
+    /// parity. A marker executable catches even an attempted Chromium launch.
+    @Test("authenticated MCP frames relay without launching Chromium", arguments: [
+        "legacy-default", "legacy-explicit", "modern",
+    ])
+    func savedEntriesRelayFramesWithoutLaunchingChromium(_ mode: String) throws {
+        let sandbox = try RelaySandbox()
+        defer { sandbox.remove() }
+        let stub = AgentStubServer(port: mode == "legacy-default" ? 8765 : 0,
+                                   mcpToken: sandbox.token)
+        try stub.start() // If 8765 is busy, fail before contacting its existing owner.
+        defer { stub.stop() }
+        let arguments = mode == "legacy-default" ? ["mcp-stdio"]
+            : [mode == "modern" ? "mcp" : "mcp-stdio", "--endpoint", stub.url]
+        let frames = [
+            #"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"relay-regression","version":"1"}}}"#,
+            #"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fixture_tabs","arguments":{"action":"list"}}}"#,
+        ]
+        let run = try runCLI(arguments, stdin: frames.joined(separator: "\n") + "\n",
+                             environment: sandbox.environment, timeout: 30)
+
+        let chromiumWasLaunched = sandbox.chromiumWasLaunched
+        #expect(!chromiumWasLaunched, "the relay attempted to launch Chromium")
+        #expect(run.status == 0, "\(run.combined)")
+        #expect(run.stderr.isEmpty, "\(run.stderr)")
+        let replies = try run.stdout.split(separator: "\n").map {
+            try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+        }
+        #expect(replies.compactMap { $0["id"] as? Int } == [0, 2, 3])
+        #expect(replies.allSatisfy { $0["jsonrpc"] as? String == "2.0" && $0["error"] == nil })
+        let initialized = try #require(replies.first?["result"] as? [String: Any])
+        #expect((initialized["serverInfo"] as? [String: Any])?["name"] as? String == "relay-fixture")
+        let listed = try #require(replies.first { $0["id"] as? Int == 2 }?["result"] as? [String: Any])
+        #expect((listed["tools"] as? [[String: Any]])?.first?["name"] as? String == "fixture_tabs")
+        let called = try #require(replies.first { $0["id"] as? Int == 3 }?["result"] as? [String: Any])
+        #expect(called["isError"] as? Bool == false)
+        #expect((called["content"] as? [[String: Any]])?.first?["text"] as? String == "fixture tab list")
+
+        let requests = stub.requests
+        try #require(requests.count == frames.count)
+        #expect(requests.allSatisfy { $0.method == "POST" && $0.path == "/mcp" })
+        // Assert only the comparison result so a failed test cannot print credentials.
+        let authenticated = requests.allSatisfy { $0.authorization == "Bearer \(sandbox.token)" }
+        #expect(authenticated)
+        #expect(requests.allSatisfy { $0.contentType?.contains("application/json") == true })
+        #expect(requests.allSatisfy {
+            $0.accept?.contains("application/json") == true && $0.accept?.contains("text/event-stream") == true
+        })
+        #expect(requests.first?.mcpSession == nil)
+        #expect(requests.dropFirst().allSatisfy { $0.mcpSession == AgentStubServer.mcpSession })
+        #expect(requests.allSatisfy { $0.mcpProtocol?.isEmpty == false })
+        for (request, frame) in zip(requests, frames) {
+            let sent = try JSONSerialization.jsonObject(with: Data(request.body.utf8)) as? NSDictionary
+            let expected = try JSONSerialization.jsonObject(with: Data(frame.utf8)) as? NSDictionary
+            #expect(sent == expected, "a relay request changed the client's frame")
+        }
+    }
+
+    @Test("an unauthorized relay never falls back to standalone MCP", arguments: ["mcp", "mcp-stdio"])
+    func authenticationFailureDoesNotServeStandaloneTools(_ command: String) throws {
+        let sandbox = try RelaySandbox()
+        defer { sandbox.remove() }
+        let stub = AgentStubServer(mcpToken: sandbox.token)
+        try stub.start()
+        defer { stub.stop() }
+        var environment = sandbox.environment
+        environment["ALOHAJET_AGENT_TOKEN"] = "incorrect-fixture-credential"
+        let run = try runCLI([command, "--endpoint", stub.url], stdin: Self.toolsCall,
+                             environment: environment)
+        #expect(run.status == 3, "\(run.combined)")
+        #expect(run.stdout.isEmpty, "the relay answered with its own tools")
+        #expect(run.stderr.contains("Authentication required"), "\(run.stderr)")
+        #expect(stub.requests.count == 1)
+        let chromiumWasLaunched = sandbox.chromiumWasLaunched
+        #expect(!chromiumWasLaunched)
+    }
+
+    @Test func legacyHelpDocumentsTheDefaultAndCompatibilityScope() throws {
+        for flag in ["--help", "-h"] {
+            let run = try runCLI(["mcp-stdio", flag])
+            #expect(run.status == 0)
+            #expect(run.stderr.isEmpty)
+            #expect(run.stdout.contains("http://127.0.0.1:8765"))
+            #expect(run.stdout.contains("mcp --endpoint"))
+            #expect(run.stdout.contains("running"))
+        }
+        let usage = try runCLI(["--help"])
+        #expect(usage.stdout.contains("mcp-stdio"))
+    }
 
     // MARK: - The flag picks the lane
 
@@ -69,8 +163,9 @@ struct MCPRelayLaneTests {
     /// it by falling through to a launched Chromium is the failure mode this lane exists
     /// to avoid: the host believes it is driving the user's browser and nothing says
     /// otherwise. It is a usage error, and it names the flag.
-    @Test func anEmptyEndpointIsAUsageErrorRatherThanTheOtherLane() throws {
-        let run = try runCLI(["mcp", "--endpoint="], environment: Self.pinnedToken)
+    @Test(arguments: ["mcp", "mcp-stdio"])
+    func anEmptyEndpointIsAUsageErrorRatherThanTheOtherLane(_ command: String) throws {
+        let run = try runCLI([command, "--endpoint="], environment: Self.pinnedToken)
         #expect(run.status == 2)
         #expect(run.stderr.contains("--endpoint"), "\(run.combined)")
         #expect(run.stdout.isEmpty, "a usage error reached the protocol channel: \(run.stdout)")
@@ -91,9 +186,9 @@ struct MCPRelayLaneTests {
         "http://example.com",
         "http://127.0.0.1.evil.example:8765",
         "http://10.0.0.5:8765",
-    ])
-    func nonLoopbackPlaintextIsRefused(_ endpoint: String) throws {
-        let run = try runCLI(["mcp", "--endpoint", endpoint], environment: Self.pinnedToken)
+    ], ["mcp", "mcp-stdio"])
+    func nonLoopbackPlaintextIsRefused(_ endpoint: String, _ command: String) throws {
+        let run = try runCLI([command, "--endpoint", endpoint], environment: Self.pinnedToken)
         #expect(run.status == 2, "\(endpoint) was not refused: \(run.combined)")
         #expect(run.stderr.contains("loopback"), "\(run.combined)")
         #expect(run.stdout.isEmpty)
@@ -104,9 +199,9 @@ struct MCPRelayLaneTests {
     /// far from the typo that caused it.
     @Test("an endpoint that is not an http(s) URL is a usage error", arguments: [
         "localhost:8765", "127.0.0.1:8765", "ws://127.0.0.1:8765", "not a url",
-    ])
-    func aMalformedEndpointIsAUsageError(_ endpoint: String) throws {
-        let run = try runCLI(["mcp", "--endpoint", endpoint], environment: Self.pinnedToken)
+    ], ["mcp", "mcp-stdio"])
+    func aMalformedEndpointIsAUsageError(_ endpoint: String, _ command: String) throws {
+        let run = try runCLI([command, "--endpoint", endpoint], environment: Self.pinnedToken)
         #expect(run.status == 2, "\(endpoint) was accepted: \(run.combined)")
         #expect(run.stderr.contains("http(s) URL"), "\(run.combined)")
     }
@@ -116,9 +211,10 @@ struct MCPRelayLaneTests {
     /// case the flag exists for, and TLS covers the wire. `.invalid` is reserved by
     /// RFC 2606, so this reaches DNS and nothing else: the endpoint is accepted (the run
     /// gets as far as the transport and fails there, 3) rather than refused as usage (2).
-    @Test func aRemoteHttpsEndpointIsAllowed() throws {
+    @Test(arguments: ["mcp", "mcp-stdio"])
+    func aRemoteHttpsEndpointIsAllowed(_ command: String) throws {
         let run = try runCLI(
-            ["mcp", "--endpoint", "https://alohajet-no-such-host.invalid:8765"],
+            [command, "--endpoint", "https://alohajet-no-such-host.invalid:8765"],
             stdin: Self.toolsCall, environment: Self.pinnedToken, timeout: 60)
         #expect(run.status == 3, "exited \(run.status): \(run.combined)")
         #expect(!run.stderr.contains("loopback"), "\(run.combined)")
@@ -129,9 +225,10 @@ struct MCPRelayLaneTests {
     /// gets no credential at all unless one was named, and a bare 401 reads as a broken
     /// token rather than as the rule it is — so the rule is stated once, on stderr,
     /// which is the only stream the JSON-RPC channel is not.
-    @Test func aRemoteEndpointWithNoNamedTokenSaysSo() throws {
+    @Test(arguments: ["mcp", "mcp-stdio"])
+    func aRemoteEndpointWithNoNamedTokenSaysSo(_ command: String) throws {
         let run = try runCLI(
-            ["mcp", "--endpoint", "https://alohajet-no-such-host.invalid:8765"],
+            [command, "--endpoint", "https://alohajet-no-such-host.invalid:8765"],
             stdin: Self.toolsCall, environment: ["ALOHAJET_AGENT_TOKEN": ""], timeout: 60)
         #expect(run.stderr.contains("ALOHAJET_AGENT_TOKEN"), "\(run.combined)")
         #expect(run.stdout.isEmpty, "a note reached the protocol channel: \(run.stdout)")
@@ -163,4 +260,28 @@ struct MCPRelayLaneTests {
         #expect(run.stdout.contains("Claude Desktop"))
         #expect(run.stdout.contains("https"))
     }
+}
+
+/// A private home/token/browser marker for real relay subprocesses. No app or Chrome
+/// can be launched even if the regression sends the legacy verb into `connect`.
+private struct RelaySandbox {
+    let root: URL
+    let token = UUID().uuidString
+    var environment: [String: String] {
+        ["HOME": root.path, "CFFIXED_USER_HOME": root.path, "TMPDIR": root.path,
+         "ALOHAJET_AGENT_TOKEN": token, "ALOHAJET_BROWSER": root.appendingPathComponent("chrome").path]
+    }
+    var chromiumWasLaunched: Bool {
+        FileManager.default.fileExists(atPath: root.appendingPathComponent("chromium-launched").path)
+    }
+    init() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("alohajet-relay-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
+                                               attributes: [.posixPermissions: 0o700])
+        let browser = root.appendingPathComponent("chrome")
+        try "#!/bin/sh\n: > \"$TMPDIR/chromium-launched\"\nexit 0\n"
+            .write(to: browser, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: browser.path)
+    }
+    func remove() { try? FileManager.default.removeItem(at: root) }
 }
