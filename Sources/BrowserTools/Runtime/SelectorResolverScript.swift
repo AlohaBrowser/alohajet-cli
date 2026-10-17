@@ -27,7 +27,8 @@ import Foundation
 ///   * `:has-text(t)` -- text containment, case-insensitive; a quoted `t` is a literal minted from
 ///     a receipt's `[text="…"]` and prefers whole-text equality, then whole-word, then a
 ///     whitespace-insensitive tier, then the element's own aria-label / title / placeholder /
-///     value / alt / name; a `/re/flags` argument is a regex; empty text matches nothing;
+///     value / alt / name, then (for an element with no text) the alt of an image inside it; a
+///     `/re/flags` argument is a regex; empty text matches nothing;
 ///   * `:upward(n|sel)` -- the n-th ancestor, or `closest(sel)`;
 ///   * `:matches-attr(name=v)` -- the attribute exists, or its value contains `v` (or `/re/`);
 ///   * `:nth-match(n)` -- the n-th of what the chain matched so far, in document order;
@@ -240,16 +241,36 @@ public enum SelectorResolverScript {
       // page. Reached ONLY when every text tier found nothing: attribute equality first, then
       // containment for anchors of three or more characters.
       var ANCHOR_ATTRS = ['aria-label', 'title', 'placeholder', 'value', 'alt', 'name'];
+      // AN IMAGE INSIDE AN ELEMENT WITH NO TEXT names it too: the receipt's `[text=…]` falls back
+      // to the alt of an image inside the element (a logo link, an icon button; since 2026-10-18),
+      // so the anchor minted from it must resolve the same way. Only for an element with no text
+      // of its own -- a container whose text is someone else's is not named by an image in it.
+      function innerImageAlts(n) {
+        var out = [];
+        try {
+          if (normText(n.textContent) !== '' || !n.querySelectorAll) return out;
+          var imgs = n.querySelectorAll('img[alt]');
+          for (var i = 0; i < imgs.length; i++) {
+            var a = imgs[i].getAttribute ? imgs[i].getAttribute('alt') : null;
+            if (a != null && a !== '') out.push(a);
+          }
+        } catch (e) {}
+        return out;
+      }
       function matchByAttribute(nodes, needle) {
         var want = normText(needle);
         if (!want) return [];
         var exact = [], loose = [];
         nodes.forEach(function (n) {
+          var values = [];
           for (var i = 0; i < ANCHOR_ATTRS.length; i++) {
             var v = null;
             try { v = n.getAttribute ? n.getAttribute(ANCHOR_ATTRS[i]) : null; } catch (e) { v = null; }
-            if (v == null || v === '') continue;
-            var t = normText(String(v));
+            if (v != null && v !== '') values.push(v);
+          }
+          values = values.concat(innerImageAlts(n));
+          for (var j = 0; j < values.length; j++) {
+            var t = normText(String(values[j]));
             if (t === want) { exact.push(n); return; }
             if (want.length >= 3 && t.indexOf(want) !== -1) { loose.push(n); return; }
           }

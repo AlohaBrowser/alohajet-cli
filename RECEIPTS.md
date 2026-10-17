@@ -22,7 +22,7 @@ it goes to `querySelectorAll` as written. A quoted argument (`"…"` or `'…'`)
 
 | Pseudo | Holds | Keeps | Since |
 |---|---|---|---|
-| `:has-text(t)` | text, quoted, bare or `/re/` | elements whose text contains `t`, case-insensitive. A quoted `t` prefers the elements whose whole text equals it, then those where it is a whole word, then falls back to a whitespace-insensitive match and an attribute match (aria-label, title, alt, placeholder, value, name). Empty `t` matches nothing | 2026-07-01 |
+| `:has-text(t)` | text, quoted, bare or `/re/` | elements whose text contains `t`, case-insensitive. A quoted `t` prefers the elements whose whole text equals it, then those where it is a whole word, then falls back to a whitespace-insensitive match and an attribute match (aria-label, title, alt, placeholder, value, name, and -- for an element with no text, since 2026-10-18 -- the alt of an image inside it). Empty `t` matches nothing | 2026-07-01 |
 | `:upward(n\|sel)` | a number or a CSS selector | for each element, its `n`th ancestor, or `closest(sel)` | 2026-07-01 |
 | `:matches-attr(name=v)` | `name`, or `name=v` (`v` may be `/re/`) | elements that have the attribute, or whose value contains `v` | 2026-07-01 |
 | `:nth-match(n)` | a positive integer | the `n`th of what the chain matched so far, in document order; nothing when there are fewer | 2026-09-23 |
@@ -45,7 +45,7 @@ Writer: `PageToolReceipt.selectorNote` (`Sources/BrowserTools/Tools/PageToolsSup
 | `[path=]` | the ladder's position path, present **only** when exception 1 moved it out of `[selector=]` | 2026-10-01 | — |
 | `[matches=]` | how many elements `[selector=]` matches on the page now | 2026-09-21 | 2026-10-01 (it follows `[selector=]`) |
 | `[index=]` | `i/n`: which of the `n` matches this element is, 1-based, document order. Only when `n > 1`. Under exception 1 it is counted among the anchor's matches (below). **`none`**: `[selector=]` matched `n` elements (`[matches=]`, possibly 0) and this element was not among them, and no live path could be rebuilt -- the address is UNVERIFIED; replay by `[list=]`, `[path=]` or `[anchor=]` instead, never by this selector | 2026-09-21 | 2026-10-18 (kept under exception 1) |
-| `[text=]` | the element's own rendered text, quoted, whitespace collapsed | 2026-09-21 | — |
+| `[text=]` | the element's own rendered text, quoted, whitespace collapsed, at most 60 characters. With no text: its aria-label, `value` attribute or placeholder, then its title, then the alt of an image inside it. On every receipt that names an element, batched `page_type` fields included (`ElementTextProbe`, `Runtime/ReceiptProbes.swift`) | 2026-09-21 | 2026-10-18 (batched fields; title and image-alt fallbacks) |
 | `[attrs=]` | the element's real attributes as `name="value"` pairs (aria-label, href, role, name, data-*…) | 2026-09-21 | — |
 | `[list=]` | `<list selector> i/n`: the repeating list the element sits in, and its place there. Only when the list has 2+ members | 2026-09-23 | — |
 | `[anchor=]` | the address chosen by the anchor rule (below) and checked on the live page with the resolver | 2026-09-23 | 2026-10-01 (rule 0 is `:rel-href`) |
@@ -165,3 +165,4 @@ in the agent repository's copy of this file.
 | 2026-10-04 | this package, PR `port/08-receipt-anchor` | the anchor rule, `[anchor=]`, `[anchor-nth=]`, `[path=]` and both exceptions move into `alohajet-cli` |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | exception 1 keeps `[index=]`, counted among the anchor's matches; the anchor probe reports the element's place among them (re-implements agent repo `a1687b0`, 2026-10-08, which was never pushed) |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[anchor-nth=]` whenever `[anchor=]` matches 2+, rule 0 included; exception 1 excludes only the rule-3 list ordinal (re-implements agent repo `6b4a864`, 2026-10-08, which was never pushed) |
+| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[text=]` on batched `page_type` fields; `[text=]` falls back to the title, then an inner image's alt; the resolver's `:has-text` and the anchor label read an inner image's alt the same way (re-implements agent repo `9f8db00`, 2026-10-08, which was never pushed) |

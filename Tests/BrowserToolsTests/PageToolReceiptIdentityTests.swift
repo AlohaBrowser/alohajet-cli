@@ -180,6 +180,19 @@ struct PageToolReceiptIdentityTests {
         #expect(none == "")
     }
 
+    /// A BATCHED `page_type` FIELD carries `[text=]` like a single-field type (9f8db00): a field has
+    /// no rendered text, so it is its placeholder here. Until 2026-10-18 the batch path skipped the
+    /// text probe and llmdex's inventory read "NO TEXT" for every field of a batched form.
+    @Test func aBatchedFieldCarriesItsText() async {
+        let node = DomNode(id: "f1", element: DomElement(tagName: "input", attributes: ["name": "from"]))
+        let tab = ReceiptFakeTab(nodes: ["f1": node])
+        let backend = ReceiptProbeBackend([.string(#"{"n":1,"has":true,"path":"","pathN":0}"#), .string("From"),
+                                           .string(#"{"index":1,"attrs":[["name","from"],["placeholder","From"]]}"#), .string("y"), .string("")])
+        let note = await PageTypeExecutorTool.fieldNote(alohaId: "f1", tab: tab, bridge: AgentBrowserBridge(backend: backend))
+        #expect(note == " [selector=[name=\"from\"]] [tool=page_type] [matches=1] [text=\"From\"] [attrs=name=\"from\" placeholder=\"From\"]")
+        #expect(backend.scripts[1].contains("/* receipt: element text */"))
+    }
+
     /// A SELECTOR THE LIVE PAGE DOES NOT CONFIRM is written with `[index=none]`: the identity probe
     /// found the element but not among the selector's matches (its class or id changed on
     /// re-render, or it matches nothing now), and no path could be rebuilt. A mint then knows not

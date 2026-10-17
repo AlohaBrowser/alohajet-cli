@@ -50,11 +50,15 @@ struct PageToolReceiptMatchesTests {
     }
 
     /// The element's own words ride on the receipt, capped and whitespace-collapsed by the page
-    /// side; nil when the element has none and no aria-label / value / placeholder either.
+    /// side; nil when the element has none and no aria-label / value / placeholder / title / image
+    /// alt either (the fallbacks run page side: element_text.js).
     @Test func theBridgeReadsTheElementsOwnText() async {
         let backend = ReceiptProbeBackend([.string("BELTED FAUX SUEDE JACKET")])
         #expect(await AgentBrowserBridge(backend: backend).elementText(alohaId: "c1") == "BELTED FAUX SUEDE JACKET")
-        #expect(backend.scripts[0].contains(#"[aloha-id="c1"]"#))
+        #expect(backend.scripts[0].contains("/* receipt: element text */"))
+        #expect(backend.scripts[0].hasSuffix(#"})("c1")"#))     // the id rides as a JSON literal
+        #expect(backend.scripts[0].contains(#"getAttribute("title")"#) && backend.scripts[0].contains(#"querySelectorAll("img[alt]")"#))
+        #expect(!backend.scripts[0].contains("\\#("))
         #expect(await AgentBrowserBridge(backend: ReceiptProbeBackend([.string("")])).elementText(alohaId: "c1") == nil)
         #expect(await AgentBrowserBridge(backend: ReceiptProbeBackend(error: ReceiptProbeFailure())).elementText(alohaId: "c1") == nil)
     }

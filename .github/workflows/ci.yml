@@ -151,6 +151,8 @@ jobs:
         run: node Tests/BrowserToolsTests/receipt_anchor.js
       - name: Receipt list position (fake DOM)
         run: node Tests/BrowserToolsTests/list_position.js
+      - name: Receipt element text and its fallbacks (fake DOM)
+        run: node Tests/BrowserToolsTests/element_text.js
       - name: Main heading probe (fake DOM)
         run: node Tests/BrowserToolsTests/main_heading.js
       - name: RECEIPTS.md matches the code

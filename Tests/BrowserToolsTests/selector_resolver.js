@@ -168,6 +168,22 @@ check('placeholder / value / alt / name are anchor attributes too',
   && NS.resolveAll('input:has-text("Go")', makeDoc([el('input', { attrs: { value: 'Go' } })])).length === 1
   && NS.resolveAll('img:has-text("Logo")', makeDoc([el('img', { attrs: { alt: 'Logo' } })])).length === 1
   && NS.resolveAll('input:has-text("q")', makeDoc([el('input', { attrs: { name: 'q' } })])).length === 1);
+// 23b. AN IMAGE INSIDE A TEXTLESS ELEMENT names it (2026-10-18): the receipt's `[text=]` falls back
+//      to the alt of an image inside the element (a logo link), so the anchor minted from it resolves.
+//      An element WITH text is not named by an image inside it; equality still beats containment.
+const withImg = (cls, text, alts) => {
+  const e = el('a', { cls, text });
+  const imgs = alts.map(a => el('img', { attrs: { alt: a }, parent: e }));
+  e.querySelectorAll = q => (q === 'img[alt]' ? imgs : []);
+  return e;
+};
+const logo = withImg('home', '', ['Acme Shop']);
+const banner = withImg('home', 'Sale today', ['Acme Shop']);
+const icon = withImg('home', '', ['Acme Shop logo, large']);
+check('a textless link is named by the alt of its image', (() => { const r = NS.resolveAll('a.home:has-text("Acme Shop")', makeDoc([banner, logo])); return r.length === 1 && r[0] === logo; })());
+check('an element with text of its own is not named by an image in it', NS.resolveAll('a.home:has-text("Acme Shop")', makeDoc([banner])).length === 0);
+check('an image alt matches by containment for a longer anchor, equality first', (() => { const r = NS.resolveAll('a.home:has-text("Acme Shop")', makeDoc([icon, logo])); return r.length === 1 && r[0] === logo; })()
+  && NS.resolveAll('a.home:has-text("shop logo")', makeDoc([icon, logo]))[0] === icon);
 // 24. Nothing anywhere: still no match.
 check('no text, no attribute: no match', NS.resolveAll('button.ic:has-text("Open")', makeDoc([closeAll, closeX])).length === 0);
 

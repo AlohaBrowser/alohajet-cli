@@ -16,22 +16,12 @@ extension AgentBrowserBridge {
     /// many-match selector needs the words that were actually on the element, not the words of
     /// the task: the card clicked on jacket-bag-luna-ge33 read "BELTED FAUX SUEDE JACKET", the
     /// minted anchor said 'FAUX SUEDE BELTED JACKET', and the replay matched nothing. Sixty
-    /// characters of collapsed text, or the aria-label / value / placeholder when there is no text;
+    /// characters of collapsed text, or -- when the element has none -- its aria-label / value /
+    /// placeholder, then its title, then the alt of an image inside it (``ElementTextProbe``);
     /// nil when the element cannot be read.
     func elementText(alohaId: String) async -> String? {
-        let escaped = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
-        let script = """
-        (function () { /* receipt: element text */
-          try {
-            var el = document.querySelector('[aloha-id="\(escaped)"]');
-            if (!el) return "";
-            var t = (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim();
-            if (!t) t = el.getAttribute("aria-label") || el.getAttribute("value") || el.getAttribute("placeholder") || "";
-            return String(t).slice(0, 60);
-          } catch (e) { return ""; }
-        })()
-        """
-        guard let value = try? await backend.evaluateViaCdp(script), let text = value.stringValue, !text.isEmpty
+        guard let value = try? await backend.evaluateViaCdp(ElementTextProbe.expression(alohaId: alohaId)),
+              let text = value.stringValue, !text.isEmpty
         else { return nil }
         return text
     }
@@ -205,5 +195,42 @@ enum LiveSelectorProbe {
         let pathN = value["pathN"]?.intValue ?? 0
         return Reply(matches: n >= 0 ? n : nil, contains: value.bool("has") ?? false,
                      rebuiltPath: path, rebuiltMatches: path == nil || pathN < 1 ? nil : pathN)
+    }
+}
+
+/// The one page round trip behind ``AgentBrowserBridge/elementText(alohaId:)``: the words a
+/// receipt's `[text="…"]` carries. A template (`\#(idLiteral)`, `\#(maxLength)`) so a harness can
+/// run the shipped bytes against a fake document: `Tests/BrowserToolsTests/element_text.js`.
+///
+/// THE FALLBACKS, in order, for an element with no rendered text of its own: its aria-label, its
+/// `value` attribute, its placeholder (a form field), then its `title`, then the `alt` of an image
+/// inside it (an icon link, a logo button). The last two since 2026-10-18 (agent repo 9f8db00,
+/// re-implemented here): openstreetmap.org's Directions link is a `title` and an image, a shop's
+/// logo link an image with an alt, and such a receipt carried no `[text=]` at all, so the mint
+/// was shown "NO TEXT" and anchored on a position. The resolver's `:has-text` falls back the same
+/// way, so an anchor minted from these words resolves (`SelectorResolverScript`, `matchByAttribute`).
+enum ElementTextProbe {
+    static let maxLength = 60
+
+    static func expression(alohaId: String) -> String {
+        let idLiteral = JSValue.string(alohaId).stringify()
+        return #"""
+        (function (id) { /* receipt: element text */
+          try {
+            var el = null, tagged = document.querySelectorAll('[aloha-id]');
+            for (var k = 0; k < tagged.length; k++) if (tagged[k].getAttribute('aloha-id') === id) { el = tagged[k]; break; }
+            if (!el) return "";
+            var clean = function (v) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim(); };
+            var t = clean(el.innerText || el.textContent || "");
+            if (!t) t = clean(el.getAttribute("aria-label") || el.getAttribute("value") || el.getAttribute("placeholder") || "");
+            if (!t) t = clean(el.getAttribute("title") || "");
+            if (!t && el.querySelectorAll) {
+              var imgs = el.querySelectorAll("img[alt]");
+              for (var i = 0; i < imgs.length && !t; i++) t = clean(imgs[i].getAttribute("alt") || "");
+            }
+            return t.slice(0, \#(maxLength));
+          } catch (e) { return ""; }
+        })(\#(idLiteral))
+        """#
     }
 }

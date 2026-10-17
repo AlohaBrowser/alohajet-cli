@@ -206,6 +206,19 @@ import ToolABI
         }
     }
 
+    /// ONE BATCHED FIELD'S RECEIPT: the same note a single-field type writes, `[text=]` included.
+    ///
+    /// The batch path used to leave the text out (`liveNote(…, text: false)`), so a form filled
+    /// the way the batch hint recommends reached llmdex with no words for any of its fields -- the
+    /// inventory the mint is shown read "NO TEXT -- :has-text() cannot match this element" for a
+    /// field whose placeholder said "From" -- while the same field typed on its own carried
+    /// `[text="From"]`. A field has no rendered text, so its `[text=]` is its aria-label, value,
+    /// placeholder or title (``ElementTextProbe``). Agent repo 9f8db00 (2026-10-08), re-implemented
+    /// here.
+    static func fieldNote(alohaId: String, tab: StepTraceTab?, bridge: AgentBrowserBridge) async -> String {
+        await PageToolReceipt.liveNote(alohaId: alohaId, tab: tab, bridge: bridge, tool: "page_type")
+    }
+
     /// WHY A PARTIAL FILL MUST NOT SUBMIT. Batching a read is harmless when one id is stale — the caller gets
     /// the rest and asks again. A form is not like that: submitting with field two missing sends a WRONG
     /// request that the site accepts, and the agent then reasons over a result that answers a different
@@ -228,8 +241,7 @@ import ToolABI
             // selector in 270 of 2120 results, `page_click` in 4370 of 8703).
             var notes: [String: String] = [:]
             for field in fields where notes[field.alohaId] == nil {
-                notes[field.alohaId] = await PageToolReceipt.liveNote(
-                    alohaId: field.alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_type", text: false)
+                notes[field.alohaId] = await Self.fieldNote(alohaId: field.alohaId, tab: resolved.cdpTab, bridge: bridge)
             }
             var filled: [String] = []
             var failures: [String] = []
@@ -246,8 +258,7 @@ import ToolABI
                     // receipts use -- the field's own when the id named its label (the snapshot read
                     // is still the pre-typing one here).
                     if let redirect = Self.redirect(in: result) {
-                        let note = await PageToolReceipt.liveNote(
-                            alohaId: redirect.id, tab: resolved.cdpTab, bridge: bridge, tool: "page_type", text: false)
+                        let note = await Self.fieldNote(alohaId: redirect.id, tab: resolved.cdpTab, bridge: bridge)
                         notes[redirect.id] = note
                         typedInto.append(redirect.id)
                         filled.append("\(redirect.id) (the <\(redirect.tag)> that \(field.alohaId) labels; use it from now on)" + note)

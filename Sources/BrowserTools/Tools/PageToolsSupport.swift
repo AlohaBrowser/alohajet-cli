@@ -265,13 +265,12 @@ enum PageToolReceipt {
     /// the element's own text, and its identity (index, attributes, list). One seam for every
     /// tool, so click, type, select, press_keys and get_text cannot drift into five receipts.
     /// `""` when the element has no durable selector: the note never guesses.
-    static func liveNote(alohaId: String, tab: StepTraceTab?, bridge: AgentBrowserBridge, tool: String,
-                         text: Bool = true) async -> String {
+    static func liveNote(alohaId: String, tab: StepTraceTab?, bridge: AgentBrowserBridge, tool: String) async -> String {
         guard let live = await bridge.liveSelector(durableSelector(alohaId: alohaId, tab: tab), alohaId: alohaId)
         else { return "" }
         return selectorNote(
             selector: live.selector, matches: live.matches,
-            text: text ? await bridge.elementText(alohaId: alohaId) : nil,
+            text: await bridge.elementText(alohaId: alohaId),
             identity: await bridge.elementIdentity(selector: live.selector, alohaId: alohaId),
             tool: tool)
     }

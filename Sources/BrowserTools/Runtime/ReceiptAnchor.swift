@@ -33,8 +33,8 @@ import ToolABI
 ///   2. the `[list]` selector + `:has-text("<label>")`;
 ///   3. the `[list]` selector + `nth` (the element has no label that tells it apart);
 ///   4. the `[selector]` + `:has-text("<label>")`.
-/// The label is the element's OWN: its text, else its aria-label / title / alt / placeholder --
-/// never a neighbour's. A label with a digit ("98 comments", "$19.99") is never used for rules 2
+/// The label is the element's OWN: its text, else its aria-label / title / alt / placeholder, else
+/// the alt of an image inside it (since 2026-10-18) -- never a neighbour's. A label with a digit ("98 comments", "$19.99") is never used for rules 2
 /// and 4: it changes with the page's content, so the element is addressed by its list position.
 /// For a READ (`get_text`) rules 2 and 4 are skipped: the element's text is the value being read,
 /// and an address built from it names the answer (github-ss-r53: `…nav-list>ul>li>a:has-text("v3.8.5")`
@@ -97,6 +97,12 @@ enum ReceiptAnchorProbe {
             if (!label) {
               var names = ['aria-label', 'title', 'alt', 'placeholder'];
               for (var n = 0; n < names.length && !label; n++) label = String(el.getAttribute(names[n]) || '').replace(/\s+/g, ' ').trim();
+            }
+            // An element with no text and no label of its own is named by an image inside it (a logo
+            // link): the receipt's `[text=]` says so, and the resolver's `:has-text` reads it too.
+            if (!label && el.querySelectorAll) {
+              var imgs = el.querySelectorAll('img[alt]');
+              for (var g = 0; g < imgs.length && !label; g++) label = String(imgs[g].getAttribute('alt') || '').replace(/\s+/g, ' ').trim();
             }
             label = label.slice(0, \#(maxLabelLength));
             var quote = function (v) { return '"' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; };

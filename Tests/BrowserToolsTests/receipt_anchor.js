@@ -289,5 +289,20 @@ function check(name, cond, detail) { console.log((cond ? 'ok   ' : 'FAIL ') + na
   check('a javascript: href is not offered', jr && !/href/.test(jr.s), jr);
 }
 
+// 16. A TEXTLESS LINK NAMED BY ITS IMAGE (2026-10-18): a shop's logo links in a list, no text, no
+//     aria-label or title -- the alt of the image inside is the label, and the resolver's `:has-text`
+//     reads it the same way, so the list + text anchor verifies.
+{
+  const logoLink = (alt, id) => {
+    const img = el('img', { alt });
+    const a = el('a', { 'aloha-id': id }, [img]);
+    a.querySelectorAll = q => (q === 'img[alt]' ? [img] : []);
+    return el('li', {}, [a]);
+  };
+  const doc = makeDoc([el('ul', {}, [logoLink('Acme', 'l1'), logoLink('Globex', 'l2')])]);
+  const r = run(doc, 'l2', 'body>ul>li:nth-of-type(2)>a', false, 'body>ul>li>a');
+  check('an image link: list + the image alt as text', r && r.s === 'body>ul>li>a:has-text("Globex")', r);
+}
+
 console.log(failures ? `${failures} FAILED` : 'all receipt-anchor checks passed');
 process.exit(failures ? 1 : 0);
