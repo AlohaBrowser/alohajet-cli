@@ -35,7 +35,7 @@ import ToolABI
         guard let live = await bridge.liveSelector(PageToolReceipt.durableSelector(alohaId: alohaId, tab: tab), alohaId: alohaId)
         else { return "" }
         let text = await bridge.elementText(alohaId: alohaId)
-        let identity = await bridge.elementIdentity(selector: live.selector, alohaId: alohaId)
+        let identity = await bridge.elementIdentity(selector: live.selector, alohaId: alohaId, forRead: true)
         if let free = answerFreeReadAddress(selector: live.selector, text: text, identity: identity) {
             return PageToolReceipt.selectorNote(
                 selector: free.selector, matches: free.matches, text: text, identity: free.identity, tool: "get_text")
@@ -48,10 +48,11 @@ import ToolABI
     /// selector itself -- its link rung writes the link's own address, and the address holds the
     /// value: agent run github-ss-r82 read v3.8.5 through `a[href="/MHSanaei/3x-ui/releases/tag/v3.8.5"]`,
     /// github-ss-r84 read "Latest" through `a[href="/MHSanaei/3x-ui/releases/latest"]` (the mint
-    /// refused it: "a selector that CONTAINS THE ANSWER"). When the ladder's selector contains the
-    /// text read (3+ characters, any case), the element is addressed by its place in its LIST
-    /// (`[selector]` = the list, `[matches]` its size, `[index]` the place). nil when the selector
-    /// is already free of the text, or there is nothing better to offer.
+    /// refused it: "a selector that CONTAINS THE ANSWER"). The anchor is already free of it; the
+    /// selector was not. When the ladder's selector contains the text read (3+ characters, any
+    /// case), the element is addressed by its place in its LIST (`[selector]` = the list,
+    /// `[matches]` its size, `[index]` the place) or, with no list, by its answer-free anchor. nil
+    /// when the selector is already free of the text, or there is nothing better to offer.
     static func answerFreeReadAddress(selector: String, text: String?, identity: ElementIdentity?)
         -> (selector: String, matches: Int?, identity: ElementIdentity?)? {
         guard let text, text.count >= 3 else { return nil }
@@ -60,7 +61,15 @@ import ToolABI
         if let list = identity?.list, !list.selector.lowercased().contains(needle) {
             var placed = ElementIdentity(index: list.index, attributes: identity?.attributes ?? [])
             placed.list = list
+            placed.anchor = identity?.anchor
             return (list.selector, list.count, placed)
+        }
+        if let anchor = identity?.anchor, anchor.nth == nil, !anchor.selector.lowercased().contains(needle) {
+            // The anchor was verified to resolve to exactly this element, so it IS the one match.
+            var named = ElementIdentity(index: 1, attributes: identity?.attributes ?? [])
+            named.list = identity?.list
+            named.anchor = anchor
+            return (anchor.selector, anchor.count ?? 1, named)
         }
         return nil
     }
