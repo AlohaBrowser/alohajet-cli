@@ -369,6 +369,13 @@ final class MockCDP {
         case "Page.navigate":
             if let url = params["url"]?.stringValue, !url.isEmpty {
                 pageUrl = url
+                // The browser's own listing follows the navigation, as Chrome's
+                // `Target.getTargets` does: a tool that re-reads the listing after
+                // navigating (tab attribution's `syncTabsWithBrowser`) must see the page
+                // the tab is on now, not the URL it was created with.
+                if let sessionId, let targetId = sessionToTarget[sessionId], targets[targetId] != nil {
+                    targets[targetId]?.url = url
+                }
             }
             return .object([("frameId", .string("frame-1"))])
 
