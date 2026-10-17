@@ -149,6 +149,10 @@ struct AnswerPageTrackerTests {
         }
         let open = try #require(window.tabs.tab(fixture.tabId))     // still open: the receipts come first
         #expect(tracker.observedTab(in: window)?.id == open.id)
+        #expect(window.tabs.activeTabId == nil)                       // but out of use, as a closed tab is
+        let next = try await GetTextExecutorTool().execute(
+            .object(["aloha_id": .string("x")]), makePageToolContext(services: services))
+        #expect(next.isError == true)                                 // no page tool acts on it any more
         #expect(await tracker.closeDeferredTabs(in: window) == [fixture.tabId])
         #expect(window.tabs.tab(fixture.tabId) == nil)
         #expect(tracker.observedTab(in: window) == nil)

@@ -493,18 +493,19 @@ func manageTabsClose(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTab
     ctx.session.clearActiveBrowserTabIfMatches(tabId)
     // The tab holding the agent's latest observation closes after the turn's answer receipts are
     // taken, when a runner asked for that (see `AnswerPageTracker`); to the agent it is closed now.
-    let deferred = AnswerPageTracker.current.deferCloseIfObserved(tabId: tabId, targetId: (tab as? CDPTabHandle)?.id)
-    if !deferred {
+    // A deferred close still takes the tab out of use, as a close does, so the page tools do not
+    // go on acting on a tab the agent was told is closed.
+    if AnswerPageTracker.current.deferCloseIfObserved(tabId: tabId, targetId: (tab as? CDPTabHandle)?.id) {
+        if let active = tabsWindow.tabs.activeTabId, tabsWindow.tabs.tab(active)?.id == tab.id {
+            tabsWindow.tabs.setActiveTabId(nil)
+        }
+    } else {
         await tabsWindow.tabs.closeTab(tabId, skipConfirm: true)
     }
 
-    // Rendered once the tab is closed and out of use, so a closed tab never reads "in use". A
-    // deferred close leaves the tab standing until the turn ends, so its row is drawn out of use.
-    let closedRow = deferred
-        ? renderTabRow(TabRow(tab, inUseTabId: nil), askingChat: ctx.sessionId)
-        : renderedTabRow(tab, tabsWindow, ctx)
+    // Rendered once the tab is closed and out of use, so a closed tab never reads "in use".
     return TabToolResult(
-        output: "Closed: \(closedRow)",
+        output: "Closed: \(renderedTabRow(tab, tabsWindow, ctx))",
         tabId: tabId,
         title: title?.isEmpty == false ? title : nil,
         url: url.isEmpty ? nil : url,
