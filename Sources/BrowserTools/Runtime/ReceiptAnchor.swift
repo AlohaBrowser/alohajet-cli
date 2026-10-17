@@ -66,6 +66,20 @@ enum ReceiptAnchorProbe {
         /// that matched 2+ without an `nth`, and refuses an `nth` no receipt reported, so such a
         /// click could not be minted at all. The place among the anchor's matches is that `nth`.
         var index: Int? = nil
+
+        /// The `[anchor-nth=]` a replay of this anchor needs: the rule-3 ordinal, or -- whenever the
+        /// anchor matched two or more elements, rule 0 included -- this element's place among them.
+        /// nil when the anchor names exactly this element.
+        ///
+        /// Why (agent repo, windows-on-snips 6b4a864, 2026-10-08, re-implemented here): a rule-0
+        /// anchor that several links share was reported with no ordinal, so a scenario step that
+        /// took the anchor (llmdex's `preferReportedAnchor`, a read's ordinal filled from
+        /// `[anchor-nth=]`) had nothing to say which of the matches the run used.
+        var replayNth: Int? {
+            if let nth { return nth }
+            if let count, count >= 2, let index { return index }
+            return nil
+        }
     }
 
     static func expression(alohaId: String, selector: String?, stable: Bool, list: String?, forRead: Bool = false) -> String {

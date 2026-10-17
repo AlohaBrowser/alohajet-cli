@@ -49,12 +49,13 @@ Writer: `PageToolReceipt.selectorNote` (`Sources/BrowserTools/Tools/PageToolsSup
 | `[attrs=]` | the element's real attributes as `name="value"` pairs (aria-label, href, role, name, data-*…) | 2026-09-21 | — |
 | `[list=]` | `<list selector> i/n`: the repeating list the element sits in, and its place there. Only when the list has 2+ members | 2026-09-23 | — |
 | `[anchor=]` | the address chosen by the anchor rule (below) and checked on the live page with the resolver | 2026-09-23 | 2026-10-01 (rule 0 is `:rel-href`) |
-| `[anchor-nth=]` | `n`: the anchor is an ordinal, so replay it with `nth=n` (`:nth-match(n)`) | 2026-09-23 | — |
+| `[anchor-nth=]` | `n`: replay the anchor with `nth=n` (`:nth-match(n)`). Written whenever `[anchor=]` matches 2+ elements: the anchor is a list ordinal (rule 3), or several elements share it (rule 0: every link that leads to the same place) and this one is the `n`th of them in the order the resolver returns them | 2026-09-23 | 2026-10-18 (whenever the anchor matches 2+, rule 0 included) |
 | `[submitted=enter]` | the type or press-keys call pressed Enter | 2026-09-22 | — |
 
 **Exception 1 (2026-10-01): a semantic anchor beats a position path.** When the ladder fell to a
-position path (`body` or `body>…`) and the anchor is not positional and has no
-`[anchor-nth=]`:
+position path (`body` or `body>…`) and the anchor is not positional and is not a list ordinal
+(rule 3; a rule-0 anchor that several links share carries `[anchor-nth=]` since 2026-10-18 and still
+qualifies):
 - `[selector=]` is the anchor;
 - `[path=]` holds the position path;
 - `[matches=]` is the anchor's match count;
@@ -72,14 +73,17 @@ When the ladder's selector contains the text a `get_text` read (3+ characters, a
 example `a[href="/…/releases/tag/v3.8.5"]` for the read `v3.8.5`:
 - `[selector=]` becomes the element's `[list=]` selector, with `[matches=]` the list's size and
   `[index=]` its place;
-- with no list, `[selector=]` becomes the answer-free `[anchor=]`, with `[matches=]` its count.
+- with no list, `[selector=]` becomes the answer-free `[anchor=]`, with `[matches=]` its count
+  and, when it matches 2+, `[index=]` the element's place among those matches (since 2026-10-18).
 
 The old selector is dropped. No `[path=]` is added. `[anchor=]` is still written.
 
 **Anchor rule** (`ReceiptAnchorProbe`, `Sources/BrowserTools/Runtime/ReceiptAnchor.swift`). Candidates
 are tried in this order, and the first one that resolves back to the element wins:
 - **0:** `tag:rel-href("ref")`, when the element is a link relative to the current page. Up to
-  2026-10-01 this rule wrote `tag:sub-path("/tail")`.
+  2026-10-01 this rule wrote `tag:sub-path("/tail")`. Every link that leads to the same place
+  matches it, so it wins when the element is AMONG its matches; when there are several,
+  `[anchor-nth=]` says which one (since 2026-10-18).
 - **1:** the ladder's stable selector, when it is not a position path.
 - **1a:** `a[href="…"]` verbatim, for a link whose href is absolute or carries a query (rung 4b
   takes only a relative query-free path, rule 0 only a link relative to this page), when the
@@ -160,3 +164,4 @@ in the agent repository's copy of this file.
 | 2026-10-04 | alohajet-cli `fc182c5` | anchor rule 1a: an absolute or query-bearing href is an anchor candidate, verbatim, when it is the only link to that place |
 | 2026-10-04 | this package, PR `port/08-receipt-anchor` | the anchor rule, `[anchor=]`, `[anchor-nth=]`, `[path=]` and both exceptions move into `alohajet-cli` |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | exception 1 keeps `[index=]`, counted among the anchor's matches; the anchor probe reports the element's place among them (re-implements agent repo `a1687b0`, 2026-10-08, which was never pushed) |
+| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[anchor-nth=]` whenever `[anchor=]` matches 2+, rule 0 included; exception 1 excludes only the rule-3 list ordinal (re-implements agent repo `6b4a864`, 2026-10-08, which was never pushed) |

@@ -299,6 +299,8 @@ enum PageToolReceipt {
         var path: String? = nil
         // The element's place among the ANCHOR's matches, when the anchor became the selector.
         var anchorIndex: Int? = nil
+        // `anchor.nth` is the rule-3 LIST ordinal, which never qualifies; a rule-0 anchor that
+        // several links share does, though it now carries `[anchor-nth=]` too (`replayNth`).
         if ladder == "body" || ladder.hasPrefix("body>"), let anchor = identity?.anchor,
            anchor.nth == nil, !anchor.selector.hasPrefix("body>") {
             path = ladder
@@ -356,10 +358,12 @@ enum PageToolReceipt {
         if let list = identity?.list {
             note += " [list=\(list.selector) \(list.index)/\(list.count)]"
         }
-        // The address to replay with: one rule, checked on the live page (`ReceiptAnchorProbe`).
+        // The address to replay with: one rule, checked on the live page (`ReceiptAnchorProbe`),
+        // and its ordinal whenever the address matches more than this element -- a rule-3 list
+        // ordinal, or a rule-0 link several links share (`Anchor.replayNth`).
         if let anchor = identity?.anchor {
             note += " [anchor=\(anchor.selector)]"
-            if let nth = anchor.nth { note += " [anchor-nth=\(nth)]" }
+            if let nth = anchor.replayNth { note += " [anchor-nth=\(nth)]" }
         }
         return note
     }

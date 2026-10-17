@@ -42,6 +42,33 @@ struct ReceiptAnchorTests {
         #expect(ordinal.hasSuffix(" [anchor=body>ul>li>a] [anchor-nth=2]"))
     }
 
+    /// `[anchor-nth=]` WHENEVER THE ANCHOR MATCHES 2+ (6b4a864): a rule-0 link several links
+    /// share says which of them the run used, like a rule-3 list ordinal does. One match: none.
+    @Test func aSharedAnchorCarriesItsOrdinal() {
+        let shared = ReceiptAnchorProbe.Anchor(selector: "a:rel-href(\"releases\")", nth: nil, count: 3, index: 2)
+        #expect(shared.replayNth == 2)
+        #expect(ReceiptAnchorProbe.Anchor(selector: "body>ul>li>a", nth: 4, count: 1).replayNth == 4)
+        #expect(ReceiptAnchorProbe.Anchor(selector: "#q", nth: nil, count: 1).replayNth == nil)
+        #expect(ReceiptAnchorProbe.Anchor(selector: "a:rel-href(\"x\")", nth: nil, count: 3).replayNth == nil)   // place unknown
+
+        // A stable ladder selector: no swap, the anchor and its ordinal close the receipt.
+        var identity = ElementIdentity(index: 1, attributes: [])
+        identity.anchor = shared
+        let note = PageToolReceipt.selectorNote(selector: "a.Link--secondary", matches: 1, identity: identity, tool: "page_click")
+        #expect(note == " [selector=a.Link--secondary] [tool=page_click] [matches=1] [anchor=a:rel-href(\"releases\")] [anchor-nth=2]")
+
+        // Exception 1 still applies to it (it is not a list ordinal): the anchor is the selector,
+        // the index and the anchor ordinal agree.
+        let path = "body>main>aside>a:nth-of-type(1)"
+        let swapped = PageToolReceipt.selectorNote(selector: path, matches: 1, identity: identity, tool: "page_click")
+        #expect(swapped == " [selector=a:rel-href(\"releases\")] [tool=page_click] [path=\(path)] [matches=3] [index=2/3]"
+                + " [anchor=a:rel-href(\"releases\")] [anchor-nth=2]")
+
+        // An anchor that names exactly this element carries no ordinal, as before.
+        identity.anchor = .init(selector: "a[href=\"https://x.example/\"]", nth: nil, count: 1)
+        #expect(!PageToolReceipt.selectorNote(selector: path, matches: 1, identity: identity).contains("[anchor-nth="))
+    }
+
     /// A read's probe is told it is a read (it then never anchors on the text it reads); an
     /// action's is not. The rule itself is exercised page-side (receipt_anchor.js cases 9-11).
     @Test func theReadFlagReachesTheProbe() {
