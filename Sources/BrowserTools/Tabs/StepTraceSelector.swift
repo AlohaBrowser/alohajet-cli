@@ -113,20 +113,20 @@ public enum StepTraceSelector {
         //    (`data-testid="radix-3"`) resolves to nothing on the next visit either (2026-10-04 audit).
         for key in ["data-testid", "data-test"] {
             if let value = attributes[key], isSafeAttributeValue(value), !looksGenerated(value) {
-                return "[\(key)=\"\(value)\"]"
+                return "[\(key)=\"\(quotedValue(value))\"]"
             }
         }
         // 3. form-field name
         if let name = attributes["name"], isSafeAttributeValue(name) {
-            return "[name=\"\(name)\"]"
+            return "[name=\"\(quotedValue(name))\"]"
         }
         // 4. input type (scoped to the tag — `type` alone is not an identity)
         if let tag, tag == "input", let type = attributes["type"], isSafeAttributeValue(type) {
-            return "\(tag)[type=\"\(type)\"]"
+            return "\(tag)[type=\"\(quotedValue(type))\"]"
         }
         // 4b. a link's relative destination
         if let tag, tag == "a", let href = attributes["href"], isRelativePathHref(href) {
-            return "\(tag)[href=\"\(href)\"]"
+            return "\(tag)[href=\"\(quotedValue(href))\"]"
         }
         // 4c. an interactive ARIA role
         if let role = attributes["role"]?.trimmingCharacters(in: .whitespaces).lowercased(),
@@ -218,24 +218,36 @@ public enum StepTraceSelector {
         return true
     }
 
+    /// `value` between the quotes of an attribute selector, with every SQUARE BRACKET written as a
+    /// six-digit CSS hex escape: `product[qty]` -> `product\00005bqty\00005d`. Six digits, so the
+    /// escape needs no terminating space and the selector stays whitespace-free; `querySelector`
+    /// and the replay's resolver read it back as `product[qty]`.
+    ///
+    /// Why escaped and not refused, unlike a quote (2026-10-18): the selector rides inside a
+    /// receipt bracket, and the reader on the other side (llmdex's receipt grammar) allows ONE level
+    /// of brackets inside a bracket's value -- `[selector=a[href="/x"]]` -- so
+    /// `[selector=[name="product[qty]"]]` nested two deep and the whole receipt (selector, count,
+    /// anchor) was unreadable there. Refusing the value instead would cost the rung its most
+    /// valuable case: Magento's form fields are named `product[qty]` and carry a generated id, and
+    /// the name is the one address that outlives the render (`StepTraceGeneratedIDTests`).
+    public static func quotedValue(_ value: String) -> String {
+        guard value.contains("[") || value.contains("]") else { return value }
+        return value.replacingOccurrences(of: "[", with: "\\00005b").replacingOccurrences(of: "]", with: "\\00005d")
+    }
+
     /// Whether `value` is safe to place inside a quoted attribute selector. Refuses
     /// the empty string, over-long values, quotes, backslashes, control characters —
     /// and, conservatively, ANY whitespace: a quoted value with a space is legal CSS,
     /// but the trace guarantees its `selector` field contains no whitespace at all so
     /// downstream consumers can tokenize a step line without quoting rules.
     ///
-    /// AND SQUARE BRACKETS (2026-10-18), refused rather than escaped like everything else here.
-    /// The selector rides inside a receipt bracket, `[selector=[name="user[email]"]]`, and the
-    /// reader on the other side (llmdex's receipt grammar) allows ONE level of brackets inside a
-    /// bracket's value -- `a[href="/x"]` -- so a value holding its own `[…]` nests two deep and
-    /// the whole receipt is lost to it, selector, count and anchor together. A Rails-style field
-    /// name (`user[email]`) or a test hook like `row[3]` then takes the next rung instead.
+    /// A square bracket IS safe here, and is written escaped (``quotedValue(_:)``).
     public static func isSafeAttributeValue(_ value: String) -> Bool {
         guard !value.isEmpty, value.count <= maxValueLength else { return false }
         return value.unicodeScalars.allSatisfy { scalar in
             guard scalar.value >= 0x20, scalar.value != 0x7F else { return false }
             switch scalar {
-            case "\"", "'", "\\", "`", "[", "]": return false
+            case "\"", "'", "\\", "`": return false
             default: return !Character(scalar).isWhitespace
             }
         }

@@ -66,6 +66,20 @@ private let editableFixtureHTML = """
 </body></html>
 """
 
+/// A Magento-shaped form: the quantity field's id is generated per render, so its NAME is its
+/// address, and the name carries brackets (`product[qty]`).
+private let bracketNameFixtureHTML = """
+<!doctype html>
+<html><head><title>Bracket Name Fixture</title></head>
+<body>
+  <h1>Bracket Name Fixture</h1>
+  <form>
+    <input id="JV2FMF8" name="product[qty]" aria-label="Quantity">
+    <input id="CD26XAH" name="product[sku]" aria-label="SKU">
+  </form>
+</body></html>
+"""
+
 /// Runs `body` against a freshly launched headless browser and shuts that browser down
 /// before returning, on the throwing path too.
 ///
@@ -301,6 +315,34 @@ struct RealBrowserE2ETests {
 
             let after = await session.run("manage_tabs", arguments: ["action": "read", "tab_id": tabId])
             #expect(after.output.contains("TYPED-OK"), "the text did not land:\n\(after.output)")
+        }
+    }
+
+    /// A BRACKETED NAME IS WRITTEN ESCAPED, AND A REAL BROWSER RESOLVES IT (2026-10-18): the
+    /// receipt's `[selector=]` must nest brackets at most once for llmdex's grammar, so the
+    /// ladder writes `product[qty]` as `product\00005bqty\00005d`. `[matches=1]` is the live
+    /// page's own count (`querySelectorAll`), and `[anchor=]` is the same address verified
+    /// through the replay's resolver -- both prove Chrome reads the escape back as the name.
+    @Test func aBracketedNameIsEscapedAndResolvesLive() async throws {
+        try #require(browserIsAvailable)
+
+        let server = LocalPageServer(html: bracketNameFixtureHTML)
+        try server.start()
+        defer { server.stop() }
+
+        try await withHeadlessBrowser { session in
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            let ref = try #require(alohaId(forLabel: "Quantity", in: opened.output),
+                                   "the quantity field carried no aloha-id:\n\(opened.output)")
+            let typed = await session.run("page_type", arguments: ["aloha_id": ref, "text": "2"])
+            #expect(typed.isError != true, "page_type failed: \(typed.output)")
+            let escaped = #"[name="product\00005bqty\00005d"]"#
+            #expect(typed.output.contains("[selector=\(escaped)] [tool=page_type] [matches=1]"),
+                    "the receipt did not carry the escaped, live-verified name:\n\(typed.output)")
+            #expect(typed.output.contains("[anchor=\(escaped)]"),
+                    "the resolver did not verify the escaped name:\n\(typed.output)")
+            #expect(!typed.output.contains("product[qty]\"]]"))
         }
     }
 

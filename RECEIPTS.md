@@ -37,9 +37,11 @@ Brackets come in the order below. A value can contain spaces and brackets, so a 
 the `]` that **closes** its opening `[`, never at a space or at the next `]`. An address
 (`[selector=]`, `[anchor=]`, `[path=]`) nests brackets **at most once** and always balances them:
 `[selector=a[href="/x"]]` and `[anchor=…:has-text("Add [x]")]` are written, `[name="user[email]"]`
-and `[aria-label="Save [draft]"]` never are (the ladder and anchor rules 1a/1b refuse a bracketed
-value; any other candidate that would nest deeper is dropped). llmdex's grammar reads one level
-(since 2026-10-18).
+and `[aria-label="Save [draft]"]` never are. The ladder writes a square bracket inside an attribute
+value as a six-digit CSS hex escape (`[name="product\00005bqty\00005d"]` for `name="product[qty]"`,
+which `querySelectorAll` and the resolver read back as the name); anchor rules 1a/1b refuse a
+bracketed value; any other anchor candidate that would nest deeper or leave a bracket open is
+dropped. llmdex's grammar reads one level (since 2026-10-18).
 Writer: `PageToolReceipt.selectorNote` (`Sources/BrowserTools/Tools/PageToolsSupport.swift`).
 
 | Bracket | Holds | Since | Meaning last changed |
@@ -173,4 +175,5 @@ in the agent repository's copy of this file.
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | exception 1 keeps `[index=]`, counted among the anchor's matches; the anchor probe reports the element's place among them (re-implements agent repo `a1687b0`, 2026-10-08, which was never pushed) |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[anchor-nth=]` whenever `[anchor=]` matches 2+, rule 0 included; exception 1 excludes only the rule-3 list ordinal (re-implements agent repo `6b4a864`, 2026-10-08, which was never pushed) |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[text=]` on batched `page_type` fields; `[text=]` falls back to the title, then an inner image's alt; the resolver's `:has-text` and the anchor label read an inner image's alt the same way (re-implements agent repo `9f8db00`, 2026-10-08, which was never pushed) |
-| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | an address nests brackets at most once: the ladder refuses an attribute value with `[`/`]` (the next rung is taken), anchor rules 1a/1b refuse one, and any other anchor candidate nesting deeper or unbalanced is dropped (no format change; llmdex's grammar reads one level) |
+| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | an address nests brackets at most once: anchor rules 1a/1b refuse a value with `[`/`]`, and any other anchor candidate nesting deeper or unbalanced is dropped (no format change; llmdex's grammar reads one level) |
+| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | the ladder writes `[`/`]` inside an attribute value as `\00005b`/`\00005d` (CSS hex escapes) instead of refusing the value, so a Magento / Rails field keeps its name rung |

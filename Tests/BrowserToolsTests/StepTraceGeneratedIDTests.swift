@@ -45,7 +45,9 @@ private func generatedIdNode(id: String? = nil, name: String? = nil,
     @Test("a generated id loses to the form-field name, which outlives the render")
     func theNameWinsOverAGeneratedId() {
         let selector = stableCSSSelector(for: generatedIdNode(id: "JV2FMF8", name: "product[qty]"))
-        #expect(selector == "[name=\"product[qty]\"]")
+        // The name's brackets are written as CSS hex escapes (2026-10-18), so the receipt's
+        // `[selector=…]` nests brackets once, which is all llmdex's grammar reads.
+        #expect(selector == #"[name="product\00005bqty\00005d"]"#)
     }
 
     @Test("with nothing else on the node it falls all the way to the position path")

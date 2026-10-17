@@ -231,15 +231,19 @@ private func selectorNode(
         }
     }
 
-    /// A BRACKET INSIDE A VALUE is refused like a quote (2026-10-18): the selector is written inside
-    /// a receipt bracket, and llmdex's grammar reads one level of `[…]` inside it -- `[name="q"]`
-    /// reads, `[name="user[email]"]` nests two deep and the whole receipt is lost. The element
-    /// takes its next rung instead: a Rails-style field its input type, a link its position.
-    @Test func aValueHoldingABracketTakesTheNextRung() {
-        #expect(stableCSSSelector(for: selectorNode(tag: "input", ["name": "user[email]", "type": "email"])) == "input[type=\"email\"]")
-        #expect(stableCSSSelector(for: selectorNode(tag: "button", ["data-testid": "row[3]", "name": "go"])) == "[name=\"go\"]")
-        #expect(stableCSSSelector(for: selectorNode(tag: "a", ["href": "/search/q[1]"], xpath: "/body/nav/a[2]")) == "body>nav>a:nth-of-type(2)")
-        #expect(!StepTraceSelector.isSafeAttributeValue("a]b"))
-        #expect(StepTraceSelector.isSafeAttributeValue("user_email"))
+    /// A BRACKET INSIDE A VALUE is written as a six-digit CSS hex escape (2026-10-18): the selector
+    /// rides inside a receipt bracket, and llmdex's grammar reads ONE level of `[…]` inside it --
+    /// `[name="q"]` reads, `[name="user[email]"]` nested two deep and the whole receipt was lost.
+    /// Escaped rather than refused, so a Rails / Magento field keeps its name rung; six digits, so
+    /// no terminating space is needed and the selector stays whitespace-free.
+    @Test func aBracketInsideAValueIsEscaped() {
+        #expect(stableCSSSelector(for: selectorNode(tag: "input", ["name": "user[email]", "type": "email"])) == #"[name="user\00005bemail\00005d"]"#)
+        #expect(stableCSSSelector(for: selectorNode(tag: "button", ["data-testid": "cart-item[remove]"])) == #"[data-testid="cart-item\00005bremove\00005d"]"#)
+        #expect(stableCSSSelector(for: selectorNode(tag: "a", ["href": "/search/q[1]"])) == #"a[href="/search/q\00005b1\00005d"]"#)
+        #expect(StepTraceSelector.quotedValue("plain") == "plain")
+        for value in ["a[b]", "[[x]]", "]x["] {
+            let quoted = StepTraceSelector.quotedValue(value)
+            #expect(!quoted.contains("[") && !quoted.contains("]") && !quoted.contains(" "), "\(quoted)")
+        }
     }
 }
