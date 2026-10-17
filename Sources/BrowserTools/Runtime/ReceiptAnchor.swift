@@ -55,6 +55,17 @@ enum ReceiptAnchorProbe {
         /// How many elements `selector` resolved to when it was verified (1 for an exact rung; all
         /// the links to the same place for rule 0). nil when the probe did not say.
         var count: Int? = nil
+        /// WHICH of those `count` elements this one is, 1-based, in the order the replay's resolver
+        /// returns them -- reported only when the anchor resolved to two or more (rule 0: every
+        /// link that leads to the same place). nil for an exact rung (it IS the one match), for a
+        /// rule-3 ordinal (`nth` says it), and when the probe did not say.
+        ///
+        /// Why (agent repo, windows-on-snips a1687b0, 2026-10-08, re-implemented here): under
+        /// exception 1 a rule-0 anchor becomes the receipt's `[selector=]` with `[matches=]` its
+        /// count, and the receipt then carried no `[index=]`. llmdex refuses a step on a selector
+        /// that matched 2+ without an `nth`, and refuses an `nth` no receipt reported, so such a
+        /// click could not be minted at all. The place among the anchor's matches is that `nth`.
+        var index: Int? = nil
     }
 
     static func expression(alohaId: String, selector: String?, stable: Bool, list: String?, forRead: Bool = false) -> String {
@@ -130,8 +141,12 @@ enum ReceiptAnchorProbe {
               var nodes = [];
               try { nodes = window.__snips.resolveAll(cands[c].s, document) || []; } catch (e) { nodes = []; }
               if (cands[c].nth) nodes = nodes.length >= cands[c].nth ? [nodes[cands[c].nth - 1]] : [];
-              if (cands[c].among ? nodes.indexOf(el) !== -1 : (nodes.length === 1 && nodes[0] === el))
-                return JSON.stringify({ s: cands[c].s, nth: cands[c].nth, n: nodes.length });
+              if (cands[c].among ? nodes.indexOf(el) !== -1 : (nodes.length === 1 && nodes[0] === el)) {
+                // The element's place among the anchor's own matches, when there are several: the
+                // `nth` a replay of this anchor needs (`[index=]` under exception 1).
+                var at = nodes.length >= 2 ? nodes.indexOf(el) + 1 : 0;
+                return JSON.stringify({ s: cands[c].s, nth: cands[c].nth, n: nodes.length, i: at >= 1 ? at : undefined });
+              }
             }
           } catch (e) {}
           return '';
@@ -144,7 +159,11 @@ enum ReceiptAnchorProbe {
               let s = value.string("s"), !s.isEmpty else { return nil }
         let nth = value["nth"]?.intValue
         let count = value["n"]?.intValue
-        return Anchor(selector: s, nth: (nth ?? 0) >= 1 ? nth : nil, count: (count ?? 0) >= 1 ? count : nil)
+        let index = value["i"]?.intValue
+        let validCount = (count ?? 0) >= 1 ? count : nil
+        // An index is only meaningful among two or more matches, and only inside the count.
+        let validIndex: Int? = if let index, let validCount, validCount >= 2, index >= 1, index <= validCount { index } else { nil }
+        return Anchor(selector: s, nth: (nth ?? 0) >= 1 ? nth : nil, count: validCount, index: validIndex)
     }
 
     /// A selector the ladder produced from a position (rung 6) is not "stable" for rule 1.

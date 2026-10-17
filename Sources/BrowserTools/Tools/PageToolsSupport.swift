@@ -297,11 +297,14 @@ enum PageToolReceipt {
         // may hold spaces; receipt tokens end at the bracket that closes them, never at a space.
         var selector = ladder, matches = matches
         var path: String? = nil
+        // The element's place among the ANCHOR's matches, when the anchor became the selector.
+        var anchorIndex: Int? = nil
         if ladder == "body" || ladder.hasPrefix("body>"), let anchor = identity?.anchor,
            anchor.nth == nil, !anchor.selector.hasPrefix("body>") {
             path = ladder
             selector = anchor.selector
             matches = anchor.count ?? 1
+            anchorIndex = anchor.index
         }
         var note = " [selector=\(selector)]"
         // WHO WROTE THIS RECEIPT, inside the receipt itself: `[tool=get_text]` from a tool,
@@ -320,14 +323,20 @@ enum PageToolReceipt {
         // from it, or the selector matches nothing now and no path could be rebuilt. The address
         // is still written, and `[index=none]` marks it unverified, so a mint does not build a
         // step on it when `[list=]`, `[path=]` or `[anchor=]` offer a checked one (2026-10-04 audit).
-        // Neither token when the anchor replaced the path: the index counted the PATH's matches,
-        // and the anchor was verified to resolve to exactly this element.
+        // WHEN THE ANCHOR REPLACED THE PATH (exception 1) the identity's index counted the PATH's
+        // matches and says nothing about the selector now written, and the anchor was verified to
+        // resolve to this element, so `none` never applies. What the receipt carries instead is the
+        // element's place among the ANCHOR's matches, when the anchor matched several (a rule-0
+        // link: every link that leads to the same place) -- the ordinal a replay of `[selector=]`
+        // needs, and the one llmdex reads from `[index=]` (agent repo a1687b0, 2026-10-08).
         if let matches, let identity, path == nil {
             if let index = identity.index, matches > 1, index >= 1, index <= matches {
                 note += " [index=\(index)/\(matches)]"
             } else if identity.index == nil {
                 note += " [index=none]"
             }
+        } else if path != nil, let matches, matches > 1, let index = anchorIndex, index >= 1, index <= matches {
+            note += " [index=\(index)/\(matches)]"
         }
         // The element's OWN words, so an anchor for a many-match selector is built from what
         // was on the element rather than from the task's phrasing (which may reorder them).

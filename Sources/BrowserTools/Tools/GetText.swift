@@ -65,8 +65,9 @@ import ToolABI
             return (list.selector, list.count, placed)
         }
         if let anchor = identity?.anchor, anchor.nth == nil, !anchor.selector.lowercased().contains(needle) {
-            // The anchor was verified to resolve to exactly this element, so it IS the one match.
-            var named = ElementIdentity(index: 1, attributes: identity?.attributes ?? [])
+            // The anchor was verified to resolve to this element: it IS the one match, or -- a
+            // rule-0 link that several links share -- the element is the `index`th of its matches.
+            var named = ElementIdentity(index: anchor.index ?? 1, attributes: identity?.attributes ?? [])
             named.list = identity?.list
             named.anchor = anchor
             return (anchor.selector, anchor.count ?? 1, named)

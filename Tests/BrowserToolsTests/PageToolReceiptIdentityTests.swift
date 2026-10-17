@@ -119,6 +119,22 @@ struct PageToolReceiptIdentityTests {
         rel.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 3)
         #expect(PageToolReceipt.selectorNote(selector: path, matches: 0, identity: rel).hasPrefix(" [selector=a:rel-href(\"releases\")] [path=\(path)] [matches=3] [anchor="))
 
+        // EXCEPTION 1 KEEPS AN INDEX, COUNTED AMONG THE ANCHOR'S MATCHES (a1687b0). The path's
+        // index (2 of the path's 3) is not it; the anchor's own place is (2 of the 3 links that
+        // lead there) -- the `nth` llmdex needs to mint a step on a selector that matches 3.
+        var shared = ElementIdentity(index: 2, attributes: [])
+        shared.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 3, index: 2)
+        let sharedNote = PageToolReceipt.selectorNote(selector: path, matches: 3, identity: shared, tool: "page_click")
+        #expect(sharedNote.hasPrefix(" [selector=a:rel-href(\"releases\")] [tool=page_click] [path=\(path)] [matches=3] [index=2/3] [anchor="))
+        // One match: no index token, as everywhere else; no place reported: none either (and never
+        // `none` -- the anchor was verified).
+        var single = ElementIdentity(index: 7, attributes: [])
+        single.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 1, index: nil)
+        #expect(!PageToolReceipt.selectorNote(selector: path, matches: 9, identity: single).contains("[index="))
+        var unplaced = ElementIdentity(index: nil, attributes: [])
+        unplaced.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 3)
+        #expect(!PageToolReceipt.selectorNote(selector: path, matches: 0, identity: unplaced).contains("[index="))
+
         // No swap: an anchor that is itself an ordinal or a path, or a ladder selector that is not
         // a position path.
         var ordinal = ElementIdentity(index: 2, attributes: [])

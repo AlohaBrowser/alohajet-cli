@@ -99,6 +99,7 @@ function check(name, cond, detail) { console.log((cond ? 'ok   ' : 'FAIL ') + na
   const doc = makeDoc([el('ul', {}, items)]);
   const r = run(doc, 'i2', 'body>ul>li:nth-of-type(2)>a', false, 'body>ul>li>a');
   check('no label: list + nth', r && r.s === 'body>ul>li>a' && r.nth === 2, r);
+  check('a list ordinal reports its place as nth, not as a place among matches', r && r.i === undefined, r);
 }
 // 4. A label that is NOT unique in the list falls through to list + nth.
 {
@@ -156,9 +157,15 @@ function check(name, cond, detail) { console.log((cond ? 'ok   ' : 'FAIL ') + na
   const at = 'https://github.com/MHSanaei/3x-ui';
   const r = run(doc, 'badge', 'body>main>article>p>a:nth-of-type(2)', false, 'body>main>article>p>a', false, at);
   check('sub-page link: a:rel-href("releases"), two links lead there', r && r.s === 'a:rel-href("releases")' && !r.nth && r.n === 2, r);
+  // WHICH of the links that lead there this one is (a1687b0): the badge comes first in document
+  // order, the sidebar link second -- the `nth` a replay of the shared address needs.
+  check('sub-page link: its place among the anchor\'s matches', r && r.i === 1, r);
+  const sd = run(doc, 'side', 'body>main>aside>a:nth-of-type(1)', false, 'body>main>aside>a', false, at);
+  check('the sidebar link to the same place: the same address, the 2nd of its matches', sd && sd.s === 'a:rel-href("releases")' && sd.n === 2 && sd.i === 2, sd);
   // A deeper sub-page keeps its whole tail; a link to another repo is not relative to this page.
   const l = run(doc, 'latest', 'a[href="/MHSanaei/3x-ui/releases/latest"]', true, '', false, at);
   check('deeper sub-page: the whole tail', l && l.s === 'a:rel-href("releases/latest")', l);
+  check('an address that names one element reports no place', l && l.n === 1 && l.i === undefined, l);
   const o = run(doc, 'other', 'body>main>article>p>a:nth-of-type(1)', false, 'body>main>article>p>a', false, at);
   check("another repo's link is not rel-href", o && !/rel-href|sub-path/.test(o.s), o);
 }

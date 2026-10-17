@@ -63,6 +63,19 @@ struct ReceiptAnchorTests {
         #expect(ReceiptAnchorProbe.parse(#"{"s":"a:sub-path(\"/releases\")"}"#) == .init(selector: "a:sub-path(\"/releases\")", nth: nil))
     }
 
+    /// A rule-0 anchor several links share says WHICH of them this element is (a1687b0); the place
+    /// is kept only among two or more matches and only inside the count.
+    @Test func theProbeReportsThePlaceAmongTheAnchorsMatches() {
+        #expect(ReceiptAnchorProbe.parse(#"{"s":"a:rel-href(\"releases\")","n":3,"i":2}"#)
+                == .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 3, index: 2))
+        #expect(ReceiptAnchorProbe.parse(#"{"s":"input","n":1,"i":1}"#)?.index == nil)    // one match: no place
+        #expect(ReceiptAnchorProbe.parse(#"{"s":"a","n":2,"i":3}"#)?.index == nil)        // beyond the count
+        #expect(ReceiptAnchorProbe.parse(#"{"s":"a","n":2,"i":0}"#)?.index == nil)
+        #expect(ReceiptAnchorProbe.parse(#"{"s":"a","i":2}"#)?.index == nil)              // no count, no place
+        // The shipped probe reports it (page side: receipt_anchor.js case 10).
+        #expect(ReceiptAnchorProbe.expression(alohaId: "x", selector: nil, stable: false, list: nil).contains("i: at >= 1 ? at : undefined"))
+    }
+
     // MARK: the bridge
 
     /// The resolver is installed when the page has none, then the probe runs; a page that already

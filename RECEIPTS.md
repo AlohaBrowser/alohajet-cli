@@ -44,7 +44,7 @@ Writer: `PageToolReceipt.selectorNote` (`Sources/BrowserTools/Tools/PageToolsSup
 | `[source=]` | where a non-tool line came from: `main-heading` (the heading line a page read carries) | 2026-09-30 | — |
 | `[path=]` | the ladder's position path, present **only** when exception 1 moved it out of `[selector=]` | 2026-10-01 | — |
 | `[matches=]` | how many elements `[selector=]` matches on the page now | 2026-09-21 | 2026-10-01 (it follows `[selector=]`) |
-| `[index=]` | `i/n`: which of the `n` matches this element is, 1-based, document order. Only when `n > 1`. **`none`**: `[selector=]` matched `n` elements (`[matches=]`, possibly 0) and this element was not among them, and no live path could be rebuilt -- the address is UNVERIFIED; replay by `[list=]`, `[path=]` or `[anchor=]` instead, never by this selector | 2026-09-21 | 2026-10-04 (`none`) |
+| `[index=]` | `i/n`: which of the `n` matches this element is, 1-based, document order. Only when `n > 1`. Under exception 1 it is counted among the anchor's matches (below). **`none`**: `[selector=]` matched `n` elements (`[matches=]`, possibly 0) and this element was not among them, and no live path could be rebuilt -- the address is UNVERIFIED; replay by `[list=]`, `[path=]` or `[anchor=]` instead, never by this selector | 2026-09-21 | 2026-10-18 (kept under exception 1) |
 | `[text=]` | the element's own rendered text, quoted, whitespace collapsed | 2026-09-21 | — |
 | `[attrs=]` | the element's real attributes as `name="value"` pairs (aria-label, href, role, name, data-*…) | 2026-09-21 | — |
 | `[list=]` | `<list selector> i/n`: the repeating list the element sits in, and its place there. Only when the list has 2+ members | 2026-09-23 | — |
@@ -58,7 +58,12 @@ position path (`body` or `body>…`) and the anchor is not positional and has no
 - `[selector=]` is the anchor;
 - `[path=]` holds the position path;
 - `[matches=]` is the anchor's match count;
-- `[index=]` is left out (neither `i/n` nor `none`: the anchor was verified).
+- `[index=]` is `i/n` counted among the **anchor's** matches when the anchor matches `n > 1` (a rule-0
+  link that several links on the page share): `i` is this element's place in the order the resolver
+  returns them, which is the `nth` a replay of `[selector=]` needs. With one match it is left out.
+  Never `none`: the anchor was verified. (Until 2026-10-18 it was always left out, and a rule-0
+  selector matching 2+ could not be minted: a step on it needs an `nth`, and an `nth` needs a
+  reported ordinal.)
 
 `[anchor=]` is still written, and it is the same string as `[selector=]`.
 
@@ -154,3 +159,4 @@ in the agent repository's copy of this file.
 | 2026-10-02 | alohajet `f6c3380` | exception 2's anchor half (a read with no list is addressed by its answer-free anchor) |
 | 2026-10-04 | alohajet-cli `fc182c5` | anchor rule 1a: an absolute or query-bearing href is an anchor candidate, verbatim, when it is the only link to that place |
 | 2026-10-04 | this package, PR `port/08-receipt-anchor` | the anchor rule, `[anchor=]`, `[anchor-nth=]`, `[path=]` and both exceptions move into `alohajet-cli` |
+| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | exception 1 keeps `[index=]`, counted among the anchor's matches; the anchor probe reports the element's place among them (re-implements agent repo `a1687b0`, 2026-10-08, which was never pushed) |

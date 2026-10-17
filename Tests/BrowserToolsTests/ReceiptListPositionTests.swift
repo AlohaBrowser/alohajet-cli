@@ -82,4 +82,17 @@ struct ReceiptListPositionTests {
         id.anchor = .init(selector: "body>ul>li>a", nth: 2, count: 1)
         #expect(GetTextExecutorTool.answerFreeReadAddress(selector: "a[href=\"/r/tag/v1.2.3\"]", text: "v1.2.3", identity: id) == nil)
     }
+
+    /// An answer-free anchor several elements share (a rule-0 link) is not "the one match": the
+    /// read's place among them is the anchor's own (a1687b0), not a hard-coded 1.
+    @Test func aSharedAnswerFreeAnchorKeepsItsPlace() {
+        var id = ElementIdentity(index: nil, attributes: [])
+        id.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 2, index: 2)
+        let free = GetTextExecutorTool.answerFreeReadAddress(selector: "a[href=\"/r/releases/v9.9.9\"]", text: "v9.9.9", identity: id)
+        #expect(free?.selector == "a:rel-href(\"releases\")")
+        #expect(free?.matches == 2)
+        #expect(free?.identity?.index == 2)
+        let note = PageToolReceipt.selectorNote(selector: free!.selector, matches: free!.matches, identity: free!.identity, tool: "get_text")
+        #expect(note.hasPrefix(" [selector=a:rel-href(\"releases\")] [tool=get_text] [matches=2] [index=2/2]"))
+    }
 }
