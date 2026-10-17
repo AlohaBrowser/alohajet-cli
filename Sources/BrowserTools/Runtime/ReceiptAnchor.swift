@@ -34,8 +34,9 @@ import ToolABI
 ///   3. the `[list]` selector + `nth` (the element has no label that tells it apart);
 ///   4. the `[selector]` + `:has-text("<label>")`.
 /// The label is the element's OWN: its text, else its aria-label / title / alt / placeholder, else
-/// the alt of an image inside it (since 2026-10-18) -- never a neighbour's. A label with a digit ("98 comments", "$19.99") is never used for rules 2
-/// and 4: it changes with the page's content, so the element is addressed by its list position.
+/// the alt of an image inside it (since 2026-10-18) -- never a neighbour's. A label with a digit
+/// ("98 comments", "$19.99") is never used for rules 2 and 4: it changes with the page's content,
+/// so the element is addressed by its list position.
 /// For a READ (`get_text`) rules 2 and 4 are skipped: the element's text is the value being read,
 /// and an address built from it names the answer (github-ss-r53: `…nav-list>ul>li>a:has-text("v3.8.5")`
 /// for "the latest release name" breaks on the next release), and any candidate whose selector
