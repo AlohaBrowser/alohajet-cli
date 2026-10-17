@@ -41,6 +41,7 @@ import ToolABI
             // Two backend URL reads bracket the action so the receipt can say whether the
             // page moved — see PageDelta, and the 44-row blind-receipt measurement behind it.
             let urlBefore = bridge.currentPageURL()
+            let fingerprintBefore = await bridge.pageFingerprint()
             // Which element this was, in replayable terms — before the action, since selecting an option
             // commonly re-renders dependent controls. See `PageToolReceipt`.
             let selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
@@ -55,11 +56,17 @@ import ToolABI
             // window to every failed call for a value nothing reads.
             let urlAfter = result.isError ? urlBefore
                                           : await bridge.settledPageURL(after: urlBefore)
-            return resolved.tab.naming(RawToolResult(
+            let receipt = RawToolResult(
                 output: result.isError ? result.output
                     : result.output + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
                         + selectorNote,
-                isError: result.isError ? true : nil))
+                isError: result.isError ? true : nil)
+            // The page the select left behind, when it changed one: a select that re-renders
+            // dependent controls or navigates voids the ids the model holds -- see `withPageSnapshot`.
+            let fingerprintAfter = await bridge.pageFingerprint()
+            let pageMoved = AgentBrowserBridge.pageMoved(before: fingerprintBefore, after: fingerprintAfter)
+            return resolved.tab.naming(
+                await withPageSnapshot(receipt, context, resolved, changed: pageMoved))
         }
     }
 }
