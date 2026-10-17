@@ -212,9 +212,9 @@ import ToolABI
     /// the way the batch hint recommends reached llmdex with no words for any of its fields -- the
     /// inventory the mint is shown read "NO TEXT -- :has-text() cannot match this element" for a
     /// field whose placeholder said "From" -- while the same field typed on its own carried
-    /// `[text="From"]`. A field has no rendered text, so its `[text=]` is its aria-label, value,
-    /// placeholder or title (``ElementTextProbe``). Agent repo 9f8db00 (2026-10-08), re-implemented
-    /// here.
+    /// `[text="From"]`. A field has no rendered text, so its `[text=]` is its aria-label,
+    /// placeholder or title -- never its value, which is what was typed into it
+    /// (``ElementTextProbe``). Agent repo 9f8db00 (2026-10-08), re-implemented here.
     static func fieldNote(alohaId: String, tab: StepTraceTab?, bridge: AgentBrowserBridge) async -> String {
         await PageToolReceipt.liveNote(alohaId: alohaId, tab: tab, bridge: bridge, tool: "page_type")
     }

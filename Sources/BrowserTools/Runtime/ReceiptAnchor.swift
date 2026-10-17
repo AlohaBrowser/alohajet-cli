@@ -94,7 +94,9 @@ enum ReceiptAnchorProbe {
             var el = null, tagged = document.querySelectorAll('[aloha-id]');
             for (var k = 0; k < tagged.length; k++) if (tagged[k].getAttribute('aloha-id') === id) { el = tagged[k]; break; }
             if (!el) return '';
-            var label = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+            // A FIELD'S CONTENT IS NOT ITS LABEL: a textarea's text is what was typed into it (per-run
+            // data, and the receipt's `[text=]` never carries it -- `ElementTextProbe`).
+            var label = String(el.tagName || '').toLowerCase() === 'textarea' ? '' : String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
             if (!label) {
               var names = ['aria-label', 'title', 'alt', 'placeholder'];
               for (var n = 0; n < names.length && !label; n++) label = String(el.getAttribute(names[n]) || '').replace(/\s+/g, ' ').trim();

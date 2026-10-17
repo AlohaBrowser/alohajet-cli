@@ -329,5 +329,18 @@ function check(name, cond, detail) { console.log((cond ? 'ok   ' : 'FAIL ') + na
   check('a label with one balanced pair still is', o && o.s === 'body>div>button:nth-of-type(4):has-text("Add [x]")', o);
 }
 
+// 18. A FIELD'S CONTENT IS NOT ITS LABEL (2026-10-18): a textarea's text is what was typed into it
+//     (React mirrors it), so no text rung is built from it -- the address is the field's own.
+{
+  const doc = makeDoc([el('form', {}, [
+    el('textarea', { 'aloha-id': 'ta' }, [], 'my private draft'),
+    el('button', { 'aloha-id': 'b' }, [], 'Send'),
+  ])]);
+  const t = run(doc, 'ta', 'body>form>textarea', false, '');
+  check("a textarea's content is never its label", !t || !/private draft/.test(t.s), t);
+  const b = run(doc, 'b', 'body>form>button', false, '');
+  check('a button next to it is still named by its text', b && b.s === 'body>form>button:has-text("Send")', b);
+}
+
 console.log(failures ? `${failures} FAILED` : 'all receipt-anchor checks passed');
 process.exit(failures ? 1 : 0);

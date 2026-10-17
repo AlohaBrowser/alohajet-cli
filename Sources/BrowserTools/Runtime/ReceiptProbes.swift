@@ -209,11 +209,29 @@ enum LiveSelectorProbe {
 /// logo link an image with an alt, and such a receipt carried no `[text=]` at all, so the mint
 /// was shown "NO TEXT" and anchored on a position. The resolver's `:has-text` falls back the same
 /// way, so an anchor minted from these words resolves (`SelectorResolverScript`, `matchByAttribute`).
+///
+/// A FIELD'S CONTENT IS NOT ITS NAME (2026-10-18). A text-entry `<input>` (``textEntryTypes``) and
+/// a `<textarea>` are named by their aria-label, placeholder or title, never by what they HOLD: the
+/// `value` attribute of a field is what a server rendered into it or -- React mirrors every
+/// keystroke into it -- what was typed there, and a textarea's text is its value. For a password
+/// field that is a secret the page walker and `get_text` mask in the page (`SensitiveFieldScript`),
+/// and a click on such a field put it into the receipt in the clear (`[text="hunter2"]`,
+/// `RealBrowserE2ETests.aFieldsValueNeverRidesTheReceiptsText`); for any field it is per-run data,
+/// so an anchor minted from it stops resolving on the next run. An input that is not typed into
+/// (``textEntryTypes``) IS named by its value: `<input type="submit" value="Go">`, a size radio's
+/// `value="M"`.
 enum ElementTextProbe {
     static let maxLength = 60
 
+    /// The `<input type>`s a person TYPES into (`""` is an input with no type: text). Their `value`
+    /// attribute is what was typed, so it never names them. Every other input keeps its `value` as
+    /// a name: a submit's "Go", a size radio's "M".
+    static let textEntryTypes = ["", "text", "search", "email", "url", "tel", "password", "number",
+                                 "date", "datetime-local", "month", "week", "time"]
+
     static func expression(alohaId: String) -> String {
         let idLiteral = JSValue.string(alohaId).stringify()
+        let textEntryTypesLiteral = JSValue.array(textEntryTypes.map { JSValue.string($0) }).stringify()
         return #"""
         (function (id) { /* receipt: element text */
           try {
@@ -221,8 +239,12 @@ enum ElementTextProbe {
             for (var k = 0; k < tagged.length; k++) if (tagged[k].getAttribute('aloha-id') === id) { el = tagged[k]; break; }
             if (!el) return "";
             var clean = function (v) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim(); };
-            var t = clean(el.innerText || el.textContent || "");
-            if (!t) t = clean(el.getAttribute("aria-label") || el.getAttribute("value") || el.getAttribute("placeholder") || "");
+            // A field's content (a text-entry input's value, a textarea's text) is data, never its
+            // name. A button's, a checkbox's or a radio's `value` is the page's own word for it.
+            var tag = String(el.tagName || "").toLowerCase(), type = String(el.type || el.getAttribute("type") || "").toLowerCase();
+            var field = tag === "textarea" || (tag === "input" && \#(textEntryTypesLiteral).indexOf(type) !== -1);
+            var t = field ? "" : clean(el.innerText || el.textContent || "");
+            if (!t) t = clean(el.getAttribute("aria-label") || (field ? "" : el.getAttribute("value")) || el.getAttribute("placeholder") || "");
             if (!t) t = clean(el.getAttribute("title") || "");
             if (!t && el.querySelectorAll) {
               var imgs = el.querySelectorAll("img[alt]");
