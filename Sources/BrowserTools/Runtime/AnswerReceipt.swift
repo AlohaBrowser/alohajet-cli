@@ -77,7 +77,8 @@ public nonisolated enum AnswerReceipt {
     }
 
     /// THE PAGE DECIDES WHAT THE VALUES ARE. Every visible element on the final page whose own text
-    /// is short (at most 80 characters) is a candidate; it is kept when the ANSWER repeats its text
+    /// is short (at most 80 characters) is a candidate -- a form field never: its content is what
+    /// was typed, not what the page said; it is kept when the ANSWER repeats its text
     /// as a whole run of words and the TASK did not already say it -- "v3.8.5" and "MHSanaei/3x-ui"
     /// on the 3x-ui Releases page are new information, "Latest" is the question's own word. Text
     /// is compared as lower-cased word tokens, so case, spacing and surrounding punctuation do not
@@ -151,6 +152,9 @@ public nonisolated enum AnswerReceipt {
               var own = e.getAttribute ? e.getAttribute('aloha-id') : null;
               if (own && own.indexOf(TMP) === 0) e.removeAttribute('aloha-id');
               if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEMPLATE') continue;
+              // A field's content is not a value read off the page: a textarea's text is what was
+              // typed there (`[text=]` never carries it, `ElementTextProbe`), a select's is its options.
+              if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') continue;
               var raw = String(e.innerText || '').replace(/\s+/g, ' ').trim();
               if (!raw || raw.length > 80) continue;
               var r = e.getBoundingClientRect();

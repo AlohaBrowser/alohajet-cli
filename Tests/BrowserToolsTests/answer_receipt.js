@@ -155,7 +155,18 @@ const githubTask = "Go to github.com and use its search box to look up 'shadowso
   check('a read whose element is gone changes nothing', gone.length === 1 && gone[0].path.startsWith('body>nav'), gone);
 }
 
-// 10. THE TEMPORARY IDS LEAVE NO TRACE. No marker attribute rides on a stamped element (the
+// 10. A FIELD'S CONTENT IS NOT A VALUE THE PAGE SAID: a textarea holding what the user typed (or a
+//     select listing its options) is never a candidate, even when the answer repeats it.
+{
+  const page = el('body', {}, [el('textarea', {}, [], 'meet me at 5pm Friday'), el('select', {}, [el('option', {}, [], 'Friday')]),
+    el('span', {}, [], 'Friday 5pm')]);
+  const r = run(page, 'The draft says **meet me at 5pm Friday**; the slot is **Friday 5pm**.', 'What does my draft say?',
+    ['meet me at 5pm Friday', 'Friday 5pm']);
+  const texts = r.map(x => x.text);
+  check('a textarea and a select are not candidates', !texts.includes('meet me at 5pm Friday') && texts.includes('Friday 5pm'), texts);
+}
+
+// 11. THE TEMPORARY IDS LEAVE NO TRACE. No marker attribute rides on a stamped element (the
 //     identity probe would read it into `[attrs=]`); the cleanup removes exactly the temporary ids;
 //     a temporary id an earlier call left behind is dropped before it can name the wrong element.
 function runCleanup(body) {
