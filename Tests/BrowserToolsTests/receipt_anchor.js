@@ -304,5 +304,30 @@ function check(name, cond, detail) { console.log((cond ? 'ok   ' : 'FAIL ') + na
   check('an image link: list + the image alt as text', r && r.s === 'body>ul>li>a:has-text("Globex")', r);
 }
 
+// 17. AN ADDRESS NESTS BRACKETS AT MOST ONCE (2026-10-18): it is written inside a receipt bracket,
+//     and llmdex's grammar reads one level of `[…]` inside one. A bracketed href or aria-label is
+//     never offered, nor a text label that nests brackets or leaves one open; a label with ONE
+//     balanced pair still is.
+{
+  const at = 'https://shop.example/catalog';
+  const doc = makeDoc([el('div', {}, [
+    el('a', { href: 'https://other.example/list?filter[size]=m', 'aloha-id': 'f' }, [], 'Filtered'),
+    el('button', { 'aria-label': 'Save [draft]', 'aloha-id': 's' }, [], ''),
+    el('button', { 'aloha-id': 'n' }, [], 'Add [x [y]]'),
+    el('button', { 'aloha-id': 'u' }, [], 'Open [menu'),
+    el('button', { 'aloha-id': 'o' }, [], 'Add [x]'),
+  ])]);
+  const f = run(doc, 'f', 'body>div>a', false, '', false, at);
+  check('an href holding brackets is not offered', f && !/href/.test(f.s) && f.s === 'body>div>a:has-text("Filtered")', f);
+  const sv = run(doc, 's', 'body>div>button:nth-of-type(1)', false, '', false, at);
+  check('an aria-label holding brackets is not offered', !sv || !/aria-label/.test(sv.s), sv);
+  const n = run(doc, 'n', 'body>div>button:nth-of-type(2)', false, '', false, at);
+  check('a label that nests brackets is not offered', !n || !/has-text/.test(n.s), n);
+  const u = run(doc, 'u', 'body>div>button:nth-of-type(3)', false, '', false, at);
+  check('a label that leaves a bracket open is not offered', !u || !/has-text/.test(u.s), u);
+  const o = run(doc, 'o', 'body>div>button:nth-of-type(4)', false, '', false, at);
+  check('a label with one balanced pair still is', o && o.s === 'body>div>button:nth-of-type(4):has-text("Add [x]")', o);
+}
+
 console.log(failures ? `${failures} FAILED` : 'all receipt-anchor checks passed');
 process.exit(failures ? 1 : 0);

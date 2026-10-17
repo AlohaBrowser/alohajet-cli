@@ -130,7 +130,7 @@ enum ReceiptAnchorProbe {
               // A bare fragment (`#release-v3.8.5`) names a spot in THIS document, not a place, and
               // carries the content it points at; a script URL is not a destination at all.
               var notAPlace = href.charAt(0) === '#' || /^\s*javascript:/i.test(href);
-              if (href && href.length <= 120 && !/[\s"'\\`\u0000-\u001f\u007f]/.test(href) && !rung4b && !notAPlace) cands.push({ s: 'a[href=' + quote(href) + ']' });
+              if (href && href.length <= 120 && !/[\s"'\\`\[\]\u0000-\u001f\u007f]/.test(href) && !rung4b && !notAPlace) cands.push({ s: 'a[href=' + quote(href) + ']' });
             }
             // 1b. What the element SAYS it is: its aria-label, else its title -- written for people
             // and screen readers, so it outlives a redeploy that renames every class. The search
@@ -139,7 +139,7 @@ enum ReceiptAnchorProbe {
             // skipped (a count, a version, a date: it changes with the page's content).
             ['aria-label', 'title'].forEach(function (attr) {
               var v = String(el.getAttribute(attr) || '').replace(/\s+/g, ' ').trim();
-              if (v && v.length <= 80 && !/[0-9]/.test(v) && tagName) cands.push({ s: tagName + '[' + attr + '=' + quote(v) + ']' });
+              if (v && v.length <= 80 && !/[0-9\[\]]/.test(v) && tagName) cands.push({ s: tagName + '[' + attr + '=' + quote(v) + ']' });
             });
             if (list && q) cands.push({ s: list + ':has-text(' + q + ')' });
             if (list) {
@@ -157,6 +157,20 @@ enum ReceiptAnchorProbe {
               var needle = label.toLowerCase();
               cands = cands.filter(function (cand) { return cand.s.toLowerCase().indexOf(needle) === -1; });
             }
+            // AN ADDRESS NESTS BRACKETS AT MOST ONCE. It is written inside a receipt bracket, and the
+            // reader on the other side (llmdex's receipt grammar) takes ONE level of `[…]` inside a
+            // bracket's value: `button[aria-label="x"]` reads, `button[aria-label="x [y]"]` -- or a
+            // label `[[x]]`, or an unbalanced `[` -- loses the whole receipt. Such a candidate is
+            // never offered (the attribute rungs above refuse bracketed values outright).
+            cands = cands.filter(function (cand) {
+              var d = 0;
+              for (var p = 0; p < cand.s.length; p++) {
+                var ch = cand.s.charAt(p);
+                if (ch === '[') { if (++d > 1) return false; }
+                else if (ch === ']') { if (--d < 0) return false; }
+              }
+              return d === 0;
+            });
             for (var c = 0; c < cands.length; c++) {
               var nodes = [];
               try { nodes = window.__snips.resolveAll(cands[c].s, document) || []; } catch (e) { nodes = []; }

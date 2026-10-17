@@ -223,12 +223,19 @@ public enum StepTraceSelector {
     /// and, conservatively, ANY whitespace: a quoted value with a space is legal CSS,
     /// but the trace guarantees its `selector` field contains no whitespace at all so
     /// downstream consumers can tokenize a step line without quoting rules.
+    ///
+    /// AND SQUARE BRACKETS (2026-10-18), refused rather than escaped like everything else here.
+    /// The selector rides inside a receipt bracket, `[selector=[name="user[email]"]]`, and the
+    /// reader on the other side (llmdex's receipt grammar) allows ONE level of brackets inside a
+    /// bracket's value -- `a[href="/x"]` -- so a value holding its own `[…]` nests two deep and
+    /// the whole receipt is lost to it, selector, count and anchor together. A Rails-style field
+    /// name (`user[email]`) or a test hook like `row[3]` then takes the next rung instead.
     public static func isSafeAttributeValue(_ value: String) -> Bool {
         guard !value.isEmpty, value.count <= maxValueLength else { return false }
         return value.unicodeScalars.allSatisfy { scalar in
             guard scalar.value >= 0x20, scalar.value != 0x7F else { return false }
             switch scalar {
-            case "\"", "'", "\\", "`": return false
+            case "\"", "'", "\\", "`", "[", "]": return false
             default: return !Character(scalar).isWhitespace
             }
         }

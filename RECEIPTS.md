@@ -34,7 +34,12 @@ it goes to `querySelectorAll` as written. A quoted argument (`"…"` or `'…'`)
 A receipt follows the sentence a page tool returns, e.g.
 `Clicked element "…". Navigated to … [selector=…] [tool=page_click] [matches=1] …`.
 Brackets come in the order below. A value can contain spaces and brackets, so a bracket ends at
-the `]` that **closes** its opening `[`, never at a space or at the next `]`.
+the `]` that **closes** its opening `[`, never at a space or at the next `]`. An address
+(`[selector=]`, `[anchor=]`, `[path=]`) nests brackets **at most once** and always balances them:
+`[selector=a[href="/x"]]` and `[anchor=…:has-text("Add [x]")]` are written, `[name="user[email]"]`
+and `[aria-label="Save [draft]"]` never are (the ladder and anchor rules 1a/1b refuse a bracketed
+value; any other candidate that would nest deeper is dropped). llmdex's grammar reads one level
+(since 2026-10-18).
 Writer: `PageToolReceipt.selectorNote` (`Sources/BrowserTools/Tools/PageToolsSupport.swift`).
 
 | Bracket | Holds | Since | Meaning last changed |
@@ -87,9 +92,11 @@ are tried in this order, and the first one that resolves back to the element win
 - **1:** the ladder's stable selector, when it is not a position path.
 - **1a:** `a[href="…"]` verbatim, for a link whose href is absolute or carries a query (rung 4b
   takes only a relative query-free path, rule 0 only a link relative to this page), when the
-  value is quotable and no other link on the page leads there (since 2026-10-04). A bare
+  value is quotable (no quote, backslash, whitespace, control character or, since 2026-10-18, square
+  bracket) and no other link on the page leads there (since 2026-10-04). A bare
   fragment (`#release-v3.8.5`) and a `javascript:` URL are not destinations and are never offered.
-- **1b:** `tag[aria-label="…"]` or `tag[title="…"]`, when the label has no digit (since 2026-09-30).
+- **1b:** `tag[aria-label="…"]` or `tag[title="…"]`, when the label has no digit (since 2026-09-30)
+  and no square bracket (since 2026-10-18).
 - **2:** `<list>:has-text("…")`.
 - **3:** `<list>` with `[anchor-nth=]`.
 - **4:** `<selector>:has-text("…")`.
@@ -166,3 +173,4 @@ in the agent repository's copy of this file.
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | exception 1 keeps `[index=]`, counted among the anchor's matches; the anchor probe reports the element's place among them (re-implements agent repo `a1687b0`, 2026-10-08, which was never pushed) |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[anchor-nth=]` whenever `[anchor=]` matches 2+, rule 0 included; exception 1 excludes only the rule-3 list ordinal (re-implements agent repo `6b4a864`, 2026-10-08, which was never pushed) |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[text=]` on batched `page_type` fields; `[text=]` falls back to the title, then an inner image's alt; the resolver's `:has-text` and the anchor label read an inner image's alt the same way (re-implements agent repo `9f8db00`, 2026-10-08, which was never pushed) |
+| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | an address nests brackets at most once: the ladder refuses an attribute value with `[`/`]` (the next rung is taken), anchor rules 1a/1b refuse one, and any other anchor candidate nesting deeper or unbalanced is dropped (no format change; llmdex's grammar reads one level) |
