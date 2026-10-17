@@ -44,7 +44,7 @@ import ToolABI
             let fingerprintBefore = await bridge.pageFingerprint()
             // Which element this was, in replayable terms — before the action, since selecting an option
             // commonly re-renders dependent controls. See `PageToolReceipt`.
-            let selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
+            let selectorNote = await PageToolReceipt.liveNote(alohaId: alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_select")
             let result = await bridge.selectOptionById(alohaId, text: text, index: index)
             // A select-only form is a filled form: arm `page_click`'s duplicate-submit read for this
             // tab the way `page_type` does. See `SubmittedForms`.

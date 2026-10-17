@@ -310,6 +310,12 @@ private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: Man
 
             var sections: [String] = []
             if let viewport = viewportLine(tab) { sections.append(viewport) }
+            // THE PAGE'S MAIN HEADING, in receipt form, so a run that reads its answer from the
+            // page leaves the mint a real selector for the read step (see `MainHeadingProbe`).
+            if let cdpTab = tab as? CDPTabHandle {
+                let headingLine = await makePageBridge(cdpTab, ctx.abortSignal ?? AbortSignal()).mainHeadingReceiptLine()
+                if !headingLine.isEmpty { sections.append(headingLine) }
+            }
             sections.append("Interactive view: the page rendered as structural markdown — # headings, - list items, [text](href) links, | a | b | table rows, and plain paragraphs. Content is clean and id-free; every actionable element (link, button, input, select, landmark) carries a trailing {aloha-id=\"ID\" tag} marker. Use that id with page_click, page_type, page_select and get_text; to act on a row or a card, use the id on its own link or button trailer. The page tools address the tab currently in use — manage_tabs open and manage_tabs use both set it. Cross-origin iframe internals (payment widgets, embedded auth) cannot be inspected and carry no inner ids; do not read payment values back out.")
 
             if !interactResult.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

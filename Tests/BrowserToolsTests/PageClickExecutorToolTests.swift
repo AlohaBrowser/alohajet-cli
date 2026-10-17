@@ -221,7 +221,7 @@ struct PageClickExecutorToolTests {
     /// a comparison that was never made.
     @Test func noBeforeUrlStatesTheCurrentPageOnly() {
         #expect(PageDelta.describe(urlBefore: "", urlAfter: "http://host/b")
-                == " Now at http://host/b.")
+                == " Now at http://host/b")
     }
 
     /// The delta rides on the SUCCESS receipt only — a refused or failed click keeps its own message.

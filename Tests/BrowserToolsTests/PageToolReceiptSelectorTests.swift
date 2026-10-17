@@ -35,6 +35,29 @@ struct PageToolReceiptSelectorTests {
         DomNode(id: id, element: DomElement(tagName: tag, attributes: attributes))
     }
 
+    /// A node with no authored handle but a position yields the position path: the receipt names
+    /// the element for the trace even on markup nobody labelled.
+    @Test func anUnlabelledElementYieldsItsPositionPath() {
+        let positioned = DomNode(id: "2k", element: DomElement(tagName: "button", attributes: [:], xpath: "/body/div[2]/button"))
+        let tab = FakeTab(nodes: ["2k": positioned])
+        #expect(PageToolReceipt.selectorNote(alohaId: "2k", tab: tab) == " [selector=body>div:nth-of-type(2)>button]")
+    }
+
+    /// The walker's position for the element reaches the node; an empty one is `nil`.
+    @Test func parsesTheWalkersXPath() {
+        let node = parseDomNode(.object([
+            ("id", .string("n1")),
+            ("element", .object([("tagName", .string("input")), ("attributes", .object([])),
+                                 ("xpath", .string("/body/form/input[2]"))]))
+        ]))
+        #expect(node?.element.xpath == "/body/form/input[2]")
+        let unpathed = parseDomNode(.object([
+            ("id", .string("n2")),
+            ("element", .object([("tagName", .string("div")), ("attributes", .object([])), ("xpath", .string(""))]))
+        ]))
+        #expect(unpathed?.element.xpath == nil)
+    }
+
     @Test func anIdBearingElementYieldsItsSelector() {
         let tab = FakeTab(nodes: ["1g": node("1g", tag: "input", ["id": "search-input"])])
         #expect(PageToolReceipt.durableSelector(alohaId: "1g", tab: tab) == "#search-input")

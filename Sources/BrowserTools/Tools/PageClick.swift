@@ -43,9 +43,10 @@ import ToolABI
             // click changed it -- see pageFingerprint.
             let fingerprintBefore = await bridge.pageFingerprint()
             // AND WHICH ELEMENT THIS WAS, in terms that survive the next DOM walk. Resolved here, before
-            // the click, because afterwards the snapshot may no longer hold the node. Pure cache read --
-            // see PageToolReceipt.
-            let selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
+            // the click, because afterwards the snapshot may no longer hold the node: the durable
+            // selector, how many elements it matches, the element's text and identity -- see
+            // PageToolReceipt.liveNote.
+            let selectorNote = await PageToolReceipt.liveNote(alohaId: alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_click")
             // AND WHAT THE CONTROL SAYS ABOUT ITSELF. A toggle changes its own label or an ARIA flag
             // and nothing else -- same document, same element count, same URL -- so every other
             // signal on this path reports "nothing happened" about a click that worked. See
