@@ -360,15 +360,21 @@ extension AgentBrowserBridge {
     /// Close, an "x" glyph, in the languages the agent meets. It GATES NOTHING: whether a click is
     /// refused is decided by the container the control sits in (see `overlayHiderSource`). It
     /// only words the receipt ("a control of" against "a control inside" a prompt), and it is
-    /// exported for the callers that classify a landed click's label the same way.
-    nonisolated static let consentActionPattern = "accept|agree|allow|consent|cookie|required|necessary|essential|reject|decline|refuse|deny|manage|settings|preferences|options|customi[sz]e|save|confirm|got it|^ok(ay)?$|continue|understand|zustimmen|akzeptieren|ablehnen|einstellungen|accepter|refuser|param|aceptar|rechazar|configur|accetta|rifiuta|aceitar|recusar|\\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u044c|\\u043e\\u0442\\u043a\\u043b\\u043e\\u043d\\u0438\\u0442\\u044c|\\u043d\\u0430\\u0441\\u0442\\u0440\\u043e\\u0439\\u043a|\\u0441\\u043e\\u0433\\u043b\\u0430\\u0441|close|dismiss|schlie(\\u00df|ss)en|cerrar|fermer|chiudi|fechar|\\u0437\\u0430\\u043a\\u0440\\u044b\\u0442\\u044c|^\\s*[x\\u00d7\\u2715\\u2716]\\s*$"
+    /// exported for the callers that classify a landed click's label the same way -- the agent
+    /// repository's replay-repeat guard among them, hence `public`.
+    public nonisolated static let consentActionPattern = "accept|agree|allow|consent|cookie|required|necessary|essential|reject|decline|refuse|deny|manage|settings|preferences|options|customi[sz]e|save|confirm|got it|^ok(ay)?$|continue|understand|zustimmen|akzeptieren|ablehnen|einstellungen|accepter|refuser|param|aceptar|rechazar|configur|accetta|rifiuta|aceitar|recusar|\\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u044c|\\u043e\\u0442\\u043a\\u043b\\u043e\\u043d\\u0438\\u0442\\u044c|\\u043d\\u0430\\u0441\\u0442\\u0440\\u043e\\u0439\\u043a|\\u0441\\u043e\\u0433\\u043b\\u0430\\u0441|close|dismiss|schlie(\\u00df|ss)en|cerrar|fermer|chiudi|fechar|\\u0437\\u0430\\u043a\\u0440\\u044b\\u0442\\u044c|^\\s*[x\\u00d7\\u2715\\u2716]\\s*$"
 
     /// The page-side logic behind `hideCoveringOverlay(alohaId:)` and
     /// `hideConsentLayerContaining(alohaId:)`: shared helpers plus the two functions, as STATEMENTS
     /// the wrappers evaluate before calling one of them. `Tests/BrowserToolsTests/overlay_hider.js`
     /// runs the identical source against a fake DOM in Node, extracting it by the two markers and
     /// substituting `\(consentActionPattern)` the way Swift does.
-    static let overlayHiderSource = """
+    ///
+    /// `public` for the agent repository's scenario runner (its write-dispatch backend), which
+    /// resolves a step's target by selector rather than by aloha-id and then calls the same two
+    /// functions on it: a scenario step aimed at a consent control is skipped and the prompt hidden,
+    /// and a backdrop covering a step's target is hidden, by THIS hider and no second copy.
+    public nonisolated static let overlayHiderSource = """
         // BEGIN overlay-hider js
         // CONTAINER FIRST. The question is never "does this button's label sound like Accept" but
         // "does this button sit inside a cookie-consent prompt". Three layers answer it, strongest
