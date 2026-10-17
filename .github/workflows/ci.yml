@@ -155,6 +155,8 @@ jobs:
         run: node Tests/BrowserToolsTests/element_text.js
       - name: Main heading probe (fake DOM)
         run: node Tests/BrowserToolsTests/main_heading.js
+      - name: Answer receipt page matcher (fake DOM)
+        run: node Tests/BrowserToolsTests/answer_receipt.js
       - name: RECEIPTS.md matches the code
         run: node Tests/BrowserToolsTests/receipt_registry.js
 

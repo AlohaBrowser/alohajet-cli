@@ -47,7 +47,7 @@ Writer: `PageToolReceipt.selectorNote` (`Sources/BrowserTools/Tools/PageToolsSup
 | Bracket | Holds | Since | Meaning last changed |
 |---|---|---|---|
 | `[selector=]` | the address to replay with: the selector ladder's pick (`Tabs/StepTraceSelector.swift`): id, data-testid, name, input type, `a[href="/path"]`, role, classes, else a position path `body>…`. **Verified on the live page before it is written** (every rung, since 2026-10-04): a selector whose live matches do not include the element is replaced by a position path rebuilt from the live element, or, when none can be built, written as it is with `[index=none]`. **One exception** follows this table | 2026-08-11 | 2026-10-04 |
-| `[tool=]` | the tool that wrote the receipt: `page_click`, `page_type`, `page_select`, `page_press_keys`, `get_text` | 2026-09-30 | — |
+| `[tool=]` | the tool that wrote the receipt: `page_click`, `page_type`, `page_select`, `page_press_keys`, `get_text`; `answer` for an answer receipt (below) | 2026-09-30 | 2026-10-18 (`answer`) |
 | `[source=]` | where a non-tool line came from: `main-heading` (the heading line a page read carries) | 2026-09-30 | — |
 | `[path=]` | the ladder's position path, present **only** when exception 1 moved it out of `[selector=]` | 2026-10-01 | — |
 | `[matches=]` | how many elements `[selector=]` matches on the page now | 2026-09-21 | 2026-10-01 (it follows `[selector=]`) |
@@ -137,11 +137,33 @@ Main heading on this page:
 
 Writer: `MainHeadingProbe` (`Sources/BrowserTools/Runtime/MainHeadingReceipt.swift`).
 
-## Not in this package
+## Answer receipts
 
-Answer receipts (`[tool=answer]`, the `answer_receipts` / `answer_url` fields of the verdict) are
-written by the agent (alohajet, `AnswerReceipt.swift`), not by this package, and are documented
-in the agent repository's copy of this file.
+Most fact-finding runs answer from the page an action returned, not from a `get_text`, so the run
+holds no receipt for the element the answer came from. After the turn, on the page the agent
+observed last (`AnswerPageTracker`: the tab of the latest page tool, by CDP target id), the host
+asks `answerReceipts(onTab:answer:prompt:)` for a receipt per value the final answer repeats from
+that page, and sends them with the verdict (llmdex `POST /v1/verdict`, `answer_receipts`, the
+tab's URL as `answer_url`). One line per value, at most 4:
+
+```
+answer "v3.8.5": [selector=body>div>main>section:nth-of-type(1)>div>h2>a] [tool=answer] [matches=1] [text="v3.8.5"] [attrs=href="/MHSanaei/3x-ui/releases/tag/v3.8.5"]
+```
+
+- **Which elements.** Every visible element whose own text is at most 80 characters and that the
+  answer repeats as a whole run of words the task did not already say; innermost element only; a
+  lone word only when the answer bolded or quoted it, a lone number only with 3+ characters; with
+  no word match, an element whose numbers all appear in the answer. The answer's bold / quoted
+  spans rank the candidates; an element the turn's `get_text` read (or one inside it) ranks first.
+- **Which brackets.** The `get_text` receipt of the element, built with the same writer and the
+  read rules (no anchor built from the value read), from the element's live position path; when
+  the element has a semantic anchor free of the value, exception 1 puts it in `[selector=]` and
+  the path in `[path=]`. `[tool=answer]` says who wrote it.
+- **The prefix** `answer "<value>":` is prose: the element's text, with `"` written `'` and square
+  brackets written as parentheses, so it never reads as a bracket.
+
+Writer: `AnswerReceipt` (`Sources/BrowserTools/Runtime/AnswerReceipt.swift`); the page side is
+exercised by `Tests/BrowserToolsTests/answer_receipt.js`.
 
 ## Change log
 
@@ -178,3 +200,4 @@ in the agent repository's copy of this file.
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | an address nests brackets at most once: anchor rules 1a/1b refuse a value with `[`/`]`, and any other anchor candidate nesting deeper or unbalanced is dropped (no format change; llmdex's grammar reads one level) |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | the ladder writes `[`/`]` inside an attribute value as `\00005b`/`\00005d` (CSS hex escapes) instead of refusing the value, so a Magento / Rails field keeps its name rung |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[text=]` and the anchor label never read a field's content: a text-entry input's `value` attribute or a textarea's text (a submit's, a checkbox's or a radio's `value` still names it). A click on a password field whose value the page kept in the attribute wrote the password into the receipt |
+| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | answer receipts (`[tool=answer]`) and the tracker of the answer page move into this package from the agent repository (windows-on-snips `dc514f76`..`a74a7d63`); the temporary ids are found by their prefix, no marker attribute |
