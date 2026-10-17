@@ -131,6 +131,12 @@ jobs:
       - name: Page-side type probe (fake DOM)
         run: node Tests/BrowserToolsTests/type_probe_resolution.js
 
+      # The selector resolver the receipt probes verify an address with, and the agent's scenario
+      # replays resolve with, is a Swift string too; this runs the bytes between its BEGIN/END
+      # markers against fake documents, every procedural pseudo-class included.
+      - name: Page-side selector resolver (fake DOM)
+        run: node Tests/BrowserToolsTests/selector_resolver.js
+
   linux:
     name: Linux (Swift 6.2.3, Ubuntu 24.04)
     runs-on: ubuntu-24.04
