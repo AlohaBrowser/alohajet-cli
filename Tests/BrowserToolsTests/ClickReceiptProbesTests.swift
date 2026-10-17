@@ -140,5 +140,16 @@ struct ClickReceiptProbesTests {
         #expect(src.contains("function hideConsentLayerContaining(el, document, window)"))
         // Not accepting on the user's behalf: the source never clicks anything.
         #expect(!src.contains(".click("))
+        // The control vocabulary is interpolated for the receipt's wording and nothing else;
+        // the harness substitutes it by this exact spelling.
+        #expect(src.contains("var CONSENT_ACTION = /" + AgentBrowserBridge.consentActionPattern + "/i;"))
+        #expect(!AgentBrowserBridge.consentActionPattern.isEmpty)
+        // Every refusal and every hide says which layer fired, so a run archive can be audited.
+        #expect(src.contains("[consent="))
+        // The page's CMP API is only ever PINGED: no command that records a choice goes through it.
+        #expect(src.components(separatedBy: "__tcfapi(").count == 2)
+        #expect(src.contains("__tcfapi('ping'"))
+        #expect(src.components(separatedBy: "__gpp(").count == 2)
+        #expect(src.contains("__gpp('ping'"))
     }
 }

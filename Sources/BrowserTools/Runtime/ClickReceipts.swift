@@ -273,15 +273,20 @@ extension AgentBrowserBridge {
     /// cookie, and leaves the page underneath usable. The layer may come back on the next
     /// document; this runs before every click, so that costs one probe.
     ///
-    /// GENERAL BY CONSTRUCTION, not by vendor list. The cover is found by hit-testing the target
-    /// and climbing to the covering subtree's root, so it works on any site's markup. It is hidden
-    /// only when it is an OVERLAY in the layout sense -- a `position:fixed`/`sticky` layer, or a
-    /// shadow-DOM host planted at the document root the way consent widgets are -- AND it either
-    /// reads like a consent notice (cookie/privacy/accept vocabulary in the common European
-    /// languages) or blankets at least 60% of the viewport while holding no form fields. That
-    /// last clause keeps a modal the model itself opened, a size drawer or a login form, from
-    /// being swept away because a stray click landed under it. A small absolute dropdown, a
-    /// sticky header the target scrolled beneath, or an inline overlap is never touched.
+    /// GENERAL BY CONSTRUCTION, with a vendor list on top. The cover is found by hit-testing the
+    /// target and climbing to the covering subtree's root, so it works on any site's markup. It
+    /// is hidden only when it is an OVERLAY in the layout sense -- a `position:fixed`/`sticky`
+    /// layer, or a shadow-DOM host planted at the document root the way consent widgets are --
+    /// AND one of three things holds: it is a known CMP's own container (`[consent=cmp:<vendor>]`);
+    /// it is a consent prompt by the container test `hideConsentLayerContaining` uses (banner or
+    /// modal shape, no landmark, no text field, 40..2500 characters, 1..8 controls, cookie
+    /// vocabulary in its name -- or a visible consent UI per the page's `__tcfapi`/`__gpp` ping);
+    /// or it blankets at least 60% of the viewport while holding no form fields (`[blanket]`).
+    /// A layer holding text fields, selects or textareas is NEVER hidden, whatever its text: a
+    /// login, a size drawer or a checkout the model itself opened must not be swept away because
+    /// a stray click landed under it. A small absolute dropdown, a sticky header the target
+    /// scrolled beneath, or an inline overlap is never touched. A hidden modal's `inert` lock on
+    /// the rest of the page is released with it.
     ///
     /// THREE PASSES because consent libraries split into a backdrop and a dialog: hiding the
     /// dialog leaves the backdrop taking the click, so the probe repeats until the target is hit
@@ -313,12 +318,23 @@ extension AgentBrowserBridge {
         return text
     }
 
-    /// POLICY: NO NEW COOKIES. When the click's TARGET is a control of a consent prompt -- Accept,
-    /// Reject, Manage, inside a fixed layer whose text reads like a cookie notice -- the prompt is
-    /// hidden and nothing is clicked. The agent answers no consent prompt on the user's behalf,
-    /// in either direction, so the site records nothing beyond what it set on load. Measured
-    /// before this existed: in two of three ATP runs the model reached for "Accept All Cookies"
-    /// as its way past the banner, and two OneTrust consent cookies were written each time.
+    /// POLICY: NO NEW COOKIES. When the click's TARGET is a control inside a consent prompt --
+    /// Accept, Reject, Manage, Close, a toggle -- the prompt is hidden and nothing is clicked. The
+    /// agent answers no consent prompt on the user's behalf, in either direction, so the site
+    /// records nothing beyond what it set on load. Measured before this existed: in two of three
+    /// ATP runs the model reached for "Accept All Cookies" as its way past the banner, and two
+    /// OneTrust consent cookies were written each time.
+    ///
+    /// THE PROMPT IS FOUND AS A CONTAINER, not by the control's label. The first version asked
+    /// "label sounds like a consent action AND a consent word anywhere in the fixed layer", and a
+    /// login dialog whose small print mentioned the privacy policy, an age gate, a region picker
+    /// and a checkout footer each qualified: their Continue and Save were refused and the dialogs
+    /// hidden. Three layers now decide, strongest first (see `overlayHiderSource`): the page's
+    /// CMP API reporting a visible consent UI (IAB TCF v2 / GPP ping), a known CMP's container by
+    /// the id or class its own script writes, and a structural match -- shape, no landmark, no
+    /// text field, 40..2500 characters, 1..8 controls -- with cookie vocabulary in the container's
+    /// NAME. The receipt ends in `[consent=tcf|gpp|cmp:<vendor>|heuristic]` so a run archive says
+    /// which layer fired; `consentActionPattern` only words it.
     ///
     /// Returns the receipt text to return INSTEAD of a click, or nil when the target is not a
     /// consent control (the ordinary click proceeds). Not an error: the model's goal, getting
@@ -340,19 +356,68 @@ extension AgentBrowserBridge {
         return text
     }
 
+    /// The labels a consent prompt's controls carry -- Accept, Reject, Manage, Settings, Save,
+    /// Close, an "x" glyph, in the languages the agent meets. It GATES NOTHING: whether a click is
+    /// refused is decided by the container the control sits in (see `overlayHiderSource`). It
+    /// only words the receipt ("a control of" against "a control inside" a prompt), and it is
+    /// exported for the callers that classify a landed click's label the same way.
+    nonisolated static let consentActionPattern = "accept|agree|allow|consent|cookie|required|necessary|essential|reject|decline|refuse|deny|manage|settings|preferences|options|customi[sz]e|save|confirm|got it|^ok(ay)?$|continue|understand|zustimmen|akzeptieren|ablehnen|einstellungen|accepter|refuser|param|aceptar|rechazar|configur|accetta|rifiuta|aceitar|recusar|\\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u044c|\\u043e\\u0442\\u043a\\u043b\\u043e\\u043d\\u0438\\u0442\\u044c|\\u043d\\u0430\\u0441\\u0442\\u0440\\u043e\\u0439\\u043a|\\u0441\\u043e\\u0433\\u043b\\u0430\\u0441|close|dismiss|schlie(\\u00df|ss)en|cerrar|fermer|chiudi|fechar|\\u0437\\u0430\\u043a\\u0440\\u044b\\u0442\\u044c|^\\s*[x\\u00d7\\u2715\\u2716]\\s*$"
+
     /// The page-side logic behind `hideCoveringOverlay(alohaId:)` and
     /// `hideConsentLayerContaining(alohaId:)`: shared helpers plus the two functions, as STATEMENTS
-    /// the wrappers evaluate before calling one of them. `Tests/AgentRuntimeTests/overlay_hider.js`
-    /// runs the identical source against a fake DOM in Node, extracting it by the two markers.
+    /// the wrappers evaluate before calling one of them. `Tests/BrowserToolsTests/overlay_hider.js`
+    /// runs the identical source against a fake DOM in Node, extracting it by the two markers and
+    /// substituting `\(consentActionPattern)` the way Swift does.
     static let overlayHiderSource = """
         // BEGIN overlay-hider js
-        // A consent prompt names its TOPIC (cookies, consent, tracking, GDPR) AND offers an ACTION
-        // (accept, reject, manage, preferences); the review's counter-example -- a fixed settings
-        // modal reading "privacy preferences" -- has the action word and no topic, and must not
-        // be treated as one. Seven languages on both sides; "privacy" alone qualifies for neither.
-        var CONSENT_TOPIC = /cookie|cookies|consent|gdpr|tracking|we value your privacy|datenschutz|einwilligung|confidentialit|privacidad|\\u043a\\u0443\\u043a\\u0438|\\u0441\\u043e\\u0433\\u043b\\u0430\\u0441/i;
-        var CONSENT_ACTION = /accept|agree|allow|reject|decline|deny|manage|preferences|settings|zustimmen|akzeptieren|ablehnen|accepter|refuser|aceptar|rechazar|accetta|rifiuta|aceitar|recusar|\\u043f\\u0440\\u0438\\u043d\\u044f\\u0442\\u044c|\\u043e\\u0442\\u043a\\u043b\\u043e\\u043d/i;
-        function ohIsConsent(t) { return CONSENT_TOPIC.test(t) && CONSENT_ACTION.test(t); }
+        // CONTAINER FIRST. The question is never "does this button's label sound like Accept" but
+        // "does this button sit inside a cookie-consent prompt". Three layers answer it, strongest
+        // first, and the first that fires decides:
+        //   1. the page's own CMP API -- IAB TCF v2 `__tcfapi` ping (PingReturn.displayStatus),
+        //      IAB GPP `__gpp` ping (cmpDisplayStatus): 'visible' says a consent UI is on screen.
+        //      It names no node, so it only lets a structural match through without the vocabulary.
+        //   2. a known CMP's container, by the id or class its vendor's own script writes.
+        //   3. a structural match -- the highest fixed/sticky ancestor, a dialog, or a shadow host at the
+        //      body, shaped like a banner (full-width band at the top or bottom) or a backdropped modal,
+        //      holding no page landmark, no text field, 40..2500 characters and 1..8 controls -- AND
+        //      cookie vocabulary in its NAME: aria-label, aria-labelledby, first heading, first 200
+        //      characters. Not anywhere in its text: every dialog's small print mentions privacy.
+        // The control's own label gates nothing any more; it only words the receipt. The previous
+        // version asked "action word in the label AND a consent word anywhere in the layer", and a
+        // fixed login dialog ("By continuing you agree to our Privacy Policy", Continue), an age gate,
+        // a region picker and a sticky checkout footer with a Privacy link each satisfied it: refused,
+        // and hidden. Each receipt carries [consent=tcf|gpp|cmp:<vendor>|heuristic] so a run archive
+        // says which layer fired.
+        var CONSENT_ACTION = /\(consentActionPattern)/i;
+        // Words that are only ever about cookies, in the languages the agent meets. "privacy",
+        // "accept", "agree", "preferences", "Datenschutz" (= privacy) qualify for nothing. "tracking"
+        // is kept off the checkout page's order tracking.
+        var CONSENT_WORDS = /cookie|consent|consenso|gdpr|rgpd|dsgvo|ccpa|(?<!order |shipment |parcel |package )tracking(?! number| code| id| your order)|we use|einwilligung|\\u043a\\u0443\\u043a\\u0438|\\u0441\\u043e\\u0433\\u043b\\u0430\\u0441/i;
+        // The containers the consent-management platforms ship, by the ids and classes their own
+        // scripts write. A hit names the node to hide outright. Hand-written, twenty vendors;
+        // autoconsent's and EasyList Cookie's rule files are the follow-up, not this list.
+        var CMP_CONTAINERS = [
+          ['onetrust', '#onetrust-consent-sdk, #onetrust-banner-sdk, #onetrust-pc-sdk, .onetrust-pc-dark-filter'],
+          ['cookiebot', '#CybotCookiebotDialog, #CybotCookiebotDialogBodyUnderlay'],
+          ['didomi', '#didomi-host, #didomi-popup'],
+          ['usercentrics', '#usercentrics-root, #usercentrics-cmp-ui'],
+          ['quantcast', '#qc-cmp2-container'],
+          ['trustarc', '#truste-consent-track, #consent_blackbar, .truste_box_overlay'],
+          ['sourcepoint', 'iframe[id^="sp_message_iframe"], [id^="sp_message_container"]'],
+          ['klaro', '#klaro, .klaro .cookie-modal'],
+          ['osano', '.osano-cm-window'],
+          ['cookieyes', '#cky-consent-container, .cky-overlay'],
+          ['complianz', '#cmplz-cookiebanner-container'],
+          ['iubenda', '#iubenda-cs-banner'],
+          ['axeptio', '#axeptio_overlay'],
+          ['borlabs', '#BorlabsCookieBox'],
+          ['tarteaucitron', '#tarteaucitronRoot, #tarteaucitronAlertBig'],
+          ['termly', '#termly-code-snippet-support'],
+          ['cookieinformation', '#coiOverlay'],
+          ['cookiefirst', '#cookiefirst-root'],
+          ['fundingchoices', '.fc-consent-root'],
+          ['shopify', '#shopify-pc__banner']
+        ];
         function ohText(n) {
           var t = '';
           try { t = n.innerText || n.textContent || ''; } catch (e) {}
@@ -362,8 +427,49 @@ extension AgentBrowserBridge {
         function ohPosition(n, window) {
           try { return window.getComputedStyle(n).position || ''; } catch (e) { return ''; }
         }
+        // The parent across a shadow boundary: a control inside a CMP's shadow root climbs to its host.
+        function ohParent(n) {
+          if (!n) return null;
+          if (n.parentElement) return n.parentElement;
+          try { var r = n.parentNode; if (r && r.host) return r.host; } catch (e) {}
+          return null;
+        }
+        function ohMatches(n, sel) { try { return !!(n && n.matches && n.matches(sel)); } catch (e) { return false; } }
+        // Descendants, the host's shadow tree included: a shadow host's own querySelectorAll sees none of it.
+        function ohAll(n, sel) {
+          var out = [];
+          try { var a = n.querySelectorAll(sel); for (var i = 0; i < a.length; i++) out.push(a[i]); } catch (e) {}
+          try { if (n.shadowRoot) { var b = n.shadowRoot.querySelectorAll(sel); for (var j = 0; j < b.length; j++) out.push(b[j]); } } catch (e) {}
+          return out;
+        }
+        // NEVER THE PAGE ITSELF. A node that holds a landmark (main, header, nav) is the app, not a
+        // layer over it; hiding it blanks the site (zara.com, 2026-09-20, six runs on a white page).
+        function ohHasLandmark(n) { return ohAll(n, 'main, [role=main], header, nav, [role=navigation]').length > 0; }
+        // A vendor's container is not the page by construction, but it is still never hidden while it
+        // holds the page's main content; a nav inside its preference centre (OneTrust's does) is fine.
+        function ohHoldsMain(n) { return ohAll(n, 'main, [role=main]').length > 0; }
+        // Text fields. A checkbox or a switch is what a preference centre is made of and does not count.
         function ohHasFormFields(n) {
-          try { return !!n.querySelector('input:not([type=hidden]), select, textarea'); } catch (e) { return false; }
+          return ohAll(n, 'input:not([type=hidden]):not([type=checkbox]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]), select, textarea').length > 0;
+        }
+        function ohControls(n) { return ohAll(n, 'button, a, [role=button], [role=link], input[type=button], input[type=submit]'); }
+        function ohCoverage(n, window) {
+          var vw = Math.max(1, window.innerWidth || 1), vh = Math.max(1, window.innerHeight || 1);
+          var r = n.getBoundingClientRect();
+          return (Math.max(0, r.width) * Math.max(0, r.height)) / (vw * vh);
+        }
+        // What the container calls itself: accessible name, first heading, first 200 characters.
+        function ohName(n, document) {
+          var parts = [];
+          try {
+            var al = n.getAttribute && n.getAttribute('aria-label'); if (al) parts.push(al);
+            var by = n.getAttribute && n.getAttribute('aria-labelledby');
+            if (by) String(by).split(/\\s+/).forEach(function (id) { var e = id && document.getElementById(id); if (e) parts.push(ohText(e)); });
+          } catch (e) {}
+          var h = ohAll(n, 'h1, h2, h3, h4, [role=heading]');
+          if (h.length) parts.push(ohText(h[0]));
+          parts.push(ohText(n).slice(0, 200));
+          return parts.join(' ');
         }
         function ohDescribe(n, t) {
           var id = n.getAttribute && n.getAttribute('aloha-id');
@@ -371,19 +477,144 @@ extension AgentBrowserBridge {
           if (t) d += ' "' + (t.length > 60 ? t.slice(0, 60) : t) + '"';
           return d;
         }
+        // LAYER 1: the CMP's own API. Real CMPs answer `ping` synchronously; the IAB stub (before the
+        // CMP loads) answers with cmpLoaded:false and no displayStatus, which reads as "unknown" here.
+        // Only `ping` is ever sent: nothing here records a choice through the API either.
+        function ohCmpApi(window) {
+          var out = { api: '', visible: null, id: null };
+          function probe(w) {
+            try {
+              if (typeof w.__tcfapi === 'function') {
+                var p = null; w.__tcfapi('ping', 2, function (r) { p = r; });
+                if (p && typeof p === 'object') { out.api = 'tcf'; out.id = p.cmpId || null; if (p.displayStatus) out.visible = p.displayStatus === 'visible'; }
+              }
+              if (!out.api && typeof w.__gpp === 'function') {
+                var g = null; w.__gpp('ping', function (r) { g = r; });
+                if (g && typeof g === 'object') { out.api = 'gpp'; out.id = g.cmpId || null; if (g.cmpDisplayStatus) out.visible = g.cmpDisplayStatus === 'visible'; }
+              }
+              if (!out.api && typeof w.__uspapi === 'function') out.api = 'usp';
+            } catch (e) {}
+          }
+          probe(window);
+          if (!out.api) { try { if (window.top && window.top !== window) probe(window.top); } catch (e) {} }
+          return out;
+        }
+        // LAYER 2: the highest known CMP container on the ancestor chain, shadow hosts included.
+        function ohKnownCmp(n, document) {
+          var found = null;
+          for (var a = n; a && a !== document.body && a !== document.documentElement; a = ohParent(a)) {
+            for (var i = 0; i < CMP_CONTAINERS.length; i++) {
+              if (ohMatches(a, CMP_CONTAINERS[i][1])) { found = { node: a, name: CMP_CONTAINERS[i][0] }; break; }
+            }
+          }
+          return found;
+        }
+        // LAYER 3, the candidate: the HIGHEST fixed/sticky ancestor, else a shadow host planted at the
+        // body, else the nearest dialog.
+        function ohCandidate(el, document, window) {
+          var cand = null, dialog = null;
+          for (var n = ohParent(el); n && n !== document.body && n !== document.documentElement; n = ohParent(n)) {
+            var pos = ohPosition(n, window);
+            if (pos === 'fixed' || pos === 'sticky') cand = n;
+            else if (n.shadowRoot && ohParent(n) === document.body) cand = n;
+            if (!dialog && ohMatches(n, '[role=dialog], [role=alertdialog], dialog[open]')) dialog = n;
+          }
+          return cand || dialog;
+        }
+        // Shaped like a consent prompt: a band spanning the viewport at its top or bottom, or a modal
+        // over a backdrop -- its own box covering most of the viewport, or a textless sibling doing so.
+        function ohShape(c, el, document, window) {
+          var vw = Math.max(1, window.innerWidth || 1), vh = Math.max(1, window.innerHeight || 1);
+          var r = c.getBoundingClientRect();
+          if (r.width >= 0.6 * vw && (r.top <= 8 || r.top + r.height >= vh - 8)) return 'banner';
+          if (ohCoverage(c, window) >= 0.6) return 'modal';
+          var sets = [];
+          try { var p = ohParent(c); if (p && p.children) sets.push(p.children); } catch (e) {}
+          try { if (document.body && document.body.children) sets.push(document.body.children); } catch (e) {}
+          for (var s = 0; s < sets.length; s++) {
+            for (var k = 0; k < sets[s].length; k++) {
+              var sib = sets[s][k];
+              try {
+                if (sib === c || sib.contains(c) || sib.contains(el)) continue;
+                if (ohCoverage(sib, window) >= 0.6 && ohText(sib).length < 40) return 'modal';
+              } catch (e) {}
+            }
+          }
+          return '';
+        }
+        function ohStructural(c, el, document, window) {
+          if (!c || ohHasLandmark(c) || ohHasFormFields(c)) return false;
+          var t = ohText(c);
+          if (t.length < 40 || t.length > 2500) return false;
+          var k = ohControls(c).length;
+          if (k < 1 || k > 8) return false;
+          return !!ohShape(c, el, document, window);
+        }
+        // What gets hidden for a structural hit: the candidate, widened to a body child only while
+        // the child stays short and holds no landmark and no text field -- a consent widget's wrapper
+        // never contains the page, an app root always does.
+        function ohWiden(c, document) {
+          var root = c;
+          for (var p = ohParent(c); p && p !== document.body && p !== document.documentElement; p = ohParent(p)) {
+            if (ohText(p).length > 2000 || ohHasLandmark(p) || ohHasFormFields(p)) break;
+            root = p;
+          }
+          return root;
+        }
+        // THE DECISION for a control the click aims at: the node to hide and the layer that fired, or null.
+        function ohDetectConsent(el, document, window, api) {
+          var cmp = ohKnownCmp(el, document);
+          if (cmp && !ohHoldsMain(cmp.node)) return { node: cmp.node, signal: 'cmp:' + cmp.name };
+          var c = ohCandidate(el, document, window);
+          if (!c || !ohStructural(c, el, document, window)) return null;
+          var vocab = CONSENT_WORDS.test(ohName(c, document));
+          if (!vocab && api.visible !== true) return null;
+          return { node: ohWiden(c, document), signal: api.visible === true ? api.api : 'heuristic' };
+        }
         // display:none, marked for the DOM walk, and the body/html scroll lock consent libraries
         // set inline released. Never a click: nothing here answers a prompt.
-        function ohHide(root, document) {
+        //
+        // AND THE MODAL LOCK ON THE REST OF THE PAGE IS RELEASED. A dialog framework marks everything
+        // outside its dialog `inert` while the dialog is open; hiding the dialog's node leaves that mark
+        // in place, and an inert subtree swallows every click into <body>. Measured on zara.com/us
+        // (llmdex tag jacket-bag-luna2-20260920-132331-177a): the privacy-policy popup was hidden here,
+        // `#app-root` stayed inert, and the model clicked "Open size selector" thirteen times -- each
+        // click hit <body>, no picker ever opened. With `inert` cleared the same click opened S / M / L.
+        // Released on the target's ancestors (they must accept the click), and on the body's direct
+        // children only when the hidden root carried a modal dialog -- that is what locked them.
+        // `[inert]` elsewhere -- an off-screen carousel slide -- is the site's business.
+        // Returns true when a lock was released, so the receipt can say so.
+        function ohHide(root, document, el) {
           try { root.setAttribute('data-aloha-hidden-overlay', '1'); } catch (e) {}
           root.style.setProperty('display', 'none', 'important');
           [document.body, document.documentElement].forEach(function (n) {
             try { if (n && n.style && /hidden/i.test(n.style.overflow || '')) n.style.overflow = ''; } catch (e) {}
           });
+          var released = false;
+          function unlock(n) {
+            try {
+              if (n && n !== root && n.getAttribute && n.getAttribute('inert') !== null && !root.contains(n)) {
+                if (n.removeAttribute) n.removeAttribute('inert'); else n.setAttribute('inert', null);
+                released = true;
+              }
+            } catch (e) {}
+          }
+          try { for (var a = el; a; a = ohParent(a)) unlock(a); } catch (e) {}
+          var modal = ohMatches(root, '[aria-modal="true"], dialog') || ohAll(root, '[aria-modal="true"], dialog').length > 0;
+          if (modal) {
+            try {
+              var kids = (document.body && document.body.children) || [];
+              for (var i = 0; i < kids.length; i++) unlock(kids[i]);
+            } catch (e) {}
+          }
+          return released;
         }
         // COVERED TARGET: hide the fixed layer the click would land on instead of the target.
         function hideCoveringOverlay(el, document, window) {
-          try { el.scrollIntoView({ block: 'center', inline: 'nearest' }); } catch (e) {}
+          try { el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); } catch (e) {}
           var hidden = [];
+          var unlocked = false;
+          var api = null;
           for (var pass = 0; pass < 3; pass++) {
             var r = el.getBoundingClientRect();
             var top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -398,51 +629,75 @@ extension AgentBrowserBridge {
             }
             // An OVERLAY in the layout sense: some node between the hit and the root is
             // fixed/sticky, or the root is a shadow host planted at the body (consent widgets).
-            var layered = false;
+            var layered = false, layer = null;
             for (var n = top; n; n = n.parentElement) {
               var pos = ohPosition(n, window);
-              if (pos === 'fixed' || pos === 'sticky') { layered = true; break; }
+              if (pos === 'fixed' || pos === 'sticky') { layered = true; layer = n; break; }
               if (n === root) break;
             }
             if (!layered && root.shadowRoot && root.parentElement === document.body) layered = true;
             if (!layered) break;
-            var t = ohText(root);
-            var rr = root.getBoundingClientRect();
-            var vw = Math.max(1, window.innerWidth || 1), vh = Math.max(1, window.innerHeight || 1);
-            var coverage = (Math.max(0, rr.width) * Math.max(0, rr.height)) / (vw * vh);
-            var consent = ohIsConsent(t);
-            var blanket = coverage >= 0.6 && !ohHasFormFields(root);
-            if (!consent && !blanket) break;
-            try { ohHide(root, document); } catch (e) { break; }
-            hidden.push(ohDescribe(root, t));
+            // THE ROOT FIRST, THEN THE LAYER ITSELF. The root (the covering subtree's top, a body
+            // child) is what a consent widget is best hidden by: banner, backdrop and preference
+            // centre go together. But a root can be a static wrapper with a ZERO-HEIGHT box whose
+            // only visible child is a full-viewport fixed backdrop: MEASURED on zara.com/ge from a
+            // Dutch exit (run jacket-bag-luna-ge47), `#onetrust-consent-sdk` had coverage 0, no
+            // visible text, form fields and a landmark inside its hidden preference centre, and
+            // its `div.onetrust-pc-dark-filter` (fixed, 100% of the viewport) swallowed ten clicks
+            // on the store-choice dialog. Each candidate is judged in turn: a known CMP container
+            // goes whatever it holds; otherwise a layer holding text fields is NEVER hidden, whatever
+            // its text (a login, a drawer, a checkout); otherwise it is a consent prompt by the same
+            // container test as the click-target path, or a blanket -- most of the viewport, no
+            // form fields -- and either goes.
+            var candidates = [root];
+            if (layer && layer !== root) candidates.push(layer);
+            var chosen = null, chosenText = '', signal = '';
+            for (var c = 0; c < candidates.length && !chosen; c++) {
+              var cand = candidates[c];
+              var cmp = ohKnownCmp(cand, document);
+              if (cmp && !cmp.node.contains(el) && !ohHoldsMain(cmp.node)) { chosen = cmp.node; signal = 'cmp:' + cmp.name; break; }
+              if (ohHasLandmark(cand) || ohHasFormFields(cand)) continue;
+              if (ohStructural(cand, el, document, window)) {
+                if (api === null) api = ohCmpApi(window);
+                if (CONSENT_WORDS.test(ohName(cand, document))) { chosen = cand; signal = 'heuristic'; break; }
+                if (api.visible === true) { chosen = cand; signal = api.api; break; }
+              }
+              if (ohCoverage(cand, window) >= 0.6) { chosen = cand; signal = 'blanket'; break; }
+            }
+            if (!chosen) break;
+            chosenText = ohText(chosen);
+            var released = false;
+            try { released = ohHide(chosen, document, el); } catch (e) { break; }
+            hidden.push(ohDescribe(chosen, chosenText) + (signal === 'blanket' ? ' [blanket]' : ' [consent=' + signal + ']'));
+            if (released) unlocked = true;
           }
           if (!hidden.length) return '';
-          return ' Hid a covering overlay ' + hidden.join(' and ') + ' without answering it, so this click could reach its target. Nothing was accepted or rejected; the layer may reappear on the next page.';
+          return ' Hid a covering overlay ' + hidden.join(' and ') + ' without answering it, so this click could reach its target. Nothing was accepted or rejected; the layer may reappear on the next page.'
+            + (unlocked ? ' The page underneath had been locked (inert) by that layer and is interactive again.' : '');
         }
-        // CONSENT CONTROL AS THE TARGET (policy: no new cookies). When the model aims at Accept,
-        // Reject or Manage inside a consent prompt, the prompt is hidden and nothing is clicked.
-        // The layer root is the HIGHEST ancestor that is itself fixed/sticky, or a direct child of
-        // the body whose text is short -- a consent widget's root is a few hundred characters,
-        // an app's root div is the whole page, and hiding the latter would take the site down.
+        // CONSENT CONTROL AS THE TARGET (policy: no new cookies). When the model aims at any control
+        // inside a consent prompt -- Accept, Reject, Manage, Close, a toggle, a "learn more" link --
+        // the prompt is hidden and nothing is clicked. CLOSE COUNTS AS AN ANSWER: measured 2026-09-21
+        // on zara.com, the OneTrust banner's only button read "Close" and clicking it wrote every
+        // consent category plus _ga, _fbp, _gcl_au, FPID.
         function hideConsentLayerContaining(el, document, window) {
           var tag = String(el.tagName || '').toLowerCase();
           var role = (el.getAttribute && el.getAttribute('role')) || '';
-          var isControl = tag === 'button' || tag === 'a' || tag === 'input' || role === 'button' || role === 'link';
+          var isControl = tag === 'button' || tag === 'a' || tag === 'input'
+            || role === 'button' || role === 'link' || role === 'switch' || role === 'checkbox';
           if (!isControl) return '';
-          var layered = false, root = null;
-          for (var n = el.parentElement; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
-            var pos = ohPosition(n, window);
-            if (pos === 'fixed' || pos === 'sticky') { layered = true; root = n; continue; }
-            if (n.shadowRoot && n.parentElement === document.body) { layered = true; root = n; continue; }
-            if (layered && (n.parentElement === document.body || n.parentElement === document.documentElement)
-                && ohText(n).length <= 2000) { root = n; }
-          }
-          if (!layered || !root) return '';
-          var t = ohText(root);
-          if (!ohIsConsent(t)) return '';
+          var api = ohCmpApi(window);
+          var hit = ohDetectConsent(el, document, window, api);
+          if (!hit) return '';
           var label = ohText(el);
-          try { ohHide(root, document); } catch (e) { return ''; }
-          return 'NOT CLICKED. "' + (label.length > 40 ? label.slice(0, 40) : label) + '" is a control of a cookie/consent prompt, and this agent answers none of them (policy: no new cookies). The prompt ' + ohDescribe(root, t) + ' was hidden instead; nothing was accepted or rejected. The page beneath is usable -- continue with the task.';
+          if (!label && el.getAttribute) {
+            label = el.getAttribute('aria-label') || el.getAttribute('value') || el.getAttribute('title') || '';
+          }
+          var root = hit.node;
+          var t = ohText(root);
+          try { ohHide(root, document, el); } catch (e) { return ''; }
+          var what = CONSENT_ACTION.test(label) ? 'is a control of a cookie/consent prompt' : 'is a control inside a cookie/consent prompt';
+          return 'NOT CLICKED. "' + (label.length > 40 ? label.slice(0, 40) : label) + '" ' + what + ', and this agent answers none of them (policy: no new cookies). The prompt ' + ohDescribe(root, t) + ' was hidden instead [consent=' + hit.signal + ']; nothing was accepted or rejected. The page beneath is usable -- continue with the task.';
         }
         // END overlay-hider js
         """
