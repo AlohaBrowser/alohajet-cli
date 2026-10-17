@@ -18,7 +18,10 @@ import Darwin
 // concurrency. `-p` is strictly serial — four requests, in order — which is all this
 // has to serve.
 nonisolated final class AgentStubServer: @unchecked Sendable {
-    struct Request { let method: String, path: String, body: String, authorization: String?, contentType: String? }
+    struct Request {
+        let method: String, path: String, body: String, authorization: String?, contentType: String?
+        let accept: String?, mcpSession: String?, mcpProtocol: String?
+    }
 
     /// The conversation this host is already on — what `/agent/lane` reports and what
     /// `--continue` therefore pins under protocol 2.
@@ -28,6 +31,7 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     static let termsId = "44444444-4444-4444-8444-444444444444"
     static let termsUrl = "https://example.com/terms"
     static let privacyUrl = "https://example.com/privacy"
+    static let mcpSession = "fixture-mcp-session"
 
     private var listenFD: Int32 = -1
     private let lock = NSLock()
@@ -44,6 +48,9 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     /// Seconds to sit on a request before answering it — a browser taking its time over
     /// one tool call, which must not be mistaken for a browser that has gone away.
     let hold: TimeInterval
+    private let requestedPort: UInt16
+    /// Opt into an authenticated MCP fixture; the existing agent routes stay unchanged.
+    private let mcpToken: String?
     private(set) var port: Int = 0
 
     var url: String { "http://127.0.0.1:\(port)" }
@@ -52,12 +59,15 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     var paths: [String] { requests.map(\.path) }
 
     init(protocolVersion: Int = 1, finalText: String = "Four.", ranOverride: String? = nil,
-         termsAnswerableInApp: Bool? = nil, hold: TimeInterval = 0) {
+         termsAnswerableInApp: Bool? = nil, hold: TimeInterval = 0,
+         port: UInt16 = 0, mcpToken: String? = nil) {
         self.protocolVersion = protocolVersion
         self.finalText = finalText
         self.ranOverride = ranOverride
         self.termsAnswerableInApp = termsAnswerableInApp
         self.hold = hold
+        self.requestedPort = port
+        self.mcpToken = mcpToken
     }
 
     func start() throws {
@@ -67,7 +77,7 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
         setsockopt(listenFD, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = 0                      // the kernel picks a free port
+        address.sin_port = requestedPort.bigEndian // 0 lets the kernel pick a free port
         address.sin_addr.s_addr = INADDR_LOOPBACK_BE
         #if canImport(Darwin)
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -103,7 +113,8 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
                 lock.withLock { recorded.append(request) }
                 if hold > 0 { Thread.sleep(forTimeInterval: hold) }
                 let (status, json) = answer(request)
-                write(client, status: status, json: json)
+                write(client, status: status, json: json,
+                      mcp: request.path == "/mcp" && mcpToken != nil)
             }
             close(client)
         }
@@ -140,7 +151,10 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
                        path: URLComponents(string: start[1])?.path ?? start[1],
                        body: body,
                        authorization: header("Authorization"),
-                       contentType: header("Content-Type"))
+                       contentType: header("Content-Type"),
+                       accept: header("Accept"),
+                       mcpSession: header("Mcp-Session-Id"),
+                       mcpProtocol: header("Mcp-Protocol-Version"))
     }
 
     private func answer(_ request: Request) -> (status: Int, json: String) {
@@ -165,6 +179,25 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
         case ("/agent/task", 1):
             return (200, #"{"ok":true,"taskId":"T-1"}"#)
         case ("/mcp", _):
+            if let mcpToken {
+                guard request.authorization == "Bearer \(mcpToken)" else {
+                    return (401, #"{"error":"Authentication required"}"#)
+                }
+                let frame = (try? JSONSerialization.jsonObject(with: Data(request.body.utf8))) as? [String: Any]
+                let method = frame?["method"] as? String
+                if method == "notifications/initialized" { return (202, "") }
+                let id = frame?["id"] as? Int ?? -1
+                switch method {
+                case "initialize":
+                    return (200, #"{"jsonrpc":"2.0","id":\#(id),"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"relay-fixture","version":"1"}}}"#)
+                case "tools/list":
+                    return (200, #"{"jsonrpc":"2.0","id":\#(id),"result":{"tools":[{"name":"fixture_tabs","description":"Synthetic tab list","inputSchema":{"type":"object"}}]}}"#)
+                case "tools/call":
+                    return (200, #"{"jsonrpc":"2.0","id":\#(id),"result":{"content":[{"type":"text","text":"fixture tab list"}],"isError":false}}"#)
+                default:
+                    return (400, #"{"error":"unexpected fixture method"}"#)
+                }
+            }
             return (200, #"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#)
         case ("/agent/terms", _):
             return (200, #"{"ok":true}"#)
@@ -184,9 +217,20 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
         }
     }
 
-    private func write(_ client: Int32, status: Int, json: String) {
-        let body = Data(json.utf8)
-        var head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Not Found")\r\nContent-Type: application/json\r\n"
+    private func write(_ client: Int32, status: Int, json: String, mcp: Bool = false) {
+        #if os(Linux)
+        // The pinned SDK forwards SSE bodies verbatim on Linux. Exercise its JSON
+        // response path here; macOS still covers the native server's SSE framing.
+        let sse = false
+        #else
+        let sse = mcp && status == 200
+        #endif
+        let body = Data((sse ? "event: message\ndata: \(json)\n\n" : json).utf8)
+        var head = "HTTP/1.1 \(status) Response\r\n"
+        if status != 202 {
+            head += "Content-Type: \(sse ? "text/event-stream" : "application/json")\r\n"
+        }
+        if mcp && status == 200 { head += "Mcp-Session-Id: \(Self.mcpSession)\r\n" }
         head += "Content-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         let response = Data(head.utf8) + body
         response.withUnsafeBytes { buffer in

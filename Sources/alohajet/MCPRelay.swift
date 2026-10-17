@@ -8,7 +8,7 @@ import AgentDriver
 import MCP
 import ToolABI
 
-// MARK: - `alohajet mcp --endpoint <url>` — stdio ⇄ Streamable-HTTP relay
+// MARK: - `alohajet mcp --endpoint <url>` / legacy `mcp-stdio` — HTTP relay
 //
 // ON THIS LANE THE MCP SERVER IS THE BROWSER'S, NOT THIS PROCESS'S. A running Aloha
 // browser mounts its own MCP server at `POST /mcp` on the loopback automation port
@@ -23,7 +23,8 @@ import ToolABI
 // `headers` is dropped with a "not valid MCP server configurations" dialog. (An .mcpb
 // bundle would not help: a bundle wraps a stdio server too.) So a stdio front end is the
 // only shape that client can be handed, and one flag apart from the server lane is
-// cheaper than a second verb nobody can remember which half of.
+// cheaper than a second verb nobody can remember which half of. `mcp-stdio` remains
+// a compatibility entry for configs saved by older desktop versions.
 //
 // Both halves are the official SDK's own transports, deliberately — this file is the
 // only reason the package has a dependency at all. The app's `StatefulHTTPServerTransport`
@@ -32,8 +33,8 @@ import ToolABI
 // header. `HTTPClientTransport` does all four already; hand-rolling them is the one way
 // to get this wrong.
 //
-// The user pastes NO secret: the port comes from `--endpoint` and the bearer token is
-// read per run by `AutomationToken` — the same reader `-p` uses, and the only one.
+// The user pastes NO secret: the port comes from `--endpoint` (or the legacy default)
+// and the bearer token is read per run by `AutomationToken`, the same reader `-p` uses.
 
 enum MCPRelay {
 
@@ -141,7 +142,14 @@ enum MCPRelay {
     /// every frame on this pipe drives the user's browser, and the header authorizing it
     /// grants the whole automation API.
     private static func resolveEndpoint(_ args: Args) -> Result<URL, CLIError> {
-        guard let raw = args.value("--endpoint") else {
+        let raw: String
+        if args.positional.first == "mcp-stdio", !args.has("--endpoint") {
+            // Only the saved compatibility command has an implicit relay endpoint.
+            // An explicit but empty flag must still fail validation below.
+            raw = AlohaAppLauncher.defaultEndpoint
+        } else if let explicit = args.value("--endpoint") {
+            raw = explicit
+        } else {
             return .failure(CLIError(message: """
                 mcp --endpoint needs a URL, e.g. --endpoint http://127.0.0.1:8765.
                   With it, `alohajet mcp` relays stdio to the MCP server the Aloha browser

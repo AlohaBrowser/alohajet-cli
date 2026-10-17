@@ -171,6 +171,15 @@ let commandHelp: [String: String] = [
           as Claude Desktop. <url> is http to this machine, or https to
           anywhere — a port forward, a second machine. A non-loopback endpoint
           is sent no token unless ALOHAJET_AGENT_TOKEN names one.
+        """,
+    "mcp-stdio": """
+        alohajet mcp-stdio [--endpoint <url>]
+          Compatibility command for saved desktop MCP entries. Relay stdio to the
+          running Aloha browser's MCP server; no tools are served by this process.
+          Default endpoint: http://127.0.0.1:8765. An explicit --endpoint follows
+          the same validation and token rules as mcp --endpoint <url>.
+          Keep Aloha running; this command launches no app or Chromium.
+          Use mcp --endpoint <url> for new configurations.
         """
 ]
 
@@ -209,6 +218,7 @@ COMMANDS
   quit                    close the shared browser
   mcp                     serve these tools over MCP on stdio
   mcp --endpoint <url>    relay MCP on stdio to the Aloha browser's server
+  mcp-stdio               compatibility relay for saved desktop MCP entries
 
 BROWSER OPTIONS (default: one shared Chromium, kept until `alohajet quit`)
   --launch                a throwaway Chromium for this command only
@@ -220,7 +230,7 @@ BROWSER OPTIONS (default: one shared Chromium, kept until `alohajet quit`)
   --json                  print the raw tool result as JSON
 
 ENVIRONMENT
-  ALOHAJET_AGENT_TOKEN    token for -p and mcp --endpoint (default: the app's
+  ALOHAJET_AGENT_TOKEN    token for -p and MCP relays (default: the app's
                           token file, sent to loopback endpoints only)
   ALOHAJET_BROWSER        Chromium to launch (default: Chrome, else a download)
   ALOHA_BROWSER_APP       the Aloha .app to launch
@@ -733,6 +743,12 @@ func main() async -> Int32 {
         return exitOK
     }
     let json = args.has("--json")
+
+    // Older desktop configs saved this verb. It is always the HTTP relay, including
+    // without --endpoint: never enter ordinary Chromium connection or our MCP server.
+    if command == "mcp-stdio" {
+        return await MCPRelay.main(args)
+    }
 
     // The MCP stdio server takes over here, before anything can reach stdout and before
     // `connect`: it builds its browser on the first `tools/call`, so a host that only
