@@ -46,6 +46,34 @@ struct ReceiptPolishTests {
             alsoValues: ["A Light in the Attic"])?.selector == "body>main>ul>li>a")
     }
 
+    /// An anchor that spells the value cannot win the selector back: exception 1 (a semantic
+    /// anchor over a position path) does not apply to a read of that value, and the list a
+    /// value-bearing selector gave way to stands without it. Live (W6 probe): "Charles Babbage"
+    /// came back as `[selector=a[href="/wiki/Charles_Babbage"]] [path=body>main>p>a]`.
+    @Test func aValueBearingAnchorDoesNotReclaimTheSelector() {
+        var id = ElementIdentity(index: 1, attributes: [])
+        id.list = .init(selector: "body>main>p>a", index: 1, count: 2)
+        id.anchor = .init(selector: #"a[href="/wiki/Charles_Babbage"]"#, nth: nil, count: 1)
+        let free = GetTextExecutorTool.answerFreeReadAddress(
+            selector: #"a[href="/wiki/Charles_Babbage"]"#, text: "Charles Babbage", identity: id)
+        #expect(free?.selector == "body>main>p>a")
+        #expect(free?.identity?.anchor == nil)
+        let note = PageToolReceipt.selectorNote(
+            selector: free!.selector, matches: free!.matches, text: "Charles Babbage", identity: free!.identity, tool: "answer")
+        #expect(note.hasPrefix(" [selector=body>main>p>a] [tool=answer] [matches=2] [index=1/2]"), "\(note)")
+        #expect(!note.contains("Charles_Babbage"), "\(note)")
+        // A position path with a value-bearing anchor: a read keeps the path; a click may promote it.
+        var onlyAnchor = ElementIdentity(index: 1, attributes: [])
+        onlyAnchor.anchor = id.anchor
+        let read = PageToolReceipt.selectorNote(
+            selector: "body>main>p>a", matches: 1, text: "Charles Babbage", identity: onlyAnchor, tool: "get_text")
+        #expect(read.hasPrefix(" [selector=body>main>p>a]"), "\(read)")
+        #expect(!read.contains("[anchor="), "a read's anchor that spells its value is not offered either: \(read)")
+        let click = PageToolReceipt.selectorNote(
+            selector: "body>main>p>a", matches: 1, text: "Charles Babbage", identity: onlyAnchor, tool: "page_click")
+        #expect(click.hasPrefix(#" [selector=a[href="/wiki/Charles_Babbage"]]"#), "\(click)")
+    }
+
     /// A state or promotion class never narrows a shared ladder selector (finding 9).
     @Test func aStateClassNeverNarrows() {
         for token in ["sale", "out-of-stock", "badge-new", "is-active", "selected", "isActive", "promo_banner"] {

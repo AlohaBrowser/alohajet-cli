@@ -69,7 +69,10 @@ import ToolABI
         if let list = identity?.list, !bears(list.selector) {
             var placed = ElementIdentity(index: list.index, attributes: identity?.attributes ?? [])
             placed.list = list
-            placed.anchor = identity?.anchor
+            // An anchor that spells the value too would come straight back as the selector
+            // (`selectorNote`'s exception 1 promotes a semantic anchor over a position path): the
+            // list stands alone then.
+            placed.anchor = identity?.anchor.flatMap { bears($0.selector) ? nil : $0 }
             return (list.selector, list.count, placed)
         }
         if let anchor = identity?.anchor, anchor.nth == nil, !bears(anchor.selector) {

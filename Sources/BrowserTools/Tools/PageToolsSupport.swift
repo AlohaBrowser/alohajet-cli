@@ -304,8 +304,14 @@ enum PageToolReceipt {
         var anchorIndex: Int? = nil
         // `anchor.nth` is the rule-3 LIST ordinal, which never qualifies; a rule-0 anchor that
         // several links share does, though it now carries `[anchor-nth=]` too (`replayNth`).
+        // Never for a READ whose anchor spells the value it read (exception 2: a read's selector
+        // never carries what it read): `a[href="/wiki/Charles_Babbage"]` for "Charles Babbage".
+        let readsItsOwnValue = { (anchorSelector: String) -> Bool in
+            guard tool == "get_text" || tool == "answer", let text else { return false }
+            return GetTextExecutorTool.selector(anchorSelector, bears: text)
+        }
         if ladder == "body" || ladder.hasPrefix("body>"), let anchor = identity?.anchor,
-           anchor.nth == nil, !anchor.selector.hasPrefix("body>") {
+           anchor.nth == nil, !anchor.selector.hasPrefix("body>"), !readsItsOwnValue(anchor.selector) {
             path = ladder
             selector = anchor.selector
             matches = anchor.count ?? 1
@@ -364,7 +370,9 @@ enum PageToolReceipt {
         // The address to replay with: one rule, checked on the live page (`ReceiptAnchorProbe`),
         // and its ordinal whenever the address matches more than this element -- a rule-3 list
         // ordinal, or a rule-0 link several links share (`Anchor.replayNth`).
-        if let anchor = identity?.anchor {
+        // Not for a READ whose anchor spells the value read: replaying it reads only that value
+        // (books.toscrape's `a[title="A Light in the Attic"]` for the link "A Light in the ...").
+        if let anchor = identity?.anchor, !readsItsOwnValue(anchor.selector) {
             note += " [anchor=\(anchor.selector)]"
             if let nth = anchor.replayNth { note += " [anchor-nth=\(nth)]" }
         }
