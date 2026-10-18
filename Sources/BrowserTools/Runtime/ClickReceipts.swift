@@ -31,7 +31,12 @@ extension AgentBrowserBridge {
     /// Runs only when the click landed and the URL did not move, so the happy path pays nothing.
     /// Returns nil when the page cannot answer or has nothing to add: a probe must never turn a
     /// working receipt into a broken one.
-    func clickObstructionNote(alohaId: String) async -> String? {
+    ///
+    /// `pageChanged`: the page around the control DID change (``clickEffects()`` saw text appear,
+    /// or the page's structure moved), so "That click did NOTHING observable" would be false and
+    /// is not said. The covering-element and refused-form findings are about the page as it is
+    /// now and are still reported.
+    func clickObstructionNote(alohaId: String, pageChanged: Bool = false) async -> String? {
         let escaped = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
         let script = """
         (function() {
@@ -109,7 +114,13 @@ extension AgentBrowserBridge {
               && (typeAttr === 'submit' || typeAttr === 'image'
                   || typeAttr === 'button' || typeAttr === 'reset');
             var buttonish = tag === 'button' || buttonInput || buttonRole;
-            if (buttonish && note === "") {
+            // NOT WHEN THE PAGE CHANGED. demoqa.com's Submit (W4 seed, 2026-10-18) writes its result
+            // into `#output` below the form: no navigation, nothing on the button changes, and this
+            // note told the agent -- and the trajectory the mint reads -- that the click had done
+            // nothing while the same result's page showed "Name:Jane Doe". The caller watches the
+            // page across the click (`clickEffects`) and the page's structure (`pageFingerprint`).
+            var pageChanged = \(pageChanged ? "true" : "false");
+            if (buttonish && note === "" && !pageChanged) {
               // WHAT THE PROBE COULD SEE, so the next run answers this rather than another guess:
               // whether a form was found at all, and whether the browser considers it valid. The
               // first cut assumed both and was silently inert for a whole run.
@@ -134,6 +145,30 @@ extension AgentBrowserBridge {
         guard let value = try? await backend.evaluateViaCdp(script),
               let text = value.stringValue, !text.isEmpty else { return nil }
         return text
+    }
+
+    /// WATCHES THE PAGE AROUND A CONTROL ACROSS A CLICK, for ``clickEffects()``. Installs one
+    /// `MutationObserver` on the document (replacing any earlier watch), which disconnects itself
+    /// after 30 s if nobody reads it. True when the watch is running.
+    ///
+    /// Why: a click that shows its result ELSEWHERE on the page -- a form whose Submit writes the
+    /// submission below it (demoqa.com/text-box), a counter, an inline "Saved" -- changes neither
+    /// the URL nor the control, and the receipt called it a no-op ("That click did NOTHING
+    /// observable"). The structural fingerprint catches added elements but not text written into
+    /// an element that was already there.
+    func watchClickEffects(alohaId: String) async -> Bool {
+        let script = ClickEffectProbe.watchExpression(alohaId: alohaId)
+        guard let value = try? await backend.evaluateViaCdp(script) else { return false }
+        return value.stringValue == "y"
+    }
+
+    /// What the page showed after the click that it did not show before, outside the clicked
+    /// control, and stops the watch (see ``watchClickEffects(alohaId:)``). nil when no watch ran or
+    /// the page cannot answer (a navigation replaced the document: nothing to say here).
+    func clickEffects() async -> ClickEffect? {
+        guard let value = try? await backend.evaluateViaCdp(ClickEffectProbe.readExpression),
+              let json = value.stringValue, !json.isEmpty else { return nil }
+        return ClickEffectProbe.parse(json)
     }
 
     /// WHAT THE CONTROL SAYS ABOUT ITSELF, read either side of a click.
@@ -707,4 +742,150 @@ extension AgentBrowserBridge {
         }
         // END overlay-hider js
         """
+}
+
+// MARK: - What a click changed on the page around the control
+
+/// What the page showed after a click that it did not show before, outside the control clicked
+/// (``AgentBrowserBridge/clickEffects()``).
+struct ClickEffect: Equatable, Sendable {
+    /// Something visible on the page changed: text appeared or changed, an element carrying text was
+    /// shown, styled or removed. Enough to say the click was not a no-op; not proof that it worked.
+    let changed: Bool
+    /// The text that APPEARED or was rewritten (added nodes, rewritten text), visible now, at most
+    /// ``ClickEffectProbe/maxQuoted`` characters; nil when only styling or removals changed. Quoted
+    /// to the agent: it is what the page said back.
+    let appeared: String?
+
+    /// The sentence the click receipt carries when text appeared and nothing else explained the
+    /// click; nil when nothing appeared.
+    var note: String? {
+        guard let appeared, !appeared.isEmpty else { return nil }
+        return " The click changed this page without navigating: new text is showing -- \"\(appeared)\"."
+    }
+}
+
+/// The two page round trips behind ``AgentBrowserBridge/watchClickEffects(alohaId:)`` and
+/// ``AgentBrowserBridge/clickEffects()``. Templates so a harness can run the shipped bytes against a
+/// fake document (`Tests/BrowserToolsTests/click_effect.js`).
+///
+/// WHAT COUNTS, outside the clicked control (its own changes are ``ControlStateChange``'s):
+/// - an added node that is visible now and carries text -- `#output` filled in after Submit --
+///   quoted; an added visible element without text (an image, an icon) -- changed, not quoted;
+/// - a text node whose text changed and that is visible now -- "not clicked" -> "CLICKED-OK";
+/// - a `class` / `style` / `hidden` / `open` / `aria-hidden` change on an element that is visible
+///   and carries text now, unless it is an ANCESTOR of the control (a form gaining a "submitting"
+///   class, a wrapper's hover state): changed, but not quoted, since a carousel restyles itself too;
+/// - a removed element that carried text: changed, not quoted.
+/// Scripts, styles and this package's own overlays (`ai-…` cursor marker, `alohajet-…` highlight
+/// layer) never count. That is also why the click receipt asks this watch, not the structural
+/// fingerprint, whether the page changed: the fingerprint counts elements, and the cursor marker
+/// the click itself draws (and fades out) moves that count.
+enum ClickEffectProbe {
+    /// The quoted text, at most this long.
+    static let maxQuoted = 160
+    /// The watch keeps at most this many mutation records.
+    static let maxRecords = 400
+
+    static func watchExpression(alohaId: String) -> String {
+        let idLiteral = JSValue.string(alohaId).stringify()
+        return #"""
+        (function (id) { /* receipt: click effect watch */
+          try {
+            var prev = window.__alohaClickWatch;
+            if (prev && prev.obs) { try { prev.obs.disconnect(); } catch (e) {} try { clearTimeout(prev.timer); } catch (e) {} }
+            window.__alohaClickWatch = null;
+            if (typeof MutationObserver !== 'function' || !document.documentElement) return 'n';
+            var el = null, tagged = document.querySelectorAll('[aloha-id]');
+            for (var k = 0; k < tagged.length; k++) if (tagged[k].getAttribute('aloha-id') === id) { el = tagged[k]; break; }
+            var w = { el: el, recs: [], obs: null, timer: null };
+            w.obs = new MutationObserver(function (list) {
+              for (var i = 0; i < list.length && w.recs.length < \#(maxRecords); i++) w.recs.push(list[i]);
+            });
+            w.obs.observe(document.documentElement, { childList: true, subtree: true, characterData: true,
+              characterDataOldValue: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-hidden'] });
+            w.timer = setTimeout(function () { try { w.obs.disconnect(); } catch (e) {} }, 30000);
+            window.__alohaClickWatch = w;
+            return 'y';
+          } catch (e) { return ''; }
+        })(\#(idLiteral))
+        """#
+    }
+
+    static let readExpression = #"""
+    (function () { /* receipt: click effect */
+      try {
+        var w = window.__alohaClickWatch;
+        if (!w || !w.obs) return '';
+        window.__alohaClickWatch = null;
+        var recs = w.recs;
+        try { recs = recs.concat(w.obs.takeRecords ? w.obs.takeRecords() : []); } catch (e) {}
+        try { w.obs.disconnect(); } catch (e) {}
+        try { clearTimeout(w.timer); } catch (e) {}
+        var el = w.el;
+        var elementOf = function (n) { return n && n.nodeType === 1 ? n : (n ? n.parentElement : null); };
+        var inside = function (n, root) { for (var x = elementOf(n); x; x = x.parentElement) if (x === root) return true; return false; };
+        var inControl = function (n) { return !!el && inside(n, el); };
+        var ours = function (n) {
+          for (var x = elementOf(n); x; x = x.parentElement) {
+            var xid = String(x.id || '');
+            if (xid.indexOf('ai-') === 0 || xid.indexOf('alohajet-') === 0) return true;
+          }
+          return false;
+        };
+        var skipTag = function (n) { var e = elementOf(n); return !!e && /^(SCRIPT|STYLE|LINK|META|NOSCRIPT|TEMPLATE)$/.test(String(e.tagName || '')); };
+        var clean = function (t) { return String(t || '').replace(/\s+/g, ' ').trim(); };
+        var shown = function (e) {
+          if (!e || !e.isConnected) return false;
+          var r = e.getBoundingClientRect ? e.getBoundingClientRect() : null;
+          return !!r && r.width > 0 && r.height > 0;
+        };
+        var shownText = function (n) {
+          var e = elementOf(n);
+          if (!shown(e)) return '';
+          return clean(n.nodeType === 3 ? n.textContent : (e.innerText || e.textContent));
+        };
+        var changed = false, quoted = [];
+        var quote = function (t) {
+          if (!t) return;
+          for (var q = 0; q < quoted.length; q++) if (quoted[q].indexOf(t) !== -1) return;
+          quoted = quoted.filter(function (old) { return t.indexOf(old) === -1; });
+          quoted.push(t.length > 80 ? t.slice(0, 80) : t);
+        };
+        for (var i = 0; i < recs.length; i++) {
+          var r = recs[i];
+          if (!r || inControl(r.target) || ours(r.target) || skipTag(r.target)) continue;
+          if (r.type === 'childList') {
+            for (var a = 0; a < r.addedNodes.length; a++) {
+              var add = r.addedNodes[a];
+              if (inControl(add) || ours(add) || skipTag(add)) continue;
+              var t = shownText(add);
+              if (t) { changed = true; quote(t); }
+              else if (add.nodeType === 1 && shown(add)) changed = true;
+            }
+            for (var d = 0; d < r.removedNodes.length; d++) {
+              var gone = r.removedNodes[d];
+              if (gone && gone.nodeType === 1 && !skipTag(gone) && clean(gone.textContent) && String(gone.id || '').indexOf('ai-') !== 0) changed = true;
+            }
+          } else if (r.type === 'characterData') {
+            var now = shownText(r.target);
+            if (now && clean(r.oldValue) !== clean(r.target.textContent)) { changed = true; quote(now); }
+          } else if (r.type === 'attributes') {
+            var tgt = r.target;
+            if (el && tgt && tgt.nodeType === 1 && tgt !== el && inside(el, tgt)) continue;
+            if (shownText(tgt)) changed = true;
+          }
+        }
+        var text = quoted.join(' | ');
+        if (text.length > \#(maxQuoted)) text = text.slice(0, \#(maxQuoted) - 1) + '…';
+        return JSON.stringify({ changed: changed, text: text });
+      } catch (e) { return ''; }
+    })()
+    """#
+
+    static func parse(_ json: String) -> ClickEffect? {
+        guard let value = JSValue.parse(json), case .object = value, let changed = value.bool("changed") else { return nil }
+        let text = (value.string("text") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return ClickEffect(changed: changed || !text.isEmpty, appeared: text.isEmpty ? nil : text)
+    }
 }
