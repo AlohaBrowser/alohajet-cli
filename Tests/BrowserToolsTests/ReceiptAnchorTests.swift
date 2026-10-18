@@ -40,6 +40,14 @@ struct ReceiptAnchorTests {
         identity.anchor = .init(selector: "body>ul>li>a", nth: 2)
         let ordinal = PageToolReceipt.selectorNote(selector: "body>ul>li:nth-of-type(2)>a", matches: 1, identity: identity)
         #expect(ordinal.hasSuffix(" [anchor=body>ul>li>a] [anchor-nth=2]"))
+        // A link anchor that several links match says which one, like an ordinal; one that
+        // matches only this element needs no `nth`.
+        identity.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 2, index: 2)
+        let several = PageToolReceipt.selectorNote(selector: "a.Link--muted", matches: 1, identity: identity)
+        #expect(several.hasSuffix(" [anchor=a:rel-href(\"releases\")] [anchor-nth=2]"))
+        identity.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 1, index: 1)
+        let single = PageToolReceipt.selectorNote(selector: "a.Link--muted", matches: 1, identity: identity)
+        #expect(single.hasSuffix(" [anchor=a:rel-href(\"releases\")]"))
     }
 
     /// A read's probe is told it is a read (it then never anchors on the text it reads); an
@@ -60,6 +68,10 @@ struct ReceiptAnchorTests {
                 == .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 3))
         #expect(ReceiptAnchorProbe.parse(#"{"s":"body>ul>li>a","nth":2,"n":1}"#) == .init(selector: "body>ul>li>a", nth: 2, count: 1))
         #expect(ReceiptAnchorProbe.parse(#"{"s":"a","n":0}"#)?.count == nil)
+        // ...and which of them the element is.
+        #expect(ReceiptAnchorProbe.parse(#"{"s":"a:rel-href(\"releases\")","n":2,"i":2}"#)
+                == .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 2, index: 2))
+        #expect(ReceiptAnchorProbe.parse(#"{"s":"a","n":2,"i":0}"#)?.index == nil)
         #expect(ReceiptAnchorProbe.parse(#"{"s":"a:sub-path(\"/releases\")"}"#) == .init(selector: "a:sub-path(\"/releases\")", nth: nil))
     }
 

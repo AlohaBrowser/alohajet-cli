@@ -16,8 +16,10 @@ extension AgentBrowserBridge {
     /// many-match selector needs the words that were actually on the element, not the words of
     /// the task: the card clicked on jacket-bag-luna-ge33 read "BELTED FAUX SUEDE JACKET", the
     /// minted anchor said 'FAUX SUEDE BELTED JACKET', and the replay matched nothing. Sixty
-    /// characters of collapsed text, or the aria-label / value / placeholder when there is no text;
-    /// nil when the element cannot be read.
+    /// characters of collapsed text, or the aria-label / value / placeholder when there is no text,
+    /// then its title, then the alt of an image inside it (GitHub's README Releases badge is an
+    /// image link: no text, no aria-label, and its receipt carried no `[text=]`); nil when the
+    /// element cannot be read.
     func elementText(alohaId: String) async -> String? {
         let escaped = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
         let script = """
@@ -26,7 +28,9 @@ extension AgentBrowserBridge {
             var el = document.querySelector('[aloha-id="\(escaped)"]');
             if (!el) return "";
             var t = (el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim();
-            if (!t) t = el.getAttribute("aria-label") || el.getAttribute("value") || el.getAttribute("placeholder") || "";
+            if (!t) t = el.getAttribute("aria-label") || el.getAttribute("value") || el.getAttribute("placeholder") || el.getAttribute("title") || "";
+            if (!t) { var img = el.querySelector && el.querySelector("img[alt]"); t = img ? img.getAttribute("alt") || "" : ""; }
+            t = String(t).replace(/\\s+/g, " ").trim();
             return String(t).slice(0, 60);
           } catch (e) { return ""; }
         })()

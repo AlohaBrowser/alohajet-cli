@@ -113,11 +113,19 @@ struct PageToolReceiptIdentityTests {
         #expect(!note.contains("[index="))       // the index was among the PATH's matches
         #expect(note.hasSuffix(" [anchor=button[aria-label=\"Search or jump to, type / to search\"]]"))
 
-        // A rule-0 link anchor reports how many links lead to the same place; the unverified
-        // path's missing index is not `[index=none]` either, the anchor WAS verified.
+        // A rule-0 link anchor reports how many links lead to the same place, and WHICH of them
+        // was pressed: `[index=]` counts the anchor's matches (GitHub's Releases, 2026-10-08). The
+        // unverified path's missing index is not `[index=none]` either, the anchor WAS verified.
         var rel = ElementIdentity(index: nil, attributes: [])
-        rel.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 3)
-        #expect(PageToolReceipt.selectorNote(selector: path, matches: 0, identity: rel).hasPrefix(" [selector=a:rel-href(\"releases\")] [path=\(path)] [matches=3] [anchor="))
+        rel.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 3, index: 2)
+        let relNote = PageToolReceipt.selectorNote(selector: path, matches: 0, identity: rel)
+        #expect(relNote.hasPrefix(" [selector=a:rel-href(\"releases\")] [path=\(path)] [matches=3] [index=2/3] [anchor="))
+        #expect(relNote.hasSuffix(" [anchor=a:rel-href(\"releases\")] [anchor-nth=2]"))
+        // The path's own index is never carried over to the anchor's matches, and an anchor whose
+        // place the probe did not report writes neither `i/n` nor `none`.
+        var unsaid = ElementIdentity(index: 1, attributes: [])
+        unsaid.anchor = .init(selector: "a:rel-href(\"releases\")", nth: nil, count: 3)
+        #expect(!PageToolReceipt.selectorNote(selector: path, matches: 0, identity: unsaid).contains("[index="))
 
         // No swap: an anchor that is itself an ordinal or a path, or a ladder selector that is not
         // a position path.

@@ -44,23 +44,26 @@ Writer: `PageToolReceipt.selectorNote` (`Sources/BrowserTools/Tools/PageToolsSup
 | `[source=]` | where a non-tool line came from: `main-heading` (the heading line a page read carries) | 2026-09-30 | — |
 | `[path=]` | the ladder's position path, present **only** when exception 1 moved it out of `[selector=]` | 2026-10-01 | — |
 | `[matches=]` | how many elements `[selector=]` matches on the page now | 2026-09-21 | 2026-10-01 (it follows `[selector=]`) |
-| `[index=]` | `i/n`: which of the `n` matches this element is, 1-based, document order. Only when `n > 1`. **`none`**: `[selector=]` matched `n` elements (`[matches=]`, possibly 0) and this element was not among them, and no live path could be rebuilt -- the address is UNVERIFIED; replay by `[list=]`, `[path=]` or `[anchor=]` instead, never by this selector | 2026-09-21 | 2026-10-04 (`none`) |
-| `[text=]` | the element's own rendered text, quoted, whitespace collapsed | 2026-09-21 | — |
+| `[index=]` | `i/n`: which of the `n` matches this element is, 1-based, document order. Only when `n > 1`. **`none`**: `[selector=]` matched `n` elements (`[matches=]`, possibly 0) and this element was not among them, and no live path could be rebuilt -- the address is UNVERIFIED; replay by `[list=]`, `[path=]` or `[anchor=]` instead, never by this selector. Under exception 1 it counts the anchor's matches, and is never `none` | 2026-09-21 | 2026-10-18 (exception 1) |
+| `[text=]` | the element's own rendered text, quoted, whitespace collapsed; with no text, its aria-label / value / placeholder / title, else the alt of an image inside it. On every action receipt, batched `page_type` fields included | 2026-09-21 | 2026-10-18 (title, image alt, batched fields) |
 | `[attrs=]` | the element's real attributes as `name="value"` pairs (aria-label, href, role, name, data-*…) | 2026-09-21 | — |
 | `[list=]` | `<list selector> i/n`: the repeating list the element sits in, and its place there. Only when the list has 2+ members | 2026-09-23 | — |
 | `[anchor=]` | the address chosen by the anchor rule (below) and checked on the live page with the resolver | 2026-09-23 | 2026-10-01 (rule 0 is `:rel-href`) |
-| `[anchor-nth=]` | `n`: the anchor is an ordinal, so replay it with `nth=n` (`:nth-match(n)`) | 2026-09-23 | — |
+| `[anchor-nth=]` | `n`: which of the anchor's matches the element is, so replay it with `nth=n` (`:nth-match(n)`). Written whenever `[anchor=]` matches 2+ elements: a list ordinal (rule 3), or a rule-0 link that several links match | 2026-09-23 | 2026-10-18 (also rule 0) |
 | `[submitted=enter]` | the type or press-keys call pressed Enter | 2026-09-22 | — |
 
 **Exception 1 (2026-10-01): a semantic anchor beats a position path.** When the ladder fell to a
-position path (`body` or `body>…`) and the anchor is not positional and has no
-`[anchor-nth=]`:
+position path (`body` or `body>…`) and the anchor is not positional and not a list ordinal
+(rule 3):
 - `[selector=]` is the anchor;
 - `[path=]` holds the position path;
 - `[matches=]` is the anchor's match count;
-- `[index=]` is left out (neither `i/n` nor `none`: the anchor was verified).
+- `[index=]` is the element's place among the anchor's matches, only when there are 2+ (a
+  rule-0 `:rel-href` anchor matches every link to the same place, and this says which one).
+  Never `none`: the anchor was verified to include the element.
 
-`[anchor=]` is still written, and it is the same string as `[selector=]`.
+`[anchor=]` is still written, and it is the same string as `[selector=]`; with 2+ matches its
+`[anchor-nth=]` equals the `i` of `[index=]`.
 
 **Exception 2 (2026-10-02, reads only): a read's `[selector=]` never contains what it read.**
 When the ladder's selector contains the text a `get_text` read (3+ characters, any case), for
@@ -154,3 +157,5 @@ in the agent repository's copy of this file.
 | 2026-10-02 | alohajet `f6c3380` | exception 2's anchor half (a read with no list is addressed by its answer-free anchor) |
 | 2026-10-04 | alohajet-cli `fc182c5` | anchor rule 1a: an absolute or query-bearing href is an anchor candidate, verbatim, when it is the only link to that place |
 | 2026-10-04 | this package, PR `port/08-receipt-anchor` | the anchor rule, `[anchor=]`, `[anchor-nth=]`, `[path=]` and both exceptions move into `alohajet-cli` |
+| 2026-10-08 | alohajet `a1687b0` `6b4a864` `9f8db00` | exception 1 keeps `[index=]` among the anchor's matches; `[anchor-nth=]` whenever `[anchor=]` matches 2+; `[text=]` on batched `page_type` fields, from title, then an inner image's alt |
+| 2026-10-18 | this package, PR `port/10-receipts-2026-10-08` | the three changes above move into `alohajet-cli` |
