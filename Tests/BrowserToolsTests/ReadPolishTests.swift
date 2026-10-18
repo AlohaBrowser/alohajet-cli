@@ -92,3 +92,18 @@ struct ReadPolishSerializerTests {
         #expect(serializeFullMarkdown([plain]) == "a b")
     }
 }
+
+@Suite("a screenshot's media type is what its bytes are")
+struct DataUrlImageMediaTypeTests {
+    /// The desktop's capture: PNG bytes labelled JPEG (W6 e2e). The bytes win.
+    @Test func theBytesDecideTheMediaType() {
+        #expect(parseDataUrlImage("data:image/jpeg;base64,iVBORw0KGgoAAAANS")?.mediaType == "image/png")
+        #expect(parseDataUrlImage("data:image/png;base64,/9j/4AAQSkZJRg")?.mediaType == "image/jpeg")
+        #expect(parseDataUrlImage("data:image/png;base64,R0lGODlhAQAB")?.mediaType == "image/gif")
+        #expect(parseDataUrlImage("data:image/jpeg;base64,UklGRiQAAABXRUJQ")?.mediaType == "image/webp")
+        // Unknown bytes: the label, as before.
+        #expect(parseDataUrlImage("data:image/png;base64,AAAA")?.mediaType == "image/png")
+        #expect(parseDataUrlImage("data:image/svg+xml;base64,AAAA")?.mediaType == "image/jpeg")
+        #expect(parseDataUrlImage("not a data url") == nil)
+    }
+}
