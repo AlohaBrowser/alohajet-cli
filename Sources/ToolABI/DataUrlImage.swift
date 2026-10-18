@@ -11,9 +11,12 @@ public struct ParsedDataUrlImage: Equatable, Sendable {
     }
 }
 
-/// Parses a `data:<mime>;base64,<payload>` URL. JPEG/JPG map to `image/jpeg`,
-/// PNG maps to `image/png`, and any other recognized base64 data url defaults to
-/// `image/jpeg`. Returns `nil` when the string is not a base64 data url.
+/// Parses a `data:<mime>;base64,<payload>` URL. The PAYLOAD decides the media type when its
+/// first bytes say what it is (PNG, JPEG, GIF, WebP): the desktop app's screenshot arrived as
+/// `data:image/jpeg;base64,iVBORw0KGgo…` -- PNG bytes under a JPEG label (W6 e2e), which a
+/// vision endpoint that trusts the label decodes as a broken JPEG. Otherwise the label maps as
+/// before: PNG to `image/png`, anything else to `image/jpeg`. Returns `nil` when the string is not
+/// a base64 data url.
 public func parseDataUrlImage(_ value: String) -> ParsedDataUrlImage? {
     let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
     let pattern = "^data:([^;]+);base64,(.+)$"
@@ -25,8 +28,19 @@ public func parseDataUrlImage(_ value: String) -> ParsedDataUrlImage? {
         return nil
     }
     let mime = String(trimmed[mimeRange])
+    let payload = String(trimmed[dataRange])
     return ParsedDataUrlImage(
-        base64: String(trimmed[dataRange]),
-        mediaType: mime == "image/png" ? "image/png" : "image/jpeg")
+        base64: payload,
+        mediaType: sniffedImageMediaType(base64: payload) ?? (mime == "image/png" ? "image/png" : "image/jpeg"))
+}
+
+/// The media type a base64 image payload's magic bytes name, or nil when they name none of the
+/// four a vision endpoint takes.
+public func sniffedImageMediaType(base64 payload: String) -> String? {
+    if payload.hasPrefix("iVBORw0KGgo") { return "image/png" }
+    if payload.hasPrefix("/9j/") { return "image/jpeg" }
+    if payload.hasPrefix("R0lGOD") { return "image/gif" }
+    if payload.hasPrefix("UklGR") { return "image/webp" }
+    return nil
 }
 

@@ -457,7 +457,9 @@ public final class AgentBrowserBridge {
     public static let downloadWaitTimeoutMs: Double = 1500
     public static let downloadWaitPollMs: Double = 100
 
-    private let backend: AgentBridgeBackend
+    // Internal, not private: the receipt and overlay probes in `ClickReceipts.swift` are an
+    // extension of this class and read the page through it.
+    let backend: AgentBridgeBackend
     public let actionCollector: ActionCollector?
     /// The tab identity recorded on emitted actions (e.g. the post-exec snapshot).
     public let tabId: String?
@@ -658,6 +660,76 @@ public final class AgentBrowserBridge {
               !url.isEmpty else { return nil }
         backend.noteCurrentURL(url)
         return url
+    }
+
+    /// A cheap answer to "is this the same page the model already holds?", read either side of
+    /// an action so the tool can decide whether to send the page back -- see `withPageSnapshot`.
+    ///
+    /// Three parts, one `Runtime.evaluate`, no DOM walk: the document GENERATION
+    /// (`__alohaDocGeneration`, seeded once per document by the DOM-tree script, so a navigation is
+    /// a new value), the ELEMENT COUNT (an overlay opening, a list expanding, a form replacing
+    /// itself all move it), and the URL (a page at a different address is a different page even
+    /// when its structure matches). Two equal fingerprints mean the ids the model holds are still
+    /// good; two different ones mean the page it holds is stale and must be re-sent.
+    ///
+    /// WHAT IT CANNOT SEE, and this cost a run. A typed VALUE changes none of the three, so a
+    /// `page_type` gated on this never got its page back: on WebArena run 33956015125 the four
+    /// Magento report tasks that type two dates and run a report went 11/30 to 1/30 while
+    /// `page_type` calls rose 369 -> 677, the model retyping because it could not see whether the
+    /// date had landed. `page_type` therefore does NOT gate on this; anything else whose change is
+    /// a value rather than a structure needs the same exemption.
+    ///
+    /// THE IDS THEMSELVES ARE THE FOURTH PART, and the one that answers the question directly.
+    /// The DOM walk writes each kept node's `aloha-id` back onto the element, so the ids the model
+    /// holds are exactly the `[aloha-id]` attributes now in the document, in document order. A
+    /// digest of that sequence moves when an element is replaced one-for-one (same count, same
+    /// URL, new hash), when the order changes, or when a same-URL document replacement re-walked
+    /// to a different set -- the cases a count cannot see (review of the first version: "one-for-one
+    /// replacements or reorders preserve the count and URL"). A page that was never walked has no
+    /// ids and digests to a constant, which is right: the model holds no ids from it to go stale.
+    ///
+    /// The digest is FNV-1a over the joined ids, folded to 32 bits in JS integer arithmetic, so it
+    /// costs one `querySelectorAll` and a loop -- no DOM walk, no serialization. Shadow roots and
+    /// same-origin frames are not pierced by `querySelectorAll`; ids stamped inside them are
+    /// covered only by the count, which is the known limit of this probe. `__alohaDocGeneration`
+    /// is kept in the string for hosts whose page runtime seeds it; this package's does not.
+    ///
+    /// Deliberately NOT a hash of the markdown: producing that is the DOM walk this exists to skip.
+    /// Returns nil when the page cannot answer; `pageMoved` treats a nil on either side as
+    /// "changed", so an unreadable page still gets its snapshot rather than silently losing it.
+    func pageFingerprint() async -> String? {
+        let script = """
+        (function() {
+          try {
+            var generation = String(window.__alohaDocGeneration || "");
+            var count = document.querySelectorAll("*").length;
+            var here = String(window.location && window.location.href || "");
+            var ids = document.querySelectorAll("[aloha-id]");
+            var hash = 0x811c9dc5;
+            for (var i = 0; i < ids.length; i++) {
+              var id = ids[i].getAttribute("aloha-id") || "";
+              for (var j = 0; j < id.length; j++) {
+                hash ^= id.charCodeAt(j);
+                hash = Math.imul(hash, 0x01000193) >>> 0;
+              }
+              hash ^= 0x7c;
+              hash = Math.imul(hash, 0x01000193) >>> 0;
+            }
+            return generation + "|" + count + "|" + here + "|" + ids.length + ":" + hash.toString(16);
+          } catch (e) { return ""; }
+        })()
+        """
+        let value: JSValue?
+        do { value = try await backend.evaluateViaCdp(script) } catch { return nil }
+        guard let text = value?.stringValue, !text.isEmpty else { return nil }
+        return text
+    }
+
+    /// Whether the page moved between two `pageFingerprint` reads. A nil on either side counts as
+    /// moved: a page that could not answer must never be mistaken for one that did not change.
+    static func pageMoved(before: String?, after: String?) -> Bool {
+        guard let before, let after else { return true }
+        return before != after
     }
 
     /// The page's URL after an action, once the page has had a bounded chance to move.
@@ -916,6 +988,53 @@ public final class AgentBrowserBridge {
         }
     }
 
+    /// The `not found` message this bridge hands back, matched to WHY the lookup missed.
+    /// The bare string is indistinguishable from a typo, from an element that has not rendered
+    /// yet, and from an id minted for a page that is no longer loaded — and on WebArena run
+    /// 33843492855 the third was the common case: 672 failed lookups over 22 of 33 traces,
+    /// which averaged 167 steps against 57 for the rest, because the caller cannot tell
+    /// "retry" from "re-read". Same diagnosis as `staleIdDiagnosis` in the in-page runtime,
+    /// reached from Swift because these two call sites resolve their own elements. Falls back to
+    /// the bare message: a diagnostic that throws must not replace the error it describes.
+    private func alohaIdNotFoundMessage(_ alohaId: String) async -> String {
+        let bare = "Element with aloha-id \(alohaId) not found"
+        let escaped = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
+        let script = """
+        (function() {
+          var alohaId = "\(escaped)";
+          var here = '';
+          try { here = String(window.location && window.location.href || ''); } catch (e) {}
+          var present = 0;
+          try { present = document.querySelectorAll('[aloha-id]').length; } catch (e) {}
+          var mine = '';
+          try { mine = String(window.__alohaDocGeneration || ''); } catch (e) {}
+          var dash = alohaId.indexOf('-');
+          var theirs = dash > 0 ? alohaId.substring(0, dash) : '';
+          var why;
+          if (present === 0) {
+            why = 'This page carries no aloha-id at all, so it has not been read since it last'
+                + ' changed. The ids you hold were minted for an earlier page.';
+          } else if (mine && theirs && theirs !== mine) {
+            why = 'That id was minted for a different page or render (it carries generation '
+                + theirs + '; this page is generation ' + mine + '), so no element here can ever'
+                + ' match it.';
+          } else {
+            why = 'This page does carry aloha-ids and none of them is that one, so the element is'
+                + ' gone or was never on this page.';
+          }
+          return 'Element with aloha-id ' + alohaId + ' not found. ' + why
+               + ' The page is now ' + (here || 'an unknown URL') + '.'
+               + ' Re-read the page and use an id from that new snapshot; retrying this id, or'
+               + ' re-navigating to the same URL, cannot make it resolve.';
+        })()
+        """
+        guard let value = try? await backend.evaluateViaCdp(script),
+              let text = value.stringValue, text.hasPrefix(bare) else {
+            return bare
+        }
+        return text
+    }
+
     public func scrollTo(_ alohaId: String) async -> AgentActionResult {
         do {
             let escaped = alohaId.replacingOccurrences(of: "\"", with: "\\\"")
@@ -934,7 +1053,7 @@ public final class AgentBrowserBridge {
             for _ in 0..<maxAttempts {
                 let value = try await backend.evaluateViaCdp(script)
                 guard let value, value.bool("found") == true else {
-                    return AgentActionResult(output: "Element with aloha-id \(alohaId) not found", isError: true)
+                    return AgentActionResult(output: await alohaIdNotFoundMessage(alohaId), isError: true)
                 }
                 if value.bool("inViewport") == true {
                     return AgentActionResult(output: "Scrolled to element \(alohaId)")
@@ -1246,41 +1365,193 @@ public final class AgentBrowserBridge {
             // the focus actually TOOK (`document.activeElement`, descended through shadow
             // roots). The second is not redundant: a hidden or readonly input passes the
             // kind check and still swallows everything, which reported a false success.
+            //
+            // AND WHEN THE ID NAMES A LABEL, THE PROBE RESOLVES IT instead of only refusing.
+            // The refusal used to say "re-read the page and pass the aloha-id of the text field
+            // itself", and that is advice the model demonstrably cannot act on: on WebArena run
+            // 34104601895 it fired in 4 of 5 t625 reps, every time on the same `<span>` inside the
+            // Body label, the model re-read and sent the same id again, and the post went in with
+            // an empty body. A label's control is already where a click goes; typing is no
+            // different. `resolveTypeTarget` (between the markers, so the Node harness runs the
+            // bytes that ship) follows the associations HTML itself defines, and redirects only to
+            // EXACTLY ONE candidate: two is a guess, and a guess here types the body into the title.
             let probe = try await backend.evaluateViaCdp("""
             (function() {
               var el = document.querySelector('[aloha-id="\(escaped)"]');
               if (!el) return { found: false };
-              var tag = el.tagName;
-              var inputType = (el.getAttribute('type') || 'text').toLowerCase();
-              var nonText = ['button','checkbox','color','file','hidden','image','radio','range','reset','submit'];
-              var accepts = (tag === 'TEXTAREA'
-                  || (tag === 'INPUT' && nonText.indexOf(inputType) === -1)
-                  || el.isContentEditable === true)
-                && el.disabled !== true && el.readOnly !== true;
-              if (accepts) { el.scrollIntoView({ block: 'center', behavior: 'instant' }); el.focus(); }
-              var active = document.activeElement;
-              while (active && active.shadowRoot && active.shadowRoot.activeElement) {
-                active = active.shadowRoot.activeElement;
+              \(sensitiveFieldPredicateJS)
+              // BEGIN type-probe js
+              function resolveTypeTarget(el, document) {
+                var nonText = ['button','submit','reset','checkbox','radio','file','image','range','color','hidden'];
+                function attr(n, name) { return (n && n.getAttribute && n.getAttribute(name)) || ''; }
+                function kindOf(n) { return (attr(n, 'type') || 'text').toLowerCase(); }
+                function typable(n) {
+                  if (!n || !n.tagName) return false;
+                  var tag = n.tagName, ty = kindOf(n);
+                  var ok = (tag === 'TEXTAREA'
+                      || (tag === 'INPUT' && nonText.indexOf(ty) === -1)
+                      || n.isContentEditable === true);
+                  if (!ok || n.disabled === true || n.readOnly === true) return false;
+                  // THE EFFECTIVE STATE, not only the element's own properties: a field inside a
+                  // `<fieldset disabled>` has `disabled === false` and still takes nothing, and a
+                  // custom field says so through ARIA. The same rules the DOM serializer applies.
+                  try { if (n.matches && n.matches(':disabled')) return false; } catch (e) {}
+                  if (attr(n, 'aria-disabled') === 'true' || attr(n, 'aria-readonly') === 'true') return false;
+                  return true;
+                }
+                // A REDIRECT MUST NEVER ROUTE AROUND THE CREDENTIAL REFUSAL, which is keyed on the id
+                // the model passed. The page-side predicate the DOM walker ships answers what the
+                // Swift classifier answers (a password type, or a password-like name, id,
+                // placeholder or label), so a resolved field is only ever a non-secret one -- and
+                // the bridge classifies the resolved field again before any key is sent.
+                function secret(n) {
+                  if (kindOf(n) === 'password') return true;
+                  try { return typeof __alohaIsSensitiveField === 'function' && __alohaIsSensitiveField(n) === true; }
+                  catch (e) { return false; }
+                }
+                function eligible(n) { return typable(n) && !secret(n); }
+                function eachEligible(list, into) {
+                  for (var i = 0; i < list.length; i++) { if (eligible(list[i])) into.push(list[i]); }
+                }
+                var target = el;
+                var redirected = '';
+                var redirectedTag = '';
+                var ambiguous = 0;
+                if (!typable(el)) {
+                  var cands = [];
+                  // 1. THE RELATIONSHIP HTML ITSELF DEFINES. A label's control is where a click
+                  //    already goes; typing should be no different. An explicit `for` names one
+                  //    control. An IMPLICIT label (one that wraps) is walked for every field it
+                  //    holds rather than read through `label.control`, which returns only the first
+                  //    labelable descendant and would hide a second field from the count below.
+                  var label = el.closest ? el.closest('label') : null;
+                  if (label) {
+                    if (label.htmlFor) {
+                      var ctl = document.getElementById(label.htmlFor);
+                      if (eligible(ctl)) cands.push(ctl);
+                    } else if (label.querySelectorAll) {
+                      eachEligible(label.querySelectorAll('input, textarea, [contenteditable]'), cands);
+                    }
+                  }
+                  // 2. An explicit association carried by the element the model named.
+                  //    `aria-controls` is a whitespace-separated list of ids; every token counts.
+                  var refs = (attr(el, 'for') + ' ' + attr(el, 'aria-controls')).split(/\\s+/);
+                  for (var r = 0; r < refs.length; r++) {
+                    if (!refs[r]) continue;
+                    var byId = document.getElementById(refs[r]);
+                    if (eligible(byId)) cands.push(byId);
+                  }
+                  // 3. The fields WRAPPED by it -- a div or span around one input.
+                  if (!cands.length && el.querySelectorAll) {
+                    eachEligible(el.querySelectorAll('input, textarea, [contenteditable]'), cands);
+                  }
+                  // 4. The field it sits immediately before, which is how most labels are placed.
+                  if (!cands.length && eligible(el.nextElementSibling)) {
+                    cands.push(el.nextElementSibling);
+                  }
+                  var uniq = [];
+                  for (var j = 0; j < cands.length; j++) {
+                    if (uniq.indexOf(cands[j]) === -1) uniq.push(cands[j]);
+                  }
+                  // EXACTLY ONE, or nothing. Two candidate fields is a guess, and a guess here types
+                  // the body into the title. And the one must carry an aloha-id: a field added since
+                  // the last walk has none, the receipt could not name it, and the redirect would be
+                  // silent -- the very failure this probe exists to prevent.
+                  if (uniq.length === 1 && attr(uniq[0], 'aloha-id')) {
+                    target = uniq[0];
+                    redirected = attr(target, 'aloha-id');
+                    redirectedTag = target.tagName;
+                  } else if (uniq.length > 1) {
+                    ambiguous = uniq.length;
+                  }
+                }
+                var accepts = typable(target);
+                // THE PAGE'S TYPABLE FIELDS, enumerated so the refusal can NAME them instead of
+                // telling the model to go and look -- and ONLY when about to refuse. Computed
+                // unconditionally, every successful page_type paid for a document-wide
+                // querySelectorAll and up to twelve label lookups it never read: nav-33 at
+                // concurrency 16 turned that into 25 timed-out attempts and a median wall of
+                // 382s against 126s. Twelve are named; the total is counted so the refusal can
+                // say the list is partial when it is.
+                var fields = [];
+                var fieldsTotal = 0;
+                if (!accepts) {
+                  try {
+                    var all = document.querySelectorAll('input, textarea, [contenteditable]');
+                    for (var k = 0; k < all.length; k++) {
+                      var f = all[k];
+                      if (!eligible(f)) continue;
+                      var fid = attr(f, 'aloha-id');
+                      if (!fid) continue;
+                      fieldsTotal++;
+                      if (fields.length >= 12) continue;
+                      var name = (attr(f, 'aria-label') || attr(f, 'placeholder') || attr(f, 'name')).slice(0, 40);
+                      if (!name && f.labels && f.labels.length) {
+                        name = String(f.labels[0].textContent || '').trim().slice(0, 40);
+                      }
+                      fields.push(fid + (name ? ' (' + name + ')' : '') + ' ' + f.tagName.toLowerCase());
+                    }
+                  } catch (e) { fields = []; fieldsTotal = 0; }
+                }
+                if (accepts) { target.scrollIntoView({ block: 'center', behavior: 'instant' }); target.focus(); }
+                var active = document.activeElement;
+                while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+                  active = active.shadowRoot.activeElement;
+                }
+                return {
+                  found: true,
+                  acceptsText: accepts,
+                  focused: active === target,
+                  tag: el.tagName,
+                  inputType: el.tagName === 'INPUT' ? kindOf(el) : '',
+                  redirectedTo: redirected,
+                  redirectedTag: redirectedTag,
+                  ambiguous: String(ambiguous),
+                  fields: fields.join(' | '),
+                  fieldsTotal: String(fieldsTotal)
+                };
               }
-              return {
-                found: true,
-                acceptsText: accepts,
-                focused: active === el,
-                tag: tag,
-                inputType: tag === 'INPUT' ? inputType : ''
-              };
+              // END type-probe js
+              return resolveTypeTarget(el, document);
             })()
             """)
             guard probe?.bool("found") == true else {
-                return AgentActionResult(output: "Element with aloha-id \(alohaId) not found", isError: true)
+                return AgentActionResult(output: await alohaIdNotFoundMessage(alohaId), isError: true)
             }
             let tag = (probe?.string("tag") ?? "unknown").lowercased()
             let inputType = probe?.string("inputType") ?? ""
             let kind = inputType.isEmpty ? "<\(tag)>" : "<\(tag) type=\(inputType)>"
+            // WHERE THE KEYSTROKES ACTUALLY WENT, when the id named a label or a wrapper.
+            let redirectedTo = probe?.string("redirectedTo") ?? ""
+            let redirectedTag = (probe?.string("redirectedTag") ?? "").lowercased()
+            // Crosses as a STRING: `JSValue` offers string(_:) and bool(_:) here, nothing numeric.
+            let ambiguous = Int(probe?.string("ambiguous") ?? "") ?? 0
             guard probe?.bool("acceptsText") == true else {
+                // NAME THE FIELDS rather than telling the model to go and look. On run 34110975237
+                // t625 r0 was told "re-read the page", re-read, and then typed into the
+                // "Formatting help" CHECKBOX and a span, while `textarea("Body")` was listed in
+                // the very observation it was holding. The ids below come from the live page, so
+                // the alternative offered is a fact, not advice -- and when the page has more
+                // fields than the list names, the list says so rather than posing as the whole.
+                let fields = probe?.string("fields") ?? ""
+                let total = Int(probe?.string("fieldsTotal") ?? "") ?? 0
+                let listed = fields.isEmpty ? 0 : fields.components(separatedBy: " | ").count
+                let offer: String
+                if fields.isEmpty {
+                    offer = "This page has no text field that can take typing."
+                } else if total > listed {
+                    offer = "The first \(listed) of this page's \(total) text fields are: \(fields). "
+                        + "Pass one of THOSE ids, or read the page for the rest."
+                } else {
+                    offer = "The text fields on this page are: \(fields). Pass one of THOSE ids."
+                }
+                let why = ambiguous > 1
+                    ? "It wraps \(ambiguous) different text fields, so which one you meant cannot be "
+                        + "guessed. "
+                    : ""
                 return AgentActionResult(
                     output: "Element with aloha-id \(alohaId) cannot accept typed text (it is \(kind)). "
-                        + "No keystrokes were sent. Re-read the page and pass the aloha-id of the text field itself.",
+                        + "No keystrokes were sent. \(why)\(offer)",
                     isError: true)
             }
             guard probe?.bool("focused") == true else {
@@ -1290,7 +1561,31 @@ public final class AgentBrowserBridge {
                         + "sent. Re-read the page and pass the aloha-id of the VISIBLE field.",
                     isError: true)
             }
+            if !redirectedTo.isEmpty, credentialGuardEnabled() {
+                // THE RESOLVED FIELD IS CLASSIFIED AGAIN. The refusal at the top was keyed on the
+                // id the model passed; the page-side probe excludes what it can see, but the
+                // classifier here is the policy, so it runs on the field the keys would actually
+                // go to. The field has been focused and nothing has been sent.
+                let redirectedEscaped = redirectedTo.replacingOccurrences(of: "\"", with: "\\\"")
+                if let snapshot = try await resolveElementSnapshot(redirectedEscaped), isPasswordField(snapshot) {
+                    return AgentActionResult(output: credentialFieldRefusalMessage, isError: true)
+                }
+            }
             try await typeCDP(text, replace: replace)
+            if !redirectedTo.isEmpty {
+                // SAY SO. A silent redirect is the mis-type this whole probe exists to prevent: the
+                // model has to be able to see that its next id is a different one. The sentence is
+                // for a direct caller; `page_type` composes its own receipt and reads the target
+                // off `rawResult`, so the redirect reaches the model either way.
+                return AgentActionResult(
+                    output: "Element \(alohaId) is \(kind), which holds no text, so the keystrokes went "
+                        + "to the <\(redirectedTag)> it labels: aloha-id \(redirectedTo). Use THAT id for "
+                        + "this field from now on.",
+                    rawResult: .object([
+                        ("redirectedTo", .string(redirectedTo)),
+                        ("redirectedTag", .string(redirectedTag)),
+                    ]))
+            }
             return AgentActionResult(output: "Typed text into element \(alohaId)")
         } catch {
             if isAbortError(error) {

@@ -66,6 +66,38 @@ private let editableFixtureHTML = """
 </body></html>
 """
 
+/// A Magento-shaped form: the quantity field's id is generated per render, so its NAME is its
+/// address, and the name carries brackets (`product[qty]`).
+private let bracketNameFixtureHTML = """
+<!doctype html>
+<html><head><title>Bracket Name Fixture</title></head>
+<body>
+  <h1>Bracket Name Fixture</h1>
+  <form>
+    <input id="JV2FMF8" name="product[qty]" aria-label="Quantity">
+    <input id="CD26XAH" name="product[sku]" aria-label="SKU">
+  </form>
+</body></html>
+"""
+
+/// A login form whose fields carry their VALUE as an attribute -- what a server-rendered form
+/// writes, and what React writes on every keystroke into a controlled input (it mirrors the value
+/// into the `value` attribute). Neither field has text, an aria-label or a title of its own: a
+/// `<label>` names them, and the search box has a placeholder.
+private let valueAttributeFixtureHTML = """
+<!doctype html>
+<html><head><title>Value Attribute Fixture</title></head>
+<body>
+  <h1>Value Attribute Fixture</h1>
+  <form onsubmit="event.preventDefault()">
+    <label for="pw">Account key</label>
+    <input type="password" id="pw" name="pw" value="hunter2-secret">
+    <input type="search" id="q" name="q" value="shoes-typed-before" placeholder="Search the shop">
+    <input type="submit" id="go" value="Go">
+  </form>
+</body></html>
+"""
+
 /// Runs `body` against a freshly launched headless browser and shuts that browser down
 /// before returning, on the throwing path too.
 ///
@@ -304,10 +336,86 @@ struct RealBrowserE2ETests {
         }
     }
 
+    /// A BRACKETED NAME IS WRITTEN ESCAPED, AND A REAL BROWSER RESOLVES IT (2026-10-18): the
+    /// receipt's `[selector=]` must nest brackets at most once for llmdex's grammar, so the
+    /// ladder writes `product[qty]` as `product\00005bqty\00005d`. `[matches=1]` is the live
+    /// page's own count (`querySelectorAll`), and `[anchor=]` is the same address verified
+    /// through the replay's resolver -- both prove Chrome reads the escape back as the name.
+    @Test func aBracketedNameIsEscapedAndResolvesLive() async throws {
+        try #require(browserIsAvailable)
+
+        let server = LocalPageServer(html: bracketNameFixtureHTML)
+        try server.start()
+        defer { server.stop() }
+
+        try await withHeadlessBrowser { session in
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            let ref = try #require(alohaId(forLabel: "Quantity", in: opened.output),
+                                   "the quantity field carried no aloha-id:\n\(opened.output)")
+            let typed = await session.run("page_type", arguments: ["aloha_id": ref, "text": "2"])
+            #expect(typed.isError != true, "page_type failed: \(typed.output)")
+            let escaped = #"[name="product\00005bqty\00005d"]"#
+            #expect(typed.output.contains("[selector=\(escaped)] [tool=page_type] [matches=1]"),
+                    "the receipt did not carry the escaped, live-verified name:\n\(typed.output)")
+            #expect(typed.output.contains("[anchor=\(escaped)]"),
+                    "the resolver did not verify the escaped name:\n\(typed.output)")
+            #expect(!typed.output.contains("product[qty]\"]]"))
+        }
+    }
+
+    /// A FIELD'S VALUE IS NOT ITS NAME, AND A PASSWORD NEVER LEAVES THE PAGE THROUGH A RECEIPT
+    /// (2026-10-18). `[text=]` fell back to an element's `value` attribute for every element, so a
+    /// click on a password field whose page wrote its value into the attribute (server-rendered,
+    /// or React mirroring each keystroke) put the password into the tool result -- the model's
+    /// context and llmdex's journal -- while the page walker and `get_text` mask that very value
+    /// (`SensitiveFieldScript`). A search box's `[text=]` was what had been typed in it, not its
+    /// placeholder. An input nobody types into is still named by its value (`<input type=submit value=Go>`).
+    @Test func aFieldsValueNeverRidesTheReceiptsText() async throws {
+        try #require(browserIsAvailable)
+
+        let server = LocalPageServer(html: valueAttributeFixtureHTML)
+        try server.start()
+        defer { server.stop() }
+
+        try await withHeadlessBrowser { session in
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            let ids = elementIds(onLinesStartingWith: "input(", in: opened.output)
+            #expect(ids.count == 3, "expected the three fields to carry aloha-ids:\n\(opened.output)")
+
+            var receipts: [String] = []
+            for id in ids {
+                let clicked = await session.run("page_click", arguments: ["aloha_id": id])
+                receipts.append(clicked.output)
+                #expect(!clicked.output.contains("hunter2-secret"),
+                        "a receipt carried the password field's value:\n\(clicked.output)")
+                #expect(!clicked.output.contains("[text=\"shoes-typed-before\"]"),
+                        "a receipt named the search box by what was typed in it:\n\(clicked.output)")
+            }
+            let all = receipts.joined(separator: "\n")
+            #expect(all.contains("[text=\"Search the shop\"]"), "the search box is named by its placeholder:\n\(all)")
+            #expect(all.contains("[text=\"Go\"]"), "a submit input is named by its value:\n\(all)")
+        }
+    }
+
     // MARK: - Reading the tool's own output
 
     /// Pulls the ref out of a rendered interactive line, e.g.
     /// `[Press me] {aloha-id="38ed76" button}`.
+    /// The ref of every rendered line that starts with `prefix` (`input(` for the form fields), in
+    /// page order.
+    private func elementIds(onLinesStartingWith prefix: String, in markdown: String) -> [String] {
+        var out: [String] = []
+        for line in markdown.split(separator: "\n") where line.trimmingCharacters(in: .whitespaces).hasPrefix(prefix) {
+            guard let marker = line.range(of: "{aloha-id=\"") else { continue }
+            let rest = line[marker.upperBound...]
+            guard let end = rest.firstIndex(of: "\"") else { continue }
+            out.append(String(rest[..<end]))
+        }
+        return out
+    }
+
     private func alohaId(forLabel label: String, in markdown: String) -> String? {
         for line in markdown.split(separator: "\n") where line.contains(label) {
             guard let marker = line.range(of: "aloha-id=\"") else { continue }

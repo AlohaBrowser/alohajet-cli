@@ -80,13 +80,13 @@ Work with browser tabs. Six actions.
 
 **list** — every open tab: its id, title, URL, and which one is in use.
 
-**read** — returns one tab's page as interactive markdown: headings, lists, links, tables and paragraphs, with every actionable element (link, button, input, select) carrying a trailing {aloha-id="..."} marker. Those ids are what page_click, page_type, page_select and get_text address. A tab that cannot produce interactive markdown (a non-web tab, or one with no attached DOM) falls back to plain markdown with no ids.
+**read** — returns one tab's page as interactive markdown: headings, lists, links, tables and paragraphs, with every actionable element (link, button, input, select) carrying a trailing {aloha-id="..."} marker, and every checkbox or radio saying whether it is checked. Those ids are what page_click, page_type, page_select and get_text address. Without tab_id it reads the tab in use. A tab that cannot produce interactive markdown (a non-web tab, or one with no attached DOM) falls back to plain markdown with no ids.
 
-**open** — opens a new tab at url AND returns its page in the same result, so one call navigates and reads. Only http and https URLs are accepted. Pass controlled_by: "user" instead when you are handing the user a link to read rather than a page you will drive; that opens a tab that is the user's and returns no page.
+**open** — ONE call opens a new tab at url, puts it in use (the page tools now act on it) AND returns its page, so there is no separate "use" or "read" call to make. Only http and https URLs are accepted. When the user asks you to open a page, this tab is the page they asked for: leave it open. Pass controlled_by: "user" instead only to hand the user a link to read without driving it; that opens a tab that is the user's and returns no page.
 
-**close** — closes a tab by id. Close the tabs you opened once you are done with them. A tab that is not your chat's is refused; "list" says whose each tab is.
+**close** — closes a tab by id. Close a tab you opened only for your own lookups once you are done with it; never close a tab the user asked you to open, or the one your answer points them to. A tab that is not your chat's is refused; "list" says whose each tab is.
 
-**use** — makes an existing tab the one the page tools address. Exactly one tab is in use at a time; open takes it too, unless you pass use: false.
+**use** — makes an EXISTING tab the one the page tools address. Exactly one tab is in use at a time; a tab you just opened is already in use.
 
 **unuse** — clears that selection, leaving no tab in use.
 
@@ -101,7 +101,7 @@ private let manageTabsSchema = objectSchema([
     )),
     ("tab_id", schemaField(
         type: "string",
-        description: "The tab to act on. Required by \"read\", \"close\" and \"use\"; ignored otherwise."
+        description: "The tab to act on. Required by \"close\" and \"use\". For \"read\", omit it to read the tab in use. Ignored otherwise."
     )),
     ("url", schemaField(
         type: "string",
@@ -109,7 +109,7 @@ private let manageTabsSchema = objectSchema([
     )),
     ("use", schemaField(
         type: "boolean",
-        description: "Applies to \"open\". Default true: the new tab becomes the one the page tools address, sparing a separate \"use\" call. The page comes back in the result either way. Pass false for a batch of opens, or when you do not intend to interact with the page. Ignored when controlled_by is \"user\".",
+        description: "Applies to \"open\". Default true: the new tab is in use as soon as it opens (no separate \"use\" call), and the page comes back in the result. Pass false only for a batch of background opens you will not interact with. Ignored when controlled_by is \"user\".",
         defaultValue: .bool(true)
     )),
     ("controlled_by", schemaField(
@@ -143,7 +143,7 @@ private let pageClickSchema = objectSchema([
 private let pageTypeDescription =
     "Type text into input/textarea/contenteditable elements by aloha-id. "
     + "To fill a FORM, pass all of its fields in one call as \"fields\": "
-    + "[{\"aloha_id\":\"1f3a9c2b\",\"text\":\"...\"},{\"aloha_id\":\"7b21e40d\",\"text\":\"...\"}] (up to 20, filled in order) "
+    + "[{\"aloha_id\":\"7959-1f3a9c2b\",\"text\":\"...\"},{\"aloha_id\":\"7959-7b21e40d\",\"text\":\"...\"}] (up to 20, filled in order) "
     + "with submit:true to press Enter once at the end — one call instead of one per field. "
     + "For a single field, pass aloha_id and text directly. One of the two shapes is required: "
     + "either aloha_id with text, or fields."
@@ -206,13 +206,13 @@ private let pageSelectSchema = objectSchema([
 // needs: pass several ids at once.
 private let getTextDescription =
     "Read the visible text (or input value) of elements on the active tab by aloha-id. "
-    + "Pass SEVERAL ids at once as a comma-separated list (\"1f3a9c2b,7b21e40d,3c8f95a1\", up to 20) and each is returned "
+    + "Pass SEVERAL ids at once as a comma-separated list (\"7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1\", up to 20) and each is returned "
     + "labelled with its id — one call instead of one per element."
 
 private let getTextSchema = objectSchema([
     ("aloha_id", schemaField(
         type: "string",
-        description: "One aloha-id, or several as a comma-separated list (\"1f3a9c2b,7b21e40d,3c8f95a1\", up to 20 per call). "
+        description: "One aloha-id, or several as a comma-separated list (\"7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1\", up to 20 per call). "
                    + "Reading a whole list of rows in one call costs one round instead of one round each.")),
     ("max_chars", schemaField(
         type: "integer",

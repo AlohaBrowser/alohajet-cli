@@ -21,6 +21,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     return #"""
 (() => {
     const DEBUG = \#(debug);
+    \#(ClickEffectProbe.ambientWatchJS)
     \#(sensitiveFieldPredicateJS)
     const collectDomTree = (collectAllInteractive = true, debug = false) => {
   const DEBUG = debug;
@@ -97,6 +98,56 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     return null;
   }
 
+  // THE NAME THE PAGE ALREADY GAVE THIS CONTROL. A form control has no text of its own, so
+  // `interactiveLabel` finds nothing for it and the serializer renders a bare `input()`; the
+  // control's `<label>` is emitted as its own line instead, leaving the model to pair the two by
+  // position. Measured on WebArena run 33868469638: across 371 Magento admin observations, 564
+  // unnamed `input()` against 1,159 named ones and 1,956 labels standing on their own line -- one
+  // guess per label, every read.
+  //
+  // Postmill's submit form is what that guessing costs. Its labels FOLLOW their controls (a CSS
+  // ordering choice), so on tasks 647/649 the model typed the title into `#submission_url` and the
+  // body into `#submission_title`, left the required title empty, and every submit was refused --
+  // 337 refusal notes naming `submission[title]`, and nothing ever posted.
+  //
+  // Resolution order is the accessible-name order the HTML spec already defines: an explicit
+  // `label[for=id]`, then a `<label>` wrapping the control, then `aria-labelledby`. Written into
+  // `aria-label` so ONE assignment fixes every consumer -- `input("Title")`, `findByText`, the
+  // click receipts -- rather than teaching each of them the lookup.
+  function findAssociatedLabelText(element) {
+    if (!element) return null;
+    const clean = (raw) => {
+      const text = (raw || "").replace(/\s+/g, " ").trim();
+      return text ? text : null;
+    };
+    try {
+      // `element.labels` IS the association the HTML spec defines: it covers an explicit
+      // `label[for=id]` AND a `<label>` wrapping the control, in one property, with no id
+      // escaping and no document query of our own. Undefined on anything that cannot be
+      // labelled, which the guard treats as "no name".
+      const own = element.labels;
+      if (own && own.length) {
+        for (let i = 0; i < own.length; i++) {
+          const text = clean(own[i].textContent);
+          if (text) return text;
+        }
+      }
+      const referenced = element.getAttribute ? element.getAttribute("aria-labelledby") : null;
+      if (referenced) {
+        const parts = [];
+        const tokens = referenced.split(/\s+/);
+        for (let i = 0; i < tokens.length; i++) {
+          if (!tokens[i]) continue;
+          const target = element.ownerDocument.getElementById(tokens[i]);
+          const text = target && clean(target.textContent);
+          if (text) parts.push(text);
+        }
+        if (parts.length) return clean(parts.join(" "));
+      }
+    } catch (e) {}
+    return null;
+  }
+
   function getElementData(element) {
     if (!element) return null;
     if (caches.elementData.has(element)) return caches.elementData.get(element) || null;
@@ -147,18 +198,61 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   //      unchanged page, and changes when the element moves.
   // Same input, same id, on every walk. That is what lets an id from an earlier read still
   // address the same element, and what lets the stuck-loop guard see a repeated click as a
-  // repeat instead of as a new action. It is not free: these hashed ids measure 2534 tokens
-  // on a /f/books read against 2316 for the base36 walk counter they replaced, so every step
-  // costs +218 tokens (+9.4%). A loop that ends at round three pays that back.
-  // The body's id is the constant hashString("|/body") on every page and every tab — an id
-  // need only be unique within its walk and resolvable within its page, and an iframe's body
-  // is never walked as a body.
+  // repeat instead of as a new action. It is not free: e364d24 measured this observation at
+  // 2534 tokens against 2316 for the base36 walk counter it replaced, so a /f/books read
+  // costs +218 tokens (+9.4%) every step. A loop that ends at round three pays that back.
+  // The body's id was the constant hashString("|/body") on every page and every tab, on the
+  // reasoning that an id need only be unique within its walk and resolvable within its page
+  // (an iframe's body is never walked as a body). `documentGeneration` below retires that: the
+  // page an id was minted for is now part of it, because "resolvable within its page" is not a
+  // property the CALLER can check and it was being asked to.
   // Memoised on the descriptor because the highlight labels a node sixty lines before the
   // walk registers it; one memo is what lets both read one id without reordering the walk.
+  // WHICH DOCUMENT these ids belong to. The identity above names a position and a frame, and
+  // nothing in it names the page: `/forums` and `/submit/dataisbeautiful` both hash
+  // `|/body/div[1]/a[2]` to the same string. Two consequences, both measured on WebArena run
+  // 33843492855 (672 `not found` errors over 22 of 33 traces; those traces averaged 167 steps
+  // against 57 for the rest):
+  //   * an id minted on the previous page is INDISTINGUISHABLE from one minted for this page,
+  //     so where the xpath happens to exist here too the click lands on a different element
+  //     and nothing reports it;
+  //   * where it does not exist, `not found` is the whole of what the caller learns, which
+  //     reads like a typo and invites the blind retry those step counts are made of.
+  // The generation prefix closes both: ids from another document can no longer collide with
+  // this one's, and `requireElement` can say an id belongs to a previous render instead of
+  // merely failing to find it. Memoised on `window`, so every walk of THIS document agrees and
+  // the stability across re-walks documented above is unchanged; a navigation or a reload
+  // builds a new window, hence a new generation, which is exactly when old ids stop meaning
+  // anything. With no window — the JSContext the derivation tests run in — there is no document
+  // to scope to and the bare hash is kept. The post-action fingerprint (`PageBridge.swift`)
+  // reads the same `__alohaDocGeneration`, which until now was never seeded.
+  // A SAME-DOCUMENT NAVIGATION IS A NEW PAGE TOO. pushState, a hash route, an SPA transition:
+  // `window` survives all of them, so a generation memoised on `window` alone would outlive the
+  // document it was minted for and an id from the old route would resolve on the new one. The
+  // href the generation was minted for rides along; when the page's href no longer matches it,
+  // the generation rotates. Hash included: on a hash-routed app `#/cart` and `#/checkout` are
+  // different pages with different elements at the same positions.
+  function documentGeneration() {
+    try {
+      if (typeof window === "undefined" || !window) return "";
+      const here = String((window.location && window.location.href) || "");
+      if (!window.__alohaDocGeneration || window.__alohaDocGenerationHref !== here) {
+        const seed = here + "|" + Date.now() + "|" + Math.random();
+        window.__alohaDocGeneration = hashString(seed).slice(0, 4);
+        window.__alohaDocGenerationHref = here;
+      }
+      return String(window.__alohaDocGeneration || "");
+    } catch (e) {
+      return "";
+    }
+  }
+
   function alohaIdFor(descriptor, element) {
     if (descriptor.alohaId) return descriptor.alohaId;
     const identity = scopeKey(descriptor.contextPath) + (authoredIdentity(element) || descriptor.xpath);
-    return (descriptor.alohaId = uniqueAlohaId(hashString(identity)));
+    const generation = documentGeneration();
+    const hashed = hashString(identity);
+    return (descriptor.alohaId = uniqueAlohaId(generation ? `${generation}-${hashed}` : hashed));
   }
 
   // What the page says this element IS, when it says anything durable. getAttribute("id"),
@@ -793,18 +887,30 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         if (value) add(value);
       }
     } catch {}
+    // The element's own text nodes, then the first descendant text -- and when the latter
+    // already says the former's words in order, the latter alone: `<span>You have <b>2</b> new
+    // <em>alerts</em></span>` read "You have new You have 2 new alerts" (W6 client review).
+    let directText = "";
+    let descendantText = "";
     try {
-      const directText = Array.from(element.childNodes)
+      directText = Array.from(element.childNodes)
         .filter((node) => node.nodeType === Node.TEXT_NODE)
         .map((node) => (node.textContent || "").trim())
         .filter((text) => !!text)
         .join(" ");
-      if (directText) add(directText);
     } catch {}
     try {
-      const descendantText = getFirstDescendantText(element);
-      if (descendantText) add(descendantText);
+      descendantText = getFirstDescendantText(element) || "";
     } catch {}
+    const wordsInOrder = (part, whole) => {
+      const want = part.toLowerCase().split(/\s+/).filter(Boolean);
+      const have = whole.toLowerCase().split(/\s+/).filter(Boolean);
+      let i = 0;
+      for (const w of have) if (i < want.length && w === want[i]) i++;
+      return want.length > 0 && i === want.length;
+    };
+    if (directText && !(descendantText && wordsInOrder(directText, descendantText))) add(directText);
+    if (descendantText) add(descendantText);
     try {
       const nestedLabels = getNestedAriaLabels(element);
       if (nestedLabels) add(nestedLabels);
@@ -1016,6 +1122,20 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       if (!rects || rects.length === 0) return null;
       const rect = rects[Math.floor(rects.length / 2)];
       if (rect.width <= 0 || rect.height <= 0) return null;
+      // NOT A CLICK TARGET, NOT "COVERED". A visually-hidden control -- a skip link clipped to a
+      // pixel, an sr-only input -- sits under whatever is drawn at its corner, and reporting THAT
+      // as an occlusion named the page's own product panel as an overlay to dismiss (Zara,
+      // 2026-09-20). Anything a pointer could not land on is left out of the probe.
+      if (rect.width < 4 || rect.height < 4) return null;
+      try {
+        const cs = getComputedStyleCached(element);
+        if (cs) {
+          const clip = String(cs.clip || "");
+          const clipPath = String(cs.clipPath || "");
+          if (/rect\(\s*0px,?\s*0px,?\s*0px,?\s*0px\s*\)/.test(clip)) return null;
+          if (/inset\(\s*(50|100)%/.test(clipPath) || /circle\(\s*0/.test(clipPath)) return null;
+        }
+      } catch {}
       const pad = 5;
       const points = [
         [rect.left + rect.width / 2, rect.top + rect.height / 2],
@@ -1389,6 +1509,33 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     return !element || element.nodeType !== Node.ELEMENT_NODE ? false : element.tagName.toLowerCase() === "select";
   }
 
+  // Whether a one-character text node is worth a line of the read: a letter or a digit, or a
+  // separator that sits between two numbers ("4/5", "10:30", "3-4") -- the text right before it
+  // ends in a digit and the text right after it starts with one.
+  function keepsShortText(textNode, text) {
+    if (/[\p{L}\p{N}]/u.test(text)) return true;
+    if (!/^[\/:\-\u2013.,\u00d7]$/u.test(text)) return false;
+    const before = (textNode.previousSibling && textNode.previousSibling.textContent || "").trim();
+    const after = (textNode.nextSibling && textNode.nextSibling.textContent || "").trim();
+    return /\p{N}$/u.test(before) && /^\p{N}/u.test(after);
+  }
+
+  // A checkbox or radio the page hides behind a widget of its own (react-checkbox-tree, demoqa:
+  // `<label><input type=checkbox style="display:none"><span class=rct-checkbox>…</span>Home</label>`)
+  // has no line in the read, and neither has its state. Its visible LABEL stands in for it: the
+  // label carries the box's type and state (`inputData`) and is what a click toggles.
+  function hiddenToggleOf(element) {
+    try {
+      if (!element || element.tagName.toLowerCase() !== "label") return null;
+      const control = element.control || element.querySelector("input[type=checkbox], input[type=radio]");
+      if (!control || control.tagName.toLowerCase() !== "input") return null;
+      const type = (control.type || "").toLowerCase();
+      if (type !== "checkbox" && type !== "radio") return null;
+      if (isElementVisible(control)) return null;
+      return control;
+    } catch { return null; }
+  }
+
   function extractInputData(element) {
     if (!element) return null;
     const tag = element.tagName.toLowerCase();
@@ -1409,11 +1556,18 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         type: input.type || "text",
         value: __alohaIsSensitiveField(input) ? \#(sensitiveFieldMaskJS) : (input.value || ""),
         placeholder: input.placeholder || "",
+        // Read on the Swift side to decide whether the value may be serialized at all. A site
+        // marks its own credential and payment fields here, and that marking is worth more than
+        // any guess we could make from the name or the placeholder.
+        autocomplete: (input.getAttribute && input.getAttribute("autocomplete")) || "",
         required: input.required || false,
         disabled: input.disabled || false,
         readonly: input.readOnly || false,
         multiline: false,
-        checked: input.checked || false
+        checked: input.checked || false,
+        // A tri-state box ("select all" over a partial selection) is neither: the page sets
+        // `indeterminate` by script and `checked` keeps its last value.
+        indeterminate: input.indeterminate || false
       };
       const style = getComputedStyleCached(element);
       if (style && (style.cursor === "not-allowed" || style.cursor === "no-drop")) data.disabled = true;
@@ -1423,6 +1577,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         type: "textarea",
         value: __alohaIsSensitiveField(textarea) ? \#(sensitiveFieldMaskJS) : (textarea.value || ""),
         placeholder: textarea.placeholder || "",
+        autocomplete: (textarea.getAttribute && textarea.getAttribute("autocomplete")) || "",
         required: textarea.required || false,
         disabled: textarea.disabled || false,
         readonly: textarea.readOnly || false,
@@ -1530,10 +1685,36 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
 
     if (node.nodeType === Node.TEXT_NODE) {
       const textNode = node;
-      const text = (textNode.textContent || "").trim();
-      if (!text || text.length <= 1) return null;
+      let text = (textNode.textContent || "").trim();
       const parent = textNode.parentElement;
       if (!parent || parent.tagName.toLowerCase() === "script") return null;
+      // ONE TEXT SPLIT INTO SEVERAL NODES IS ONE TEXT. React writes `{"$"}{price}` as two text nodes,
+      // so saucedemo's price div held "$" and "29.99": the one-character "$" was dropped below and the
+      // read said "29.99". An element with no child elements and several text nodes is emitted once,
+      // on its first text node, with the element's whole text.
+      // A `<pre>` (or any white-space:pre* box) keeps its line breaks: collapsing them read a block
+      // of code or a poem as one line. The text node says so (`aloha-pre`), and the read keeps them.
+      let keepsLines = parent.tagName.toLowerCase() === "pre";
+      if (!keepsLines && text.includes("\n"))
+        try {
+          const ws = (getComputedStyleCached(parent) || {}).whiteSpace || "";
+          if (/^pre|break-spaces/.test(ws)) keepsLines = true;
+        } catch {}
+      if (parent.children.length === 0) {
+        const parts = Array.from(parent.childNodes)
+          .filter((child) => child.nodeType === Node.TEXT_NODE && (child.textContent || "").trim());
+        if (parts.length > 1) {
+          if (parts[0] !== textNode) return null;
+          text = keepsLines
+            ? (parent.textContent || "").trim()
+            : (parent.textContent || "").replace(/\s+/g, " ").trim();
+        }
+      }
+      // A one-character text is a separator or a stray glyph ("|", "·", "×") -- unless it is a
+      // letter or a digit: TodoMVC's `<strong>1</strong> item left` read "item left", and "Page
+      // <b>2</b> of 9" lost its page -- or a separator BETWEEN two numbers: "Rating:
+      // <span>4</span>/<span>5</span>" read "Rating: 4 5" (W6 client review).
+      if (!text || (text.length <= 1 && !keepsShortText(textNode, text))) return null;
 
       try {
         const modals = getVisibleModalContainers();
@@ -1590,7 +1771,11 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       if (parentEl) {
         const textIndex =
           Array.from(parentEl.childNodes)
-            .filter((child) => child.nodeType === Node.TEXT_NODE && (child.textContent || "").trim().length > 1)
+            .filter((child) => {
+              if (child.nodeType !== Node.TEXT_NODE) return false;
+              const t = (child.textContent || "").trim();
+              return t.length > 1 || (t.length === 1 && keepsShortText(child, t));
+            })
             .indexOf(textNode) + 1;
         textXPathSegment = textIndex > 1 ? `text()[${textIndex}]` : "text()";
       }
@@ -1608,7 +1793,11 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         isTopElement: false,
         isHighlighted: false,
         children: [],
-        attributes: {}
+        // A token of a code listing (`<pre>`/`<code>`, often one span per token) is the code's,
+        // not page chrome: the read keeps a lone "0" there (`border-spacing: 0`).
+        attributes: Object.assign(
+          keepsLines && text.includes("\n") ? { "aloha-pre": "1" } : {},
+          text.length < 3 && parent.closest && parent.closest("pre, code") ? { "aloha-code": "1" } : {})
       };
       const id = alohaIdFor(descriptor, null);
       nodeMap[id] = descriptor;
@@ -1680,7 +1869,10 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         }
       try {
         if (!descriptor.attributes["aria-label"] && !element.textContent) {
-          const inferred = findDescendantAriaLabel(element);
+          // The page's own association first; a descendant's aria-label is the weaker guess and
+          // stays as the fallback it always was.
+          const labelled = findAssociatedLabelText(element);
+          const inferred = labelled || findDescendantAriaLabel(element);
           if (inferred) descriptor.attributes["aria-label"] = inferred;
         }
       } catch {}
@@ -1723,6 +1915,13 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       };
     }
     if (isFileInputLike(element)) descriptor.isFileInput = true;
+    if (isContentEditableHost(element)) descriptor.isEditableHost = true;
+    const hiddenToggle = lowerTag === "label" ? hiddenToggleOf(element) : null;
+    if (hiddenToggle) {
+      const data = extractInputData(hiddenToggle);
+      descriptor.inputData = { type: data.type, value: "", placeholder: "", required: false, disabled: data.disabled,
+        readonly: false, multiline: false, checked: data.checked, indeterminate: data.indeterminate };
+    }
 
     let highlighted = false;
     descriptor.isVisible = isElementVisible(element);
@@ -1732,9 +1931,9 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       const role = element.getAttribute("role");
       const isMenuContainer = role === "menu" || role === "menubar" || role === "listbox";
       const isMenuItem = role === "option" || role === "menuitem" || role === "menuitemcheckbox" || role === "menuitemradio";
-      const isToggleRole = role === "switch" || role === "checkbox" || role === "radio";
+      const isToggleRole = role === "switch" || role === "checkbox" || role === "radio" || !!hiddenToggle;
       const hasCheckedState = element.hasAttribute("aria-checked") || element.hasAttribute("aria-pressed");
-      descriptor.isInteractive = isFormElement ? true : isInteractive(element);
+      descriptor.isInteractive = isFormElement || hiddenToggle ? true : isInteractive(element);
       // The genuine actionable signal, captured BEFORE the text-content promotion below. Only
       // truly actionable elements are probed for occlusion: a covered paragraph promoted to
       // "interactive" purely for emission is not something to annotate as "dismiss to interact".
@@ -1866,11 +2065,29 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
   const rootId = walkNode(document.body);
   // Resolve each occluded node's covering element to a compact reference now that every node
   // has its aloha-id assigned (so the occluder can be named, and made actionable when tracked).
+  // HOW MANY NODES EACH COVER HIDES, and whether the cover is itself full of controls. A
+  // backdrop or a cookie wall hides many nodes and holds no controls -- close it. A sticky
+  // product panel, a drawer, a dialog with a form hides a few nodes and holds the controls the
+  // task needs -- use it. The legend needs both numbers to say which is which.
+  const coveredCountByEl = new Map();
+  for (const occId in nodeMap) {
+    const occNode = nodeMap[occId];
+    if (!occNode || !occNode.__occluderEl) continue;
+    coveredCountByEl.set(occNode.__occluderEl, (coveredCountByEl.get(occNode.__occluderEl) || 0) + 1);
+  }
+  const controlCountOf = (el) => {
+    try {
+      return Math.min(99, el.querySelectorAll(
+        "a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=link], [role=tab], [role=menuitem], [role=option]"
+      ).length);
+    } catch { return 0; }
+  };
   for (const occId in nodeMap) {
     const occNode = nodeMap[occId];
     if (!occNode || !occNode.__occluderEl) continue;
     const cover = occNode.__occluderEl;
     delete occNode.__occluderEl;
+    const coveredCount = coveredCountByEl.get(cover) || 1;
     try {
       const isPageRoot = (el) =>
         !el || el === document.body || el === document.documentElement ||
@@ -1884,13 +2101,15 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       if (isPageRoot(named)) {
         // Covered by a bare/anonymous overlay that resolves up to the page root — name it
         // generically rather than quoting the entire page's text back to the model.
-        occNode.occludedBy = { alohaId: null, tag: "overlay", role: null, text: null };
+        occNode.occludedBy = { alohaId: null, tag: "overlay", role: null, text: null, coveredCount: coveredCount, controlCount: 0 };
       } else {
         occNode.occludedBy = {
           alohaId: (named.getAttribute && named.getAttribute("aloha-id")) || null,
           tag: (named.tagName || "").toLowerCase() || "overlay",
           role: (named.getAttribute && named.getAttribute("role")) || null,
-          text: ((named.getAttribute && named.getAttribute("aria-label")) || named.textContent || "").trim().slice(0, 60) || null
+          text: ((named.getAttribute && named.getAttribute("aria-label")) || named.textContent || "").trim().slice(0, 60) || null,
+          coveredCount: coveredCount,
+          controlCount: controlCountOf(named)
         };
       }
     } catch {}
@@ -1928,11 +2147,12 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       if (!node || !Array.isArray(node.children)) continue;
       for (const childId of node.children) parentOf.set(childId, id);
     }
+    // (A `transparent` container -- see below -- is highlighted and still does not swallow.)
     const hasHighlightedAncestor = (id) => {
       let p = parentOf.get(id);
       while (p) {
         const n = map[p];
-        if (n && n.isHighlighted) return true;
+        if (n && n.isHighlighted && !transparent.has(p)) return true;
         p = parentOf.get(p);
       }
       return false;
@@ -1941,6 +2161,58 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     const SEMANTIC_STRUCTURE_TAGS = new Set([
       'header', 'footer', 'aside', 'main', 'article', 'section', 'nav', 'fieldset'
     ]);
+
+    // A PAGE-SIZED CONTAINER IS NOT A CONTROL. A wrapper the walker found interactive only because
+    // the page listens for clicks on it -- React puts `onclick` on its root `<div id="root">`, and a
+    // delegated handler or a `cursor:pointer` wrapper does the same -- was highlighted like a
+    // button, and every non-interactive node under a highlighted node is dropped below (the control's
+    // label carries its text). For a control that is right; for a wrapper around the whole page it
+    // dropped the page's content: saucedemo.com's inventory read showed the product links and "Add
+    // to cart" buttons but no price and no description, all of it folded into the root's label and
+    // cut to "[Open Menu Close Menu Swag Labs Produc... [content truncated, 1230 chars hidden] ...]"
+    // (W4 seed saucedemo-sort-cheapest, 2026-10-18); demoqa's submission output reached the model
+    // the same way. Only a wrapper that is not itself a link, button or form control and carries no
+    // widget role is considered:
+    //   - with four or more highlighted controls inside it (CONTAINER_CONTROLS) it is a REGION, not a
+    //     control -- React's root, demoqa's whole form: it is not highlighted, renders no line of its
+    //     own, and the text under it renders as content;
+    //   - with two or three controls and more text than a label line shows whole (CONTAINER_TEXT_MIN)
+    //     it may still be a clickable card, so it keeps its line and its id, but it no longer
+    //     swallows the text under it (`transparent`).
+    const CONTAINER_TEXT_MIN = 220;
+    const CONTAINER_CONTROLS = 4;
+    const WIDGET_ROLES = new Set(['button', 'link', 'menuitem', 'menuitemradio', 'menuitemcheckbox', 'radio', 'checkbox', 'tab',
+      'switch', 'slider', 'spinbutton', 'combobox', 'searchbox', 'textbox', 'listbox', 'option', 'scrollbar', 'menu', 'menubar',
+      'tablist', 'radiogroup', 'tree', 'treeitem', 'grid', 'gridcell', 'row', 'dialog', 'alertdialog']);
+    const CONTROL_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea', 'summary', 'label', 'option', 'details', 'iframe']);
+    const controlsInside = (id, limit) => {
+      let found = 0;
+      const stack = (map[id].children || []).slice();
+      while (stack.length && found < limit) {
+        const child = map[stack.pop()];
+        if (!child) continue;
+        if (child.isHighlighted && child.isInteractive) found++;
+        if (Array.isArray(child.children)) for (const grandchild of child.children) stack.push(grandchild);
+      }
+      return found;
+    };
+    //   - an editor (a contenteditable host) is never a region: it is the field page_type types
+    //     into, and a message body holding four links lost its id (W5 client review);
+    //   - a clickable table row (`<tr onclick>`) holding four or more controls keeps its line and
+    //     id as a transparent container: the row is what opens the item, its buttons act on it.
+    const transparent = new Set();
+    for (const id in map) {
+      const nodeData = map[id];
+      if (!nodeData || !nodeData.isHighlighted || nodeData.type === 'TEXT_NODE') continue;
+      if (CONTROL_TAGS.has(nodeData.tagName || '') || nodeData.isInput || nodeData.isTextarea || nodeData.isSelect || nodeData.isFileInput) continue;
+      if (nodeData.isEditableHost) continue;
+      const role = String((nodeData.attributes && nodeData.attributes.role) || '').trim().toLowerCase();
+      if (role && WIDGET_ROLES.has(role)) continue;
+      const controls = controlsInside(id, CONTAINER_CONTROLS);
+      if (controls >= CONTAINER_CONTROLS && nodeData.tagName === 'tr') transparent.add(id);
+      else if (controls >= CONTAINER_CONTROLS) nodeData.isHighlighted = false;
+      else if (controls >= 2 && (nodeData.comprehensiveText || '').length > CONTAINER_TEXT_MIN) transparent.add(id);
+    }
 
     const excludedNodes = new Set();
     for (const id in map) {
@@ -2059,7 +2331,13 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         children,
         element: {
           tagName,
-          xpath: nodeData.xpath || '',
+          // THE PATH ONLY WHERE IT RESOLVES IN THIS DOCUMENT. The walker paths an iframe's
+          // content from that frame's own body, and a shadow child from its HOST's path, so
+          // either path handed to `document.querySelector` on the top document finds nothing
+          // or -- worse -- finds a different element. The consumer is the receipt's selector
+          // ladder, which records a selector for a replayer that has only the top document, so
+          // a scoped node reports no path and the ladder falls back to saying nothing.
+          xpath: (nodeData.contextPath && nodeData.contextPath.length) ? '' : (nodeData.xpath || ''),
           attributes: nodeData.attributes || {},
           href,
           textContent,

@@ -23,6 +23,98 @@ import ToolABI
     /// one capped nowhere.
     static let defaultMaxChars = 20_000
 
+    /// WHAT WAS READ, in replayable terms -- the same `[selector=…] [tool=get_text] [matches=N]
+    /// [index] [text] [attrs] [list]` note a click or type receipt carries, resolved BEFORE the
+    /// read from the same ladder. Until 2026-09-23 a read reported no selector at all (llmdex's
+    /// CLIENT-CONTRACT §4: zero of every `get_text` receipt held one), so a scenario ending in
+    /// "…and tell me what it says" had no evidence for its read step: the mint invented one and
+    /// refused it (agent run github-ss-r25, `h1.d-flex span`), or read an element the run had
+    /// clicked and returned the link's label. Empty when the element has no durable selector --
+    /// the note never guesses.
+    static func readNote(_ alohaId: String, _ tab: StepTraceTab?, _ bridge: AgentBrowserBridge) async -> String {
+        guard let live = await bridge.liveSelector(PageToolReceipt.durableSelector(alohaId: alohaId, tab: tab), alohaId: alohaId)
+        else { return "" }
+        let text = await bridge.elementText(alohaId: alohaId)
+        let identity = await bridge.elementIdentity(selector: live.selector, alohaId: alohaId, forRead: true)
+        if let free = answerFreeReadAddress(selector: live.selector, text: text, identity: identity) {
+            return PageToolReceipt.selectorNote(
+                selector: free.selector, matches: free.matches, text: text, identity: free.identity, tool: "get_text")
+        }
+        return PageToolReceipt.selectorNote(
+            selector: live.selector, matches: live.matches, text: text, identity: identity, tool: "get_text")
+    }
+
+    /// A READ'S `[selector]` NEVER CARRIES WHAT IT READS. The ladder can put the read text into the
+    /// selector itself -- its link rung writes the link's own address, and the address holds the
+    /// value: agent run github-ss-r82 read v3.8.5 through `a[href="/MHSanaei/3x-ui/releases/tag/v3.8.5"]`,
+    /// github-ss-r84 read "Latest" through `a[href="/MHSanaei/3x-ui/releases/latest"]` (the mint
+    /// refused it: "a selector that CONTAINS THE ANSWER"). The anchor is already free of it; the
+    /// selector was not. When the ladder's selector contains the text read (3+ characters, any
+    /// case), the element is addressed by its place in its LIST (`[selector]` = the list,
+    /// `[matches]` its size, `[index]` the place) or, with no list, by its answer-free anchor. nil
+    /// when the selector is already free of the text, or there is nothing better to offer.
+    ///
+    /// THE VALUE AS AN ADDRESS SPELLS IT counts too (W5 client review, finding 3): a link's path
+    /// writes "Charles Babbage" as `/wiki/Charles_Babbage`, a release as `v3-8-5`, a title with
+    /// `%20` -- ``selector(_:bears:)`` folds case, accents, percent-escapes and the separators an
+    /// address uses before it compares. And an answer receipt checks the answer's own values
+    /// (`alsoValues`, its bold and quoted spans) as well as the element's text: books.toscrape's
+    /// link reads "A Light in the ..." while its `title` holds the whole "A Light in the Attic".
+    static func answerFreeReadAddress(selector: String, text: String?, identity: ElementIdentity?, alsoValues: [String] = [])
+        -> (selector: String, matches: Int?, identity: ElementIdentity?)? {
+        let values = ([text].compactMap { $0 } + alsoValues).filter { $0.count >= 3 }
+        guard !values.isEmpty else { return nil }
+        let bears = { (candidate: String) in values.contains { Self.selector(candidate, bears: $0) } }
+        guard bears(selector) else { return nil }
+        if let list = identity?.list, !bears(list.selector) {
+            var placed = ElementIdentity(index: list.index, attributes: identity?.attributes ?? [])
+            placed.list = list
+            // An anchor that spells the value too would come straight back as the selector
+            // (`selectorNote`'s exception 1 promotes a semantic anchor over a position path): the
+            // list stands alone then.
+            placed.anchor = identity?.anchor.flatMap { bears($0.selector) ? nil : $0 }
+            return (list.selector, list.count, placed)
+        }
+        if let anchor = identity?.anchor, anchor.nth == nil, !bears(anchor.selector) {
+            // The anchor was verified to resolve to this element: it IS the one match, or -- a
+            // rule-0 link that several links share -- the element is the `index`th of its matches.
+            var named = ElementIdentity(index: anchor.index ?? 1, attributes: identity?.attributes ?? [])
+            named.list = identity?.list
+            named.anchor = anchor
+            return (anchor.selector, anchor.count ?? 1, named)
+        }
+        return nil
+    }
+
+    /// Whether `selector` carries `value` (3+ characters): as written, in any case, or folded the
+    /// way an address spells it (``valueFold(_:)``), word for word.
+    static func selector(_ selector: String, bears value: String) -> Bool {
+        guard value.count >= 3 else { return false }
+        if selector.lowercased().contains(value.lowercased()) { return true }
+        let needle = valueFold(value)
+        guard needle.filter({ $0.isLetter || $0.isNumber }).count >= 3 else { return false }
+        return (" " + valueFold(selector) + " ").contains(" " + needle + " ")
+    }
+
+    /// Lowercase, accents and percent-escapes undone, and every run of characters that is not a
+    /// letter or a digit (`_`, `-`, `+`, `.`, `/`, quotes, brackets) one space.
+    static func valueFold(_ text: String) -> String {
+        let decoded = text.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? text
+        let folded = decoded.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+        var out = ""
+        var gap = false
+        for ch in folded {
+            if ch.isLetter || ch.isNumber {
+                if gap, !out.isEmpty { out.append(" ") }
+                out.append(ch)
+                gap = false
+            } else {
+                gap = true
+            }
+        }
+        return out
+    }
+
     public func execute(_ input: WorkflowValue?, _ context: ToolExecutionContext) async throws -> RawToolResult {
         guard let raw = PageToolInput.string(input, "aloha_id"), !raw.isEmpty else {
             return RawToolResult(output: "get_text requires an \"aloha_id\" naming the element to read.", isError: true)
@@ -55,17 +147,21 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             if capped.count == 1 {
+                // The read's receipt note, resolved BEFORE the read like every action's.
+                let note = await Self.readNote(capped[0], resolved.cdpTab, bridge)
                 let result = await bridge.getTextById(capped[0])
-                let text = result.isError ? result.output : Self.truncate(result.output, perId)
+                // The element read is what the turn's answer receipt prefers (`AnswerPageTracker`).
+                if !result.isError { AnswerPageTracker.current(for: context.services).noteRead(alohaId: capped[0]) }
+                let text = result.isError ? result.output : Self.truncate(result.output, perId) + note
                 // ONE OPTIONAL LINE, at the moment a round was spent on one element. The schema has advertised
                 // the list form since this tool learned it, and a corpus row still spent EIGHT of thirteen
                 // calls reading one id at a time before timing out — a description is read far from the
                 // decision. Flag-gated and OFF by baseline, so this path stays byte-identical unless asked.
                 let hint = (context.services?.webExtractionOptions ?? .baseline).batchHints && !result.isError
                     ? "\n(Reading one element per call spends a round each. Pass several ids at once: "
-                      + "aloha_id=\"1f3a9c2b,7b21e40d,3c8f95a1\".)"
+                      + "aloha_id=\"7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1\".)"
                     : ""
                 return resolved.tab.naming(
                     RawToolResult(output: text + hint, isError: result.isError ? true : nil))
@@ -73,9 +169,11 @@ import ToolABI
             var blocks: [String] = []
             var failures = 0
             for id in capped {
+                let note = await Self.readNote(id, resolved.cdpTab, bridge)
                 let result = await bridge.getTextById(id)
-                if result.isError { failures += 1 }
-                blocks.append("[\(id)] \(result.isError ? result.output : Self.truncate(result.output, perId))")
+                if result.isError { failures += 1 } else { AnswerPageTracker.current(for: context.services).noteRead(alohaId: id) }
+                // A failed read gets no note: there is nothing replayable about it.
+                blocks.append("[\(id)] \(result.isError ? result.output : Self.truncate(result.output, perId) + note)")
             }
             if capped.count < unique.count {
                 blocks.append("(read \(capped.count) of \(unique.count) ids — \(Self.maxBatch) per call is the "

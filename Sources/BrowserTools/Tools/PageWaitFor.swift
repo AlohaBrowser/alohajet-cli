@@ -33,7 +33,7 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             let result = await bridge.waitForSelector(selector, timeoutMs: timeoutMs)
             return resolved.tab.naming(RawToolResult(output: result.output, isError: result.isError ? true : nil))
         }

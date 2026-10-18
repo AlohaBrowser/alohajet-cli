@@ -144,4 +144,240 @@ struct PageTypeExecutorToolTests {
         #expect(result.isError != true, "\(result.output)")
         #expect(result.output.contains("Navigated to https://example.com/step2"), "\(result.output)")
     }
+
+    // MARK: - The id named a label, not a field
+
+    /// What the page-side probe answers, scripted. `resolveTypeTarget` is the marker the probe
+    /// carries; the page-side logic itself is exercised by `type_probe_resolution.js` against the
+    /// shipped bytes, so these tests pin only what the BRIDGE does with each answer.
+    private func probeReply(acceptsText: Bool, focused: Bool, tag: String = "SPAN",
+                            redirectedTo: String = "", redirectedTag: String = "",
+                            ambiguous: String = "0", fields: String = "",
+                            fieldsTotal: String? = nil) -> (match: String, reply: JSValue) {
+        let total = fieldsTotal ?? (fields.isEmpty ? "0" : String(fields.components(separatedBy: " | ").count))
+        return (match: "resolveTypeTarget", reply: .object([
+            ("found", .bool(true)),
+            ("acceptsText", .bool(acceptsText)),
+            ("focused", .bool(focused)),
+            ("tag", .string(tag)),
+            ("inputType", .string("")),
+            ("redirectedTo", .string(redirectedTo)),
+            ("redirectedTag", .string(redirectedTag)),
+            ("ambiguous", .string(ambiguous)),
+            ("fields", .string(fields)),
+            ("fieldsTotal", .string(total)),
+        ]))
+    }
+
+    /// The enumeration names twelve fields; on a larger form the refusal must say the list is
+    /// partial rather than tell the model to pick from "the text fields on this page".
+    @Test func aRefusalOnALargeFormSaysTheListIsPartial() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        let twelve = (1...12).map { "f-\($0) (field\($0)) input" }.joined(separator: " | ")
+        fixture.cdp.alohaRawCallReplies = [probeReply(acceptsText: false, focused: false, fields: twelve, fieldsTotal: "15")]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("span-1"), "text": .string("hi")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError == true)
+        #expect(result.output.contains("The first 12 of this page's 15 text fields are: f-1 (field1) input"))
+        #expect(result.output.contains("or read the page for the rest"))
+        #expect(!result.output.contains("The text fields on this page are:"))
+    }
+
+    /// The credential guard applies to the field the keys would actually go to. The page-side
+    /// probe already excludes password-like fields, but the Swift classifier is the policy, so a
+    /// redirect the page did answer with is classified again before anything is sent.
+    @Test func aRedirectIsClassifiedByTheCredentialGuardBeforeTyping() async throws {
+        setenv("ALOHAJET_CREDENTIAL_GUARD", "1", 1)
+        defer { unsetenv("ALOHAJET_CREDENTIAL_GUARD") }
+        let fixture = try await makePageToolsCDPFixture()
+        fixture.cdp.alohaRawCallReplies = [
+            probeReply(acceptsText: true, focused: true, tag: "LABEL", redirectedTo: "pw-like", redirectedTag: "INPUT"),
+            // The snapshot the classifier reads for the REDIRECTED id: a plain text input whose
+            // name says what it holds. The snapshot for the id the model passed falls through to
+            // the mock's default and classifies as nothing.
+            (match: "[aloha-id=\"pw-like\"]", reply: .object([
+                ("bbox", .object([("x", .number(0.0)), ("y", .number(0.0)), ("width", .number(10.0)), ("height", .number(10.0))])),
+                ("tagName", .string("input")),
+                ("label", .string("")),
+                ("role", .string("")),
+                ("inputType", .string("text")),
+                ("name", .string("user_password")),
+            ])),
+        ]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("lbl-1"), "text": .string("hunter2")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError == true)
+        #expect(result.output.contains("refusing to type into a credential field"))
+        #expect(fixture.cdp.commands(for: "Input.dispatchKeyEvent").isEmpty)
+    }
+
+    /// The t625 shape: the model names the `<span>` inside the Body label. The keystrokes go to
+    /// the textarea the label wraps, and the receipt SAYS SO with the id to use from now on -- a
+    /// silent redirect is the mis-type the probe exists to prevent.
+    @Test func aLabelIsResolvedToItsFieldAndTheReceiptNamesIt() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        fixture.cdp.alohaRawCallReplies = [probeReply(
+            acceptsText: true, focused: true, redirectedTo: "7197-34373b52", redirectedTag: "TEXTAREA")]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("7197-6643125d"), "text": .string("hi")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError != true)
+        // The receipt is the TOOL's, not the bridge's sentence: it names the field first, since
+        // that is the id the model reuses, and then says what the id it passed was.
+        #expect(result.output.contains("Typed into element \"7197-34373b52\"."))
+        #expect(result.output.contains("\"7197-6643125d\" is a label for that <textarea>"))
+        #expect(result.output.contains("use \"7197-34373b52\" for this field from now on"))
+        // The keystrokes were sent: a Backspace clear (down/up) then "hi" (down/up each).
+        #expect(fixture.cdp.commands(for: "Input.dispatchKeyEvent").count == 6)
+    }
+
+    /// The redirect survives the submit branch too: a search box named by its label is typed
+    /// into, submitted, and the receipt still says which id the field really has.
+    @Test func aRedirectIsReportedOnTheSubmitBranchToo() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        fixture.cdp.alohaRawCallReplies = [probeReply(
+            acceptsText: true, focused: true, tag: "LABEL", redirectedTo: "q-1", redirectedTag: "INPUT")]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("lbl-1"), "text": .string("a"), "submit": .bool(true)]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError != true)
+        #expect(result.output.contains("Typed into element \"q-1\" and pressed Enter to submit."))
+        #expect(result.output.contains("\"lbl-1\" is a label for that <input>"))
+        #expect(result.output.contains("use \"q-1\" for this field from now on"))
+    }
+
+    /// A batched fill names the field each redirected entry went to, so the id the model reuses
+    /// for that field next round is the field's own.
+    @Test func aBatchNamesTheFieldARedirectedEntryWentTo() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        fixture.cdp.alohaRawCallReplies = [probeReply(
+            acceptsText: true, focused: true, redirectedTo: "body-1", redirectedTag: "TEXTAREA")]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["fields": .array([.object(["aloha_id": .string("span-1"), "text": .string("hello")])])]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError != true)
+        #expect(result.output.contains("Filled 1 field(s): body-1 (the <textarea> that span-1 labels; use it from now on)."))
+    }
+
+    /// Nothing associates the element with one field, so the refusal NAMES the page's text
+    /// fields -- an enumeration the model can act on, where "re-read the page" was advice it
+    /// demonstrably could not. No keystrokes go anywhere.
+    @Test func aRefusalNamesThePagesTextFieldsInsteadOfSayingReadThePage() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        fixture.cdp.alohaRawCallReplies = [probeReply(
+            acceptsText: false, focused: false,
+            fields: "7197-48a3a8e3 (url) input | 7197-51b50734 (title) textarea | 7197-34373b52 (body) textarea")]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("7197-6643125d"), "text": .string("hi")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError == true)
+        #expect(result.output.contains("cannot accept typed text (it is <span>)"))
+        #expect(result.output.contains("No keystrokes were sent."))
+        #expect(result.output.contains("7197-34373b52 (body) textarea"))
+        #expect(result.output.contains("Pass one of THOSE ids"))
+        #expect(!result.output.contains("Re-read the page"))
+        #expect(fixture.cdp.commands(for: "Input.dispatchKeyEvent").isEmpty)
+    }
+
+    /// A wrapper holding two fields is a guess, and a guess types the body into the title: the
+    /// refusal carries the count, and still offers the page's fields.
+    @Test func aWrapperAroundTwoFieldsIsRefusedWithTheCount() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        fixture.cdp.alohaRawCallReplies = [probeReply(
+            acceptsText: false, focused: false, tag: "DIV", ambiguous: "2",
+            fields: "a1 (title) input | a2 (body) textarea")]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("wrap-1"), "text": .string("hi")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError == true)
+        #expect(result.output.contains("It wraps 2 different text fields"))
+        #expect(result.output.contains("a2 (body) textarea"))
+        #expect(fixture.cdp.commands(for: "Input.dispatchKeyEvent").isEmpty)
+    }
+
+    /// A page with nothing typable on it says so, rather than offering an empty list.
+    @Test func aPageWithNoTextFieldSaysSo() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        fixture.cdp.alohaRawCallReplies = [probeReply(acceptsText: false, focused: false, tag: "BUTTON")]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("btn-1"), "text": .string("hi")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError == true)
+        #expect(result.output.contains("This page has no text field that can take typing."))
+        #expect(!result.output.contains("Pass one of THOSE ids"))
+    }
+
+    /// An id the page does not hold comes back with the stale-id diagnosis, not a bare "not
+    /// found": the probe misses, the bridge asks the page why, and the page's answer is the
+    /// receipt. The diagnosis itself is pinned by `StaleAlohaIdDiagnosisTests`.
+    @Test func aStaleIdIsDiagnosedOnTheTypePath() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        let diagnosis = "Element with aloha-id 4f3a-2c05abf8 not found. That id was minted for a different "
+            + "page or render (it carries generation 4f3a; this page is generation 9f21), so no element "
+            + "here can ever match it. The page is now https://example.com. Re-read the page and use an id "
+            + "from that new snapshot; retrying this id, or re-navigating to the same URL, cannot make it resolve."
+        fixture.cdp.alohaRawCallReplies = [
+            (match: "resolveTypeTarget", reply: .object([("found", .bool(false))])),
+            (match: "minted for an earlier page", reply: .string(diagnosis)),
+        ]
+        let tool = PageTypeExecutorTool()
+        let services = NativeToolServices(tabsService: fixture.tabsService)
+        let result = try await tool.execute(
+            .object(["aloha_id": .string("4f3a-2c05abf8"), "text": .string("hi")]),
+            makePageToolContext(services: services))
+        await fixture.client.close()
+
+        #expect(result.isError == true)
+        #expect(result.output.contains(diagnosis))
+        #expect(fixture.cdp.commands(for: "Input.dispatchKeyEvent").isEmpty)
+    }
+
+    /// The probe the bridge ships carries the markers the Node harness extracts by, and the call
+    /// sits on its own line after the END comment: a call on the comment's line is a SyntaxError
+    /// the bridge's `try?` swallows, which is how eight clicks went into a cookie banner once.
+    @Test func theShippedProbeCarriesItsHarnessMarkersAndCallsOnItsOwnLine() throws {
+        let path = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/BrowserTools/Runtime/PageBridge.swift")
+        let source = try String(contentsOf: path, encoding: .utf8)
+        // The bridge's own file, not this one: `GetTextBatchTests` records a `#filePath` read that
+        // resolved to the test's own source and stayed green for the wrong reason.
+        #expect(source.contains("public func type(_ alohaId: String, _ text: String, replace: Bool)"))
+        #expect(source.contains("// BEGIN type-probe js"))
+        #expect(source.contains("// END type-probe js\n              return resolveTypeTarget(el, document);"))
+    }
 }

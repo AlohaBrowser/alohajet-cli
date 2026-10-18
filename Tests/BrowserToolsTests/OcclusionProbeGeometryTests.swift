@@ -226,6 +226,55 @@ func sliceJSFunction(named name: String, from source: String) -> String {
         #expect(result == nil)
     }
 
+    // MARK: - Targets a pointer could never land on
+
+    /// A skip-to-content link clipped to a pixel sits under whatever is drawn at its corner. It is
+    /// not a click target, so nothing can be "in the way" of it -- reporting the page's own
+    /// product panel as its occluder is what sent the model clicking the panel to dismiss it.
+    @Test func aOnePixelTargetIsNotCovered() {
+        let pixel = #"{ id: "skip", tag: "a", alohaId: "skip", rect: { left: 10, top: 10, width: 1, height: 1 } }"#
+        let panel = #"{ id: "panel", tag: "div", alohaId: "panel", z: 10, rect: { left: 0, top: 0, width: 1000, height: 800 } }"#
+        #expect(probeResult(makeContext(), specsJS: "[\(pixel), \(panel)]", targetId: "skip") == nil)
+    }
+
+    @Test func aTargetUnderFourPixelsEitherWayIsNotCovered() {
+        let thin = #"{ id: "thin", tag: "a", alohaId: "thin", rect: { left: 10, top: 10, width: 300, height: 3 } }"#
+        let panel = #"{ id: "panel", tag: "div", alohaId: "panel", z: 10, rect: { left: 0, top: 0, width: 1000, height: 800 } }"#
+        #expect(probeResult(makeContext(), specsJS: "[\(thin), \(panel)]", targetId: "thin") == nil)
+    }
+
+    /// Four pixels is the threshold: a small but real target under a full cover is still covered.
+    @Test func aFourPixelTargetUnderAFullCoverIsStillCovered() {
+        let small = #"{ id: "small", tag: "a", alohaId: "small", rect: { left: 10, top: 10, width: 4, height: 4 } }"#
+        let panel = #"{ id: "panel", tag: "div", alohaId: "panel", z: 10, rect: { left: 0, top: 0, width: 1000, height: 800 } }"#
+        #expect(probeResult(makeContext(), specsJS: "[\(small), \(panel)]", targetId: "small") == "panel")
+    }
+
+    /// The sr-only recipe keeps a normal-sized box and clips it to nothing. The probe reads the
+    /// computed `clip` / `clip-path` the walker caches, so the harness supplies that lookup.
+    @Test func anSrOnlyClippedTargetIsNotCovered() {
+        let ctx = makeContext()
+        ctx.evaluateScript("function getComputedStyleCached(el) { return el.__style || null; }")
+        let script = """
+        (function () {
+          buildDom([
+            { id: "sr", tag: "input", alohaId: "sr", rect: { left: 10, top: 10, width: 200, height: 40 } },
+            { id: "panel", tag: "div", alohaId: "panel", z: 10, rect: { left: 0, top: 0, width: 1000, height: 800 } }
+          ]);
+          var sr = __nodeById("sr");
+          sr.__style = { clip: "rect(0px, 0px, 0px, 0px)", clipPath: "" };
+          var clipped = probeOccluder(sr);
+          sr.__style = { clip: "auto", clipPath: "inset(50%)" };
+          var inset = probeOccluder(sr);
+          sr.__style = { clip: "auto", clipPath: "" };
+          var plain = probeOccluder(sr);
+          return [clipped ? "covered" : "free", inset ? "covered" : "free", plain ? plain.__alohaId : "free"].join(",");
+        })()
+        """
+        let value = ctx.evaluateScript(script)!
+        #expect(value.toString() == "free,free,panel")
+    }
+
     // MARK: - Exemption cases
 
     @Test func labelForDelegationStaysReachable() {

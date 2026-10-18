@@ -40,6 +40,24 @@ import ToolABI
             isError: true)
     }
 
+    /// Where the keystrokes went when the id named a label or a wrapper rather than a field, or
+    /// nil when they went where the caller pointed. The bridge resolves a `<label>` (or a wrapper
+    /// around exactly one field) to its control and reports that id on `rawResult`; the receipt is
+    /// composed HERE, so it has to say so itself -- the bridge's own sentence never reached the
+    /// model, and a silent redirect is the mis-type the resolution exists to prevent.
+    static func redirect(in result: AgentActionResult) -> (id: String, tag: String)? {
+        guard let id = result.rawResult?["redirectedTo"]?.stringValue, !id.isEmpty else { return nil }
+        return (id, result.rawResult?["redirectedTag"]?.stringValue ?? "field")
+    }
+
+    /// The sentence that follows the receipt's first when the keystrokes were redirected: which id
+    /// the model passed, what it was, and which id to use for this field from now on.
+    static func redirectNote(from alohaId: String, to redirect: (id: String, tag: String)?) -> String {
+        guard let redirect else { return "" }
+        return " \"\(alohaId)\" is a label for that <\(redirect.tag)> and holds no text itself; "
+            + "use \"\(redirect.id)\" for this field from now on."
+    }
+
     struct Field: Equatable {
         let alohaId: String
         let text: String
@@ -96,17 +114,29 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             // Two backend URL reads bracket the action so the receipt can say whether the
             // page moved — see PageDelta, and the 44-row blind-receipt measurement behind it.
             let urlBefore = bridge.currentPageURL()
             // Which element this was, in replayable terms — resolved before the action, since typing can
             // re-render the form and the snapshot would then hold a different node. See `PageToolReceipt`.
-            let selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
+            var selectorNote = await PageToolReceipt.liveNote(alohaId: alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_type")
             let typeResult = await bridge.type(alohaId, text, replace: replace)
             if typeResult.isError {
                 return resolved.tab.naming(RawToolResult(output: typeResult.output, isError: true))
             }
+            // THE ELEMENT THE KEYSTROKES WENT TO, which is the field when the id named its label.
+            // The receipt names that field first, since it is the id the model reuses, and the
+            // selector is the field's too: the snapshot read is still the pre-typing one here.
+            let redirect = Self.redirect(in: typeResult)
+            let typedInto = "\"\(redirect?.id ?? alohaId)\""
+            let redirectNote = Self.redirectNote(from: alohaId, to: redirect)
+            if let redirect {
+                selectorNote = await PageToolReceipt.liveNote(alohaId: redirect.id, tab: resolved.cdpTab, bridge: bridge, tool: "page_type")
+            }
+            // Arms `page_click`'s duplicate-submit form read for THIS tab only -- a duplicate
+            // submission needs a filled form, and a filled form needs typing. See `SubmittedForms`.
+            submittedForms.noteTyped(resolved.tab.id, scope: context.sessionId)
             // The same one-line affordance `get_text` carries, at the same kind of moment: a round spent on
             // one field, when `page_type` -> `page_type` is the most common consecutive pair in the corpus.
             // Flag-gated, OFF by baseline.
@@ -123,28 +153,70 @@ import ToolABI
                 // Settled, not immediate: typing rarely navigates, so this costs the grace window
                 // only in the case where the receipt would have been right anyway.
                 let urlAfter = await bridge.settledPageURL(after: urlBefore)
-                return resolved.tab.naming(
-                    RawToolResult(output: "Typed into element \"\(alohaId)\"."
-                                  + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
-                                  + selectorNote + hint,
-                                  isError: nil))
+                let receipt = RawToolResult(output: "Typed into element \(typedInto)." + redirectNote
+                                            + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+                                            + selectorNote + hint,
+                                            isError: nil)
+                // THE PAGE, ALWAYS -- not gated on the fingerprint the other tools use. That gate
+                // compares the document generation, the element count and the URL, and a typed
+                // VALUE changes none of them, so gating a type on it suppressed the page every
+                // time. Measured on WebArena run 33956015125 against 33918469392, the four Magento
+                // report tasks that type two dates and run a report:
+                //
+                //     t706  2/3 -> 0/3     t711  3/3 -> 0/3
+                //     t712  3/3 -> 1/3     t713  3/3 -> 0/3
+                //
+                // shopping_admin fell 11/30 to 1/30 and `page_type` calls rose 369 -> 677: unable
+                // to see whether the date had landed in a picker that reformats and rejects input,
+                // the model retyped. For a type the value IS the change, and confirming it is the
+                // whole reason to send the page back.
+                return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved))
             }
             let submitResult = await bridge.pressKeys("Enter")
             if submitResult.isError {
-                return resolved.tab.naming(RawToolResult(
-                    output: "Typed into element \"\(alohaId)\", but submitting Enter failed: \(submitResult.output)",
-                    isError: true))
+                // The typing LANDED before the Enter failed, so the page has changed and the model
+                // needs it to decide what to do next -- an error that hides it costs a re-read.
+                let receipt = RawToolResult(
+                    output: "Typed into element \(typedInto), but submitting Enter failed: \(submitResult.output)"
+                        + redirectNote,
+                    isError: true)
+                return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved, evenIfError: true))
             }
             // AFTER the Enter, which is the action that navigates. Read before it — as this was —
             // the receipt reports the URL from before the submit, so a form submission that worked
             // is announced as "The page did NOT navigate" every single time.
             let urlAfter = await bridge.settledPageURL(after: urlBefore)
-            return resolved.tab.naming(
-                RawToolResult(output: "Typed into element \"\(alohaId)\" and pressed Enter to submit."
-                              + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
-                              + selectorNote + hint,
-                              isError: nil))
+            // A form that was SUBMITTED is the one type whose result matters most, and it was the
+            // one branch sending no page at all: `type(submit: true)` returned 230 characters of
+            // receipt and nothing else. Measured over 579 distinct `page_type` calls in WebArena
+            // run 34366647873: 36% came back with a page and 39% with a bare receipt, against 65%
+            // for `page_click`. That gap is this branch. It is also precisely the shape on which
+            // "answered without looking" fires -- 64 of 199 answer turns (32%) in the same run --
+            // because the model submitted a form and had nothing to look at.
+            //
+            // ONCE, AFTER THE WHOLE STRING AND THE ENTER -- never per keystroke, and after
+            // `settledPageURL` has waited out the navigation the Enter caused. Taking it before that
+            // wait would capture the page the form was submitted FROM, which is worse than nothing.
+            let receipt = RawToolResult(
+                output: "Typed into element \(typedInto) and pressed Enter to submit." + redirectNote
+                    + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+                    + selectorNote + PageToolReceipt.submittedNote + hint,
+                isError: nil)
+            return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved))
         }
+    }
+
+    /// ONE BATCHED FIELD'S RECEIPT: the same note a single-field type writes, `[text=]` included.
+    ///
+    /// The batch path used to leave the text out (`liveNote(…, text: false)`), so a form filled
+    /// the way the batch hint recommends reached llmdex with no words for any of its fields -- the
+    /// inventory the mint is shown read "NO TEXT -- :has-text() cannot match this element" for a
+    /// field whose placeholder said "From" -- while the same field typed on its own carried
+    /// `[text="From"]`. A field has no rendered text, so its `[text=]` is its aria-label,
+    /// placeholder or title -- never its value, which is what was typed into it
+    /// (``ElementTextProbe``). Agent repo 9f8db00 (2026-10-08), re-implemented here.
+    static func fieldNote(alohaId: String, tab: StepTraceTab?, bridge: AgentBrowserBridge) async -> String {
+        await PageToolReceipt.liveNote(alohaId: alohaId, tab: tab, bridge: bridge, tool: "page_type")
     }
 
     /// WHY A PARTIAL FILL MUST NOT SUBMIT. Batching a read is harmless when one id is stale — the caller gets
@@ -158,44 +230,93 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             let urlBefore = bridge.currentPageURL()
+            // WHICH ELEMENT EACH FIELD WAS, in replayable terms, resolved BEFORE anything is typed:
+            // typing can re-render the form and the snapshot would then hold different nodes. The
+            // single-field path has carried this since `PageToolReceipt` existed; this path -- the
+            // one the batch hint tells the model to prefer -- carried only the ids, so a form
+            // filled the recommended way left the trace with no selector for any of its fields
+            // (measured on llmdex's mined trajectories, 2026-09-13: `page_type` receipts named a
+            // selector in 270 of 2120 results, `page_click` in 4370 of 8703).
+            var notes: [String: String] = [:]
+            for field in fields where notes[field.alohaId] == nil {
+                notes[field.alohaId] = await Self.fieldNote(alohaId: field.alohaId, tab: resolved.cdpTab, bridge: bridge)
+            }
             var filled: [String] = []
             var failures: [String] = []
+            // The ids the keystrokes actually went to, in order: a label's id becomes its field's.
+            var typedInto: [String] = []
             for field in fields {
                 let result = await bridge.type(field.alohaId, field.text, replace: field.replace)
                 if result.isError {
                     failures.append("\"\(field.alohaId)\": \(result.output)")
                 } else {
-                    filled.append(field.alohaId)
+                    // The id the keystrokes went to, first; and when that is not the id the caller
+                    // passed, which one it was resolved from, so the next call passes the field. The
+                    // selector rides after it, per field, in the same bracket form the other
+                    // receipts use -- the field's own when the id named its label (the snapshot read
+                    // is still the pre-typing one here).
+                    if let redirect = Self.redirect(in: result) {
+                        let note = await Self.fieldNote(alohaId: redirect.id, tab: resolved.cdpTab, bridge: bridge)
+                        notes[redirect.id] = note
+                        typedInto.append(redirect.id)
+                        filled.append("\(redirect.id) (the <\(redirect.tag)> that \(field.alohaId) labels; use it from now on)" + note)
+                    } else {
+                        typedInto.append(field.alohaId)
+                        filled.append(field.alohaId + (notes[field.alohaId] ?? ""))
+                    }
+                    submittedForms.noteTyped(resolved.tab.id, scope: context.sessionId)
                 }
             }
             let delta = PageDelta.describe(urlBefore: urlBefore,
                                            urlAfter: await bridge.settledPageURL(after: urlBefore))
 
+            // EVERY EXIT FROM HERE CARRIES THE PAGE. This is the path the batch hint tells the
+            // model to prefer -- "Pass the whole form at once" -- so a batch that returned a bare
+            // receipt sent the model down the recommended road and left it blind at the end of
+            // it. `withPageSnapshot` skips an errored receipt on its own, so the partly-filled
+            // case below attaches the page exactly when something WAS filled.
             if !failures.isEmpty {
                 let filledNote = filled.isEmpty ? "No field was filled." : "Filled \(filled.count): \(filled.joined(separator: ", "))."
                 let submitNote = submit ? " Did NOT submit, because the form is only partly filled." : ""
-                return RawToolResult(output: "\(filledNote) Failed \(failures.count) — \(failures.joined(separator: "; "))."
-                                     + submitNote + delta,
-                                     isError: filled.isEmpty ? true : nil)
+                let receipt = RawToolResult(output: "\(filledNote) Failed \(failures.count) — \(failures.joined(separator: "; "))."
+                                            + submitNote + delta,
+                                            isError: filled.isEmpty ? true : nil)
+                return await withPageSnapshot(receipt, context, resolved)
             }
             guard submit else {
-                return RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", "))." + delta,
-                                     isError: nil)
+                let receipt = RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", "))." + delta,
+                                            isError: nil)
+                return await withPageSnapshot(receipt, context, resolved)
             }
             let submitResult = await bridge.pressKeys("Enter")
             if submitResult.isError {
-                return RawToolResult(
+                // Same as the single-field branch: the fields were filled, the page changed, and the
+                // error must not hide it.
+                let receipt = RawToolResult(
                     output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", ")), "
                         + "but submitting Enter failed: \(submitResult.output)" + delta,
                     isError: true)
+                return await withPageSnapshot(receipt, context, resolved, evenIfError: true)
             }
+            // Settled, like the single-field submit above: the Enter is what navigates, and an
+            // immediate read names the page the form was submitted from.
             let urlFinal = await bridge.settledPageURL(after: urlBefore)
-            return RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", ")) "
-                                 + "and pressed Enter to submit."
-                                 + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlFinal),
-                                 isError: nil)
+            // WHICH FIELD THE ENTER WENT INTO. With two or more `[selector=…]` groups in the fields
+            // list and one `[submitted=enter]` at the end, a mint could not bind the submit to a
+            // field (agent run osm-form-r2, 2026-09-23: it distilled `submit form` and refused
+            // itself). Enter is pressed where the caret is -- the field typed LAST -- so that
+            // field's selector is repeated right before the token, in the sentence the
+            // single-field and press-keys receipts already use.
+            let submitBinding = typedInto.last.map { " Pressed Enter in element \"\($0)\"." + (notes[$0] ?? "") } ?? ""
+            let receipt = RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", ")) "
+                                        + "and pressed Enter to submit."
+                                        + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlFinal)
+                                        + submitBinding
+                                        + PageToolReceipt.submittedNote,
+                                        isError: nil)
+            return await withPageSnapshot(receipt, context, resolved)
         }
     }
 }

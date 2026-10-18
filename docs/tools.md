@@ -34,13 +34,13 @@ Work with browser tabs. Six actions.
 
 **list** — every open tab: its id, title, URL, and which one is in use.
 
-**read** — returns one tab's page as interactive markdown: headings, lists, links, tables and paragraphs, with every actionable element (link, button, input, select) carrying a trailing {aloha-id="..."} marker. Those ids are what page_click, page_type, page_select and get_text address. A tab that cannot produce interactive markdown (a non-web tab, or one with no attached DOM) falls back to plain markdown with no ids.
+**read** — returns one tab's page as interactive markdown: headings, lists, links, tables and paragraphs, with every actionable element (link, button, input, select) carrying a trailing {aloha-id="..."} marker, and every checkbox or radio saying whether it is checked. Those ids are what page_click, page_type, page_select and get_text address. Without tab_id it reads the tab in use. A tab that cannot produce interactive markdown (a non-web tab, or one with no attached DOM) falls back to plain markdown with no ids.
 
-**open** — opens a new tab at url AND returns its page in the same result, so one call navigates and reads. Only http and https URLs are accepted. Pass controlled_by: "user" instead when you are handing the user a link to read rather than a page you will drive; that opens a tab that is the user's and returns no page.
+**open** — ONE call opens a new tab at url, puts it in use (the page tools now act on it) AND returns its page, so there is no separate "use" or "read" call to make. Only http and https URLs are accepted. When the user asks you to open a page, this tab is the page they asked for: leave it open. Pass controlled_by: "user" instead only to hand the user a link to read without driving it; that opens a tab that is the user's and returns no page.
 
-**close** — closes a tab by id. Close the tabs you opened once you are done with them. A tab that is not your chat's is refused; "list" says whose each tab is.
+**close** — closes a tab by id. Close a tab you opened only for your own lookups once you are done with it; never close a tab the user asked you to open, or the one your answer points them to. A tab that is not your chat's is refused; "list" says whose each tab is.
 
-**use** — makes an existing tab the one the page tools address. Exactly one tab is in use at a time; open takes it too, unless you pass use: false.
+**use** — makes an EXISTING tab the one the page tools address. Exactly one tab is in use at a time; a tab you just opened is already in use.
 
 **unuse** — clears that selection, leaving no tab in use.
 
@@ -49,9 +49,9 @@ Page state is never pushed to you and nothing refreshes a page you have already 
 | parameter | type | required | notes |
 | --- | --- | --- | --- |
 | `action` | `string` | yes | Which operation to run. one of `list`, `read`, `open`, `close`, `use`, `unuse` |
-| `tab_id` | `string` | no | The tab to act on. Required by "read", "close" and "use"; ignored otherwise. |
+| `tab_id` | `string` | no | The tab to act on. Required by "close" and "use". For "read", omit it to read the tab in use. Ignored otherwise. |
 | `url` | `string` | no | The page to load. Required by "open"; http and https only. |
-| `use` | `boolean` | no | Applies to "open". Default true: the new tab becomes the one the page tools address, sparing a separate "use" call. The page comes back in the result either way. Pass false for a batch of opens, or when you do not intend to interact with the page. Ignored when controlled_by is "user". default `true` |
+| `use` | `boolean` | no | Applies to "open". Default true: the new tab is in use as soon as it opens (no separate "use" call), and the page comes back in the result. Pass false only for a batch of background opens you will not interact with. Ignored when controlled_by is "user". default `true` |
 | `controlled_by` | `string` | no | Applies to "open". "agent" (the default) opens a tab this session owns: its network traffic is recorded when the session logs it, and it is taken into use with its page in the result. "user" opens a tab that is the user's instead — no recording, not taken into use, no page in the result, and close refuses it afterwards. Use it for links you are handing the user to read, not pages you intend to drive. one of `agent`, `user`, default `"agent"` |
 | `include_screenshot` | `boolean` | no | Applies to "read" and "open". Attaches a viewport screenshot next to the markdown, so layout, modals and anything the markdown cannot express are visible. Costs image tokens. |
 
@@ -74,7 +74,7 @@ Click an element on the active tab by its aloha-id. click_type selects single/do
 
 `readOnlyHint: false` · `destructiveHint: true` · `openWorldHint: true`
 
-Type text into input/textarea/contenteditable elements by aloha-id. To fill a FORM, pass all of its fields in one call as "fields": [{"aloha_id":"1f3a9c2b","text":"..."},{"aloha_id":"7b21e40d","text":"..."}] (up to 20, filled in order) with submit:true to press Enter once at the end — one call instead of one per field. For a single field, pass aloha_id and text directly. One of the two shapes is required: either aloha_id with text, or fields.
+Type text into input/textarea/contenteditable elements by aloha-id. To fill a FORM, pass all of its fields in one call as "fields": [{"aloha_id":"7959-1f3a9c2b","text":"..."},{"aloha_id":"7959-7b21e40d","text":"..."}] (up to 20, filled in order) with submit:true to press Enter once at the end — one call instead of one per field. For a single field, pass aloha_id and text directly. One of the two shapes is required: either aloha_id with text, or fields.
 
 | parameter | type | required | notes |
 | --- | --- | --- | --- |
@@ -107,11 +107,11 @@ Select an option in a &lt;select&gt; dropdown on the active tab by its aloha-id,
 
 `readOnlyHint: true` · `destructiveHint: false` · `openWorldHint: true`
 
-Read the visible text (or input value) of elements on the active tab by aloha-id. Pass SEVERAL ids at once as a comma-separated list ("1f3a9c2b,7b21e40d,3c8f95a1", up to 20) and each is returned labelled with its id — one call instead of one per element.
+Read the visible text (or input value) of elements on the active tab by aloha-id. Pass SEVERAL ids at once as a comma-separated list ("7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1", up to 20) and each is returned labelled with its id — one call instead of one per element.
 
 | parameter | type | required | notes |
 | --- | --- | --- | --- |
-| `aloha_id` | `string` | yes | One aloha-id, or several as a comma-separated list ("1f3a9c2b,7b21e40d,3c8f95a1", up to 20 per call). Reading a whole list of rows in one call costs one round instead of one round each. |
+| `aloha_id` | `string` | yes | One aloha-id, or several as a comma-separated list ("7959-1f3a9c2b,7959-7b21e40d,7959-3c8f95a1", up to 20 per call). Reading a whole list of rows in one call costs one round instead of one round each. |
 | `max_chars` | `integer` | no | Total character budget for the text returned, split evenly across the ids read. A read that hits it is truncated and says so. Raise it deliberately: reading a container element can return an entire page. default `20000`, min 1 |
 
 ---

@@ -369,6 +369,13 @@ final class MockCDP {
         case "Page.navigate":
             if let url = params["url"]?.stringValue, !url.isEmpty {
                 pageUrl = url
+                // The browser's own listing follows the navigation, as Chrome's
+                // `Target.getTargets` does: a tool that re-reads the listing after
+                // navigating (tab attribution's `syncTabsWithBrowser`) must see the page
+                // the tab is on now, not the URL it was created with.
+                if let sessionId, let targetId = sessionToTarget[sessionId], targets[targetId] != nil {
+                    targets[targetId]?.url = url
+                }
             }
             return .object([("frameId", .string("frame-1"))])
 
@@ -445,6 +452,36 @@ final class MockCDP {
             // args baked into it.
             if expression.contains("collectDomTree("), let domTreeReply {
                 return .object([("result", .object([("type", .string("object")), ("value", .array(domTreeReply))]))])
+            }
+            // THE ACTION RECEIPT PROBES (`ReceiptProbes.swift`, `MainHeadingReceipt.swift`) answer
+            // "nothing found": no element has focus, no text, no live path, no heading. Each treats
+            // a non-empty string as a finding -- the body text would become the focused element's
+            // aloha-id, or a `[text="Example Domain"]` on every receipt. Recognised by the comment
+            // markers the probes carry for exactly this purpose.
+            if expression.contains("/* receipt: focused element */")
+                || expression.contains("/* receipt: element text */")
+                || expression.contains("/* receipt: live selector */")
+                || expression.contains("/* receipt: anchor */") {
+                return .object([("result", .object([("type", .string("string")), ("value", .string(""))]))])
+            }
+            // The resolver is "already installed", so the anchor probe never ships the whole
+            // resolver source to the fake page.
+            if expression.contains("window.__snips.resolveAll === 'function'") {
+                return .object([("result", .object([("type", .string("string")), ("value", .string("y"))]))])
+            }
+            if expression.contains("/* receipt: main heading */") {
+                return .object([("result", .object([("type", .string("string")), ("value", .string("[]"))]))])
+            }
+            // THE CLICK RECEIPT PROBES answer "" -- nothing covered, nothing hidden, no control
+            // state, no form values -- rather than the body-text default below. Each of them treats
+            // a non-empty string as a finding ("a layer was hidden", "the click was delivered to
+            // <x>"), and the consent probe then withholds the click, so the default would turn every
+            // happy-path click test into a refused one. Recognised by the markers the probes carry.
+            if expression.contains("BEGIN overlay-hider js")
+                || expression.contains("elementFromPoint")
+                || expression.contains("aria-pressed")
+                || expression.contains("input, textarea, select") {
+                return .object([("result", .object([("type", .string("string")), ("value", .string(""))]))])
             }
             // A raw (unwrapped) `window.__aloha.<verb>(...)` call — see
             // `alohaRawCallReplies`'s doc comment.

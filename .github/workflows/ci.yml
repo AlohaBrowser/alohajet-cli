@@ -120,6 +120,45 @@ jobs:
         # first time anybody runs it, and a tag cannot be cleanly re-pushed. Compile only —
         # the tests ran above, on the same sources.
         run: swift build -c release --product alohajet --arch arm64 --arch x86_64
+      # The overlay hider's page-side JavaScript is a Swift string the Swift tests can only
+      # inspect as text; this runs its logic against a fake DOM, in the exact shape the bridge
+      # ships it (BEGIN/END markers, statements-then-call). Node is on the hosted runner.
+      - name: Page-side overlay hider (fake DOM)
+        run: node Tests/BrowserToolsTests/overlay_hider.js
+
+      # The type probe's label-to-field resolution is likewise a Swift string; this runs the bytes
+      # between its BEGIN/END markers against a fake DOM, shipped shape included.
+      - name: Page-side type probe (fake DOM)
+        run: node Tests/BrowserToolsTests/type_probe_resolution.js
+
+      # The selector resolver the receipt probes verify an address with, and the agent's scenario
+      # replays resolve with, is a Swift string too; this runs the bytes between its BEGIN/END
+      # markers against fake documents, every procedural pseudo-class included.
+      - name: Page-side selector resolver (fake DOM)
+        run: node Tests/BrowserToolsTests/selector_resolver.js
+
+      # The receipt probes are Swift strings too. Each harness runs the shipped bytes against fake
+      # documents: the identity probe (`[index=i/N]`, `[attrs=…]`), its list half (`[list=… i/n]`),
+      # the main-heading probe a whole-page read carries, and the registry check that keeps
+      # RECEIPTS.md equal to what the client writes and the resolver understands.
+      - name: Receipt identity probe (fake DOM)
+        run: node Tests/BrowserToolsTests/receipt_identity.js
+      - name: Live selector verification (fake DOM)
+        run: node Tests/BrowserToolsTests/live_selector.js
+      # The anchor rule, run against the REAL resolver (both extracted from their Swift files), so
+      # an anchor this harness accepts is one a replay resolves.
+      - name: Receipt anchor rule (fake DOM, real resolver)
+        run: node Tests/BrowserToolsTests/receipt_anchor.js
+      - name: Receipt list position (fake DOM)
+        run: node Tests/BrowserToolsTests/list_position.js
+      - name: Receipt element text and its fallbacks (fake DOM)
+        run: node Tests/BrowserToolsTests/element_text.js
+      - name: Main heading probe (fake DOM)
+        run: node Tests/BrowserToolsTests/main_heading.js
+      - name: Answer receipt page matcher (fake DOM)
+        run: node Tests/BrowserToolsTests/answer_receipt.js
+      - name: RECEIPTS.md matches the code
+        run: node Tests/BrowserToolsTests/receipt_registry.js
 
   linux:
     name: Linux (Swift 6.2.3, Ubuntu 24.04)

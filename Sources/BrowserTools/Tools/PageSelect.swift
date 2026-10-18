@@ -37,14 +37,18 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             // Two backend URL reads bracket the action so the receipt can say whether the
             // page moved — see PageDelta, and the 44-row blind-receipt measurement behind it.
             let urlBefore = bridge.currentPageURL()
+            let fingerprintBefore = await bridge.pageFingerprint()
             // Which element this was, in replayable terms — before the action, since selecting an option
             // commonly re-renders dependent controls. See `PageToolReceipt`.
-            let selectorNote = PageToolReceipt.selectorNote(alohaId: alohaId, tab: resolved.cdpTab)
+            let selectorNote = await PageToolReceipt.liveNote(alohaId: alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_select")
             let result = await bridge.selectOptionById(alohaId, text: text, index: index)
+            // A select-only form is a filled form: arm `page_click`'s duplicate-submit read for this
+            // tab the way `page_type` does. See `SubmittedForms`.
+            if !result.isError { submittedForms.noteTyped(resolved.tab.id, scope: context.sessionId) }
             // Settled, not immediate. A select that fires an onchange navigation — Magento's
             // sort-order and page-size controls both do — commits after this line, so an immediate
             // read names the page the select just left.
@@ -55,11 +59,21 @@ import ToolABI
             // window to every failed call for a value nothing reads.
             let urlAfter = result.isError ? urlBefore
                                           : await bridge.settledPageURL(after: urlBefore)
-            return resolved.tab.naming(RawToolResult(
+            let receipt = RawToolResult(
                 output: result.isError ? result.output
                     : result.output + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
                         + selectorNote,
-                isError: result.isError ? true : nil))
+                isError: result.isError ? true : nil)
+            // The page the select left behind, when it changed one: a select that re-renders
+            // dependent controls or navigates voids the ids the model holds -- see `withPageSnapshot`.
+            let fingerprintAfter = await bridge.pageFingerprint()
+            let pageMoved = AgentBrowserBridge.pageMoved(before: fingerprintBefore, after: fingerprintAfter)
+            // Stamped AFTER `naming`, which skips a result that already carries metadata -- see
+            // `PageStructureChange` for what a host does with the mark.
+            return PageStructureChange.stamp(
+                resolved.tab.naming(
+                    await withPageSnapshot(receipt, context, resolved, changed: pageMoved)),
+                moved: pageMoved)
         }
     }
 }
