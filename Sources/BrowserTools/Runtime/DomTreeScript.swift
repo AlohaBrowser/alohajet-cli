@@ -1642,10 +1642,22 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
 
     if (node.nodeType === Node.TEXT_NODE) {
       const textNode = node;
-      const text = (textNode.textContent || "").trim();
-      if (!text || text.length <= 1) return null;
+      let text = (textNode.textContent || "").trim();
       const parent = textNode.parentElement;
       if (!parent || parent.tagName.toLowerCase() === "script") return null;
+      // ONE TEXT SPLIT INTO SEVERAL NODES IS ONE TEXT. React writes `{"$"}{price}` as two text nodes,
+      // so saucedemo's price div held "$" and "29.99": the one-character "$" was dropped below and the
+      // read said "29.99". An element with no child elements and several text nodes is emitted once,
+      // on its first text node, with the element's whole text.
+      if (parent.children.length === 0) {
+        const parts = Array.from(parent.childNodes)
+          .filter((child) => child.nodeType === Node.TEXT_NODE && (child.textContent || "").trim());
+        if (parts.length > 1) {
+          if (parts[0] !== textNode) return null;
+          text = (parent.textContent || "").replace(/\s+/g, " ").trim();
+        }
+      }
+      if (!text || text.length <= 1) return null;
 
       try {
         const modals = getVisibleModalContainers();
@@ -2063,11 +2075,12 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       if (!node || !Array.isArray(node.children)) continue;
       for (const childId of node.children) parentOf.set(childId, id);
     }
+    // (A `transparent` container -- see below -- is highlighted and still does not swallow.)
     const hasHighlightedAncestor = (id) => {
       let p = parentOf.get(id);
       while (p) {
         const n = map[p];
-        if (n && n.isHighlighted) return true;
+        if (n && n.isHighlighted && !transparent.has(p)) return true;
         p = parentOf.get(p);
       }
       return false;
@@ -2076,6 +2089,52 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     const SEMANTIC_STRUCTURE_TAGS = new Set([
       'header', 'footer', 'aside', 'main', 'article', 'section', 'nav', 'fieldset'
     ]);
+
+    // A PAGE-SIZED CONTAINER IS NOT A CONTROL. A wrapper the walker found interactive only because
+    // the page listens for clicks on it -- React puts `onclick` on its root `<div id="root">`, and a
+    // delegated handler or a `cursor:pointer` wrapper does the same -- was highlighted like a
+    // button, and every non-interactive node under a highlighted node is dropped below (the control's
+    // label carries its text). For a control that is right; for a wrapper around the whole page it
+    // dropped the page's content: saucedemo.com's inventory read showed the product links and "Add
+    // to cart" buttons but no price and no description, all of it folded into the root's label and
+    // cut to "[Open Menu Close Menu Swag Labs Produc... [content truncated, 1230 chars hidden] ...]"
+    // (W4 seed saucedemo-sort-cheapest, 2026-10-18); demoqa's submission output reached the model
+    // the same way. Only a wrapper that is not itself a link, button or form control and carries no
+    // widget role is considered:
+    //   - with four or more highlighted controls inside it (CONTAINER_CONTROLS) it is a REGION, not a
+    //     control -- React's root, demoqa's whole form: it is not highlighted, renders no line of its
+    //     own, and the text under it renders as content;
+    //   - with two or three controls and more text than a label line shows whole (CONTAINER_TEXT_MIN)
+    //     it may still be a clickable card, so it keeps its line and its id, but it no longer
+    //     swallows the text under it (`transparent`).
+    const CONTAINER_TEXT_MIN = 220;
+    const CONTAINER_CONTROLS = 4;
+    const WIDGET_ROLES = new Set(['button', 'link', 'menuitem', 'menuitemradio', 'menuitemcheckbox', 'radio', 'checkbox', 'tab',
+      'switch', 'slider', 'spinbutton', 'combobox', 'searchbox', 'textbox', 'listbox', 'option', 'scrollbar', 'menu', 'menubar',
+      'tablist', 'radiogroup', 'tree', 'treeitem', 'grid', 'gridcell', 'row', 'dialog', 'alertdialog']);
+    const CONTROL_TAGS = new Set(['a', 'button', 'input', 'select', 'textarea', 'summary', 'label', 'option', 'details', 'iframe']);
+    const controlsInside = (id, limit) => {
+      let found = 0;
+      const stack = (map[id].children || []).slice();
+      while (stack.length && found < limit) {
+        const child = map[stack.pop()];
+        if (!child) continue;
+        if (child.isHighlighted && child.isInteractive) found++;
+        if (Array.isArray(child.children)) for (const grandchild of child.children) stack.push(grandchild);
+      }
+      return found;
+    };
+    const transparent = new Set();
+    for (const id in map) {
+      const nodeData = map[id];
+      if (!nodeData || !nodeData.isHighlighted || nodeData.type === 'TEXT_NODE') continue;
+      if (CONTROL_TAGS.has(nodeData.tagName || '') || nodeData.isInput || nodeData.isTextarea || nodeData.isSelect || nodeData.isFileInput) continue;
+      const role = String((nodeData.attributes && nodeData.attributes.role) || '').trim().toLowerCase();
+      if (role && WIDGET_ROLES.has(role)) continue;
+      const controls = controlsInside(id, CONTAINER_CONTROLS);
+      if (controls >= CONTAINER_CONTROLS) nodeData.isHighlighted = false;
+      else if (controls >= 2 && (nodeData.comprehensiveText || '').length > CONTAINER_TEXT_MIN) transparent.add(id);
+    }
 
     const excludedNodes = new Set();
     for (const id in map) {
