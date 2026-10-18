@@ -55,6 +55,11 @@ enum ReceiptAnchorProbe {
         /// How many elements `selector` resolved to when it was verified (1 for an exact rung; all
         /// the links to the same place for rule 0). nil when the probe did not say.
         var count: Int? = nil
+        /// Which of those `count` matches the element is, 1-based, in the resolver's order. A rule-0
+        /// anchor matches every link to the same place (GitHub's Releases: the sidebar link and the
+        /// README badge), and when it replaces a position path as `[selector=]` the receipt still
+        /// says WHICH one was pressed. nil when the probe did not say.
+        var index: Int? = nil
     }
 
     static func expression(alohaId: String, selector: String?, stable: Bool, list: String?, forRead: Bool = false) -> String {
@@ -131,7 +136,7 @@ enum ReceiptAnchorProbe {
               try { nodes = window.__snips.resolveAll(cands[c].s, document) || []; } catch (e) { nodes = []; }
               if (cands[c].nth) nodes = nodes.length >= cands[c].nth ? [nodes[cands[c].nth - 1]] : [];
               if (cands[c].among ? nodes.indexOf(el) !== -1 : (nodes.length === 1 && nodes[0] === el))
-                return JSON.stringify({ s: cands[c].s, nth: cands[c].nth, n: nodes.length });
+                return JSON.stringify({ s: cands[c].s, nth: cands[c].nth, n: nodes.length, i: nodes.indexOf(el) + 1 });
             }
           } catch (e) {}
           return '';
@@ -144,7 +149,9 @@ enum ReceiptAnchorProbe {
               let s = value.string("s"), !s.isEmpty else { return nil }
         let nth = value["nth"]?.intValue
         let count = value["n"]?.intValue
-        return Anchor(selector: s, nth: (nth ?? 0) >= 1 ? nth : nil, count: (count ?? 0) >= 1 ? count : nil)
+        let index = value["i"]?.intValue
+        return Anchor(selector: s, nth: (nth ?? 0) >= 1 ? nth : nil, count: (count ?? 0) >= 1 ? count : nil,
+                      index: (index ?? 0) >= 1 ? index : nil)
     }
 
     /// A selector the ladder produced from a position (rung 6) is not "stable" for rule 1.

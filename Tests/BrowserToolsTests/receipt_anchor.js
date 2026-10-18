@@ -156,6 +156,10 @@ function check(name, cond, detail) { console.log((cond ? 'ok   ' : 'FAIL ') + na
   const at = 'https://github.com/MHSanaei/3x-ui';
   const r = run(doc, 'badge', 'body>main>article>p>a:nth-of-type(2)', false, 'body>main>article>p>a', false, at);
   check('sub-page link: a:rel-href("releases"), two links lead there', r && r.s === 'a:rel-href("releases")' && !r.nth && r.n === 2, r);
+  // ...and the probe says which of the two this is (the badge, then the sidebar link).
+  check('rel-href reports the element place among its matches', r && r.i === 1, r);
+  const sd = run(doc, 'side', 'body>main>aside>a:nth-of-type(1)', false, '', false, at);
+  check('the sidebar link is the 2nd of the 2', sd && sd.s === 'a:rel-href("releases")' && sd.n === 2 && sd.i === 2, sd);
   // A deeper sub-page keeps its whole tail; a link to another repo is not relative to this page.
   const l = run(doc, 'latest', 'a[href="/MHSanaei/3x-ui/releases/latest"]', true, '', false, at);
   check('deeper sub-page: the whole tail', l && l.s === 'a:rel-href("releases/latest")', l);

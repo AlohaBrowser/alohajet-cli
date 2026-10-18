@@ -228,8 +228,10 @@ import ToolABI
             // selector in 270 of 2120 results, `page_click` in 4370 of 8703).
             var notes: [String: String] = [:]
             for field in fields where notes[field.alohaId] == nil {
+                // `[text=]` as the single-field path writes it: the field's label words (its
+                // aria-label / placeholder) are what an anchor for it is built from.
                 notes[field.alohaId] = await PageToolReceipt.liveNote(
-                    alohaId: field.alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_type", text: false)
+                    alohaId: field.alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_type")
             }
             var filled: [String] = []
             var failures: [String] = []
@@ -247,7 +249,7 @@ import ToolABI
                     // is still the pre-typing one here).
                     if let redirect = Self.redirect(in: result) {
                         let note = await PageToolReceipt.liveNote(
-                            alohaId: redirect.id, tab: resolved.cdpTab, bridge: bridge, tool: "page_type", text: false)
+                            alohaId: redirect.id, tab: resolved.cdpTab, bridge: bridge, tool: "page_type")
                         notes[redirect.id] = note
                         typedInto.append(redirect.id)
                         filled.append("\(redirect.id) (the <\(redirect.tag)> that \(field.alohaId) labels; use it from now on)" + note)

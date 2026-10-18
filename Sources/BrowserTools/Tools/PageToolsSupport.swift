@@ -317,12 +317,17 @@ enum PageToolReceipt {
         // from it, or the selector matches nothing now and no path could be rebuilt. The address
         // is still written, and `[index=none]` marks it unverified, so a mint does not build a
         // step on it when `[list=]`, `[path=]` or `[anchor=]` offer a checked one (2026-10-04 audit).
-        // Neither token when the anchor replaced the path: the index counted the PATH's matches,
-        // and the anchor was verified to resolve to exactly this element.
-        if let matches, let identity, path == nil {
-            if let index = identity.index, matches > 1, index >= 1, index <= matches {
+        // When the anchor replaced the path, the identity's index counted the PATH's matches, so
+        // the index written is the element's place among the ANCHOR's matches: `[index=]` always
+        // counts the elements `[selector=]` names. A rule-0 link anchor matches every link to the
+        // same place (GitHub's `a:rel-href("releases")`: the README badge and the sidebar link), and
+        // without it the receipt said `[matches=2]` and not which one was pressed. Never
+        // `[index=none]` there: the anchor was verified to include this element.
+        if let matches, let identity {
+            let index = path == nil ? identity.index : identity.anchor?.index
+            if let index, matches > 1, index >= 1, index <= matches {
                 note += " [index=\(index)/\(matches)]"
-            } else if identity.index == nil {
+            } else if index == nil, path == nil {
                 note += " [index=none]"
             }
         }
@@ -347,7 +352,14 @@ enum PageToolReceipt {
         // The address to replay with: one rule, checked on the live page (`ReceiptAnchorProbe`).
         if let anchor = identity?.anchor {
             note += " [anchor=\(anchor.selector)]"
-            if let nth = anchor.nth { note += " [anchor-nth=\(nth)]" }
+            // An anchor that resolves to SEVERAL elements always says which one: a list ordinal
+            // (rule 3) carries its `nth`, and a rule-0 link anchor that every link to the same place
+            // matches (GitHub's Releases: the README badge and the sidebar link) carries the
+            // element's place among those matches. llmdex reads it to resolve the ambiguity that
+            // `[matches=]` > 1 reports.
+            var nth = anchor.nth
+            if nth == nil, let count = anchor.count, count > 1, let index = anchor.index, index <= count { nth = index }
+            if let nth { note += " [anchor-nth=\(nth)]" }
         }
         return note
     }
