@@ -61,12 +61,13 @@ struct ReadPolishSerializerTests {
         let rest = text("rest", "item left")
         let out = serializeFullMarkdown([span, strong, rest])
         #expect(out.split(separator: "\n").map(String.init) == ["1 item left"], "\(out)")
-        // A sentence with a control in it is left to the walker, as before.
+        // A sentence with a link in it reads as one line with the link in place (W6 client
+        // review: "Step 3 of 4: Edit" read on four lines); see `W6FixReadUnitTests`.
         let wrap = node("w", tag: "span", text: "by André Gide (about)", children: ["by", "a"])
         let by = text("by", "by")
         let link = node("a", tag: "a", text: "(about)", interactive: true, attributes: ["href": "/a"])
         let out2 = serializeFullMarkdown([wrap, by, link])
-        #expect(out2.split(separator: "\n").first == "by", "\(out2)")
+        #expect(out2.split(separator: "\n").first == #"by [(about)] {aloha-id="a" a}"#, "\(out2)")
     }
 
     /// A short number standing on its own (a cart badge "1") is kept; a bare "0" is still chrome.

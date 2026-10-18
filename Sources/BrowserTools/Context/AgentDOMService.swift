@@ -1963,7 +1963,8 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
                 placeholder: placeholder,
                 value: value,
                 isSecret: secret,
-                checked: checked)
+                checked: checked,
+                indeterminate: checked != nil && inputValue.bool("indeterminate") == true)
         }
     }
 
@@ -2045,6 +2046,18 @@ func isSecretInputField(type rawType: String, autocomplete rawAutocomplete: Stri
         return true
     }
     if value == sensitiveFieldMaskText { return true }
+    // A key, a token, a secret, a recovery code or a seed phrase, by the field's own words or by
+    // the shape of its value: the page-side predicate's rule (`__alohaIsSensitiveField`).
+    let named = [attributes["name"], attributes["id"], attributes["aria-label"], placeholder, attributes["placeholder"]]
+        .compactMap { $0 }
+        .joined(separator: " ")
+        .replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
+        .lowercased()
+        .replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+    if (" " + named + " ").range(of: secretFieldWords, options: .regularExpression) != nil { return true }
+    if let value, value.trimmingCharacters(in: .whitespaces).range(of: secretValueShapes, options: .regularExpression) != nil {
+        return true
+    }
     let joined = [attributes["name"], attributes["id"], attributes["aria-label"], placeholder, attributes["placeholder"]]
         .compactMap { $0 }
         .joined(separator: " ")
@@ -2063,6 +2076,14 @@ func isSecretInputField(type rawType: String, autocomplete rawAutocomplete: Stri
     }()
     return numericKind || short || digitsOnly
 }
+
+/// The whole words that make a field a secret by its name, id, placeholder or label (see
+/// `sensitiveFieldPredicateJS`): an API key or token, a secret, a recovery code, a seed phrase.
+let secretFieldWords = #"\b(api ?key|api ?token|access ?(key|token)|secret ?key|private ?key|client ?secret|auth ?token|bearer|refresh ?token|token|secret|recovery ?(code|key|phrase)s?|backup ?codes?|seed ?(phrase|words?)|mnemonic)\b"#
+
+/// The shapes of a well-known key's value: Stripe-style `sk_live_…`, OpenAI `sk-…`, GitHub
+/// `ghp_…`, Slack `xoxb-…`, AWS `AKIA…`, Google `AIza…`.
+let secretValueShapes = #"^((sk|pk|rk)[-_](live|test)[-_]|sk-[A-Za-z0-9_-]{16,}$|gh[pousr]_[A-Za-z0-9]{20,}$|xox[abposr]-|AKIA[0-9A-Z]{16}$|AIza[0-9A-Za-z_-]{30,}$)"#
 
 // MARK: - Shared small types
 

@@ -887,18 +887,30 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         if (value) add(value);
       }
     } catch {}
+    // The element's own text nodes, then the first descendant text -- and when the latter
+    // already says the former's words in order, the latter alone: `<span>You have <b>2</b> new
+    // <em>alerts</em></span>` read "You have new You have 2 new alerts" (W6 client review).
+    let directText = "";
+    let descendantText = "";
     try {
-      const directText = Array.from(element.childNodes)
+      directText = Array.from(element.childNodes)
         .filter((node) => node.nodeType === Node.TEXT_NODE)
         .map((node) => (node.textContent || "").trim())
         .filter((text) => !!text)
         .join(" ");
-      if (directText) add(directText);
     } catch {}
     try {
-      const descendantText = getFirstDescendantText(element);
-      if (descendantText) add(descendantText);
+      descendantText = getFirstDescendantText(element) || "";
     } catch {}
+    const wordsInOrder = (part, whole) => {
+      const want = part.toLowerCase().split(/\s+/).filter(Boolean);
+      const have = whole.toLowerCase().split(/\s+/).filter(Boolean);
+      let i = 0;
+      for (const w of have) if (i < want.length && w === want[i]) i++;
+      return want.length > 0 && i === want.length;
+    };
+    if (directText && !(descendantText && wordsInOrder(directText, descendantText))) add(directText);
+    if (descendantText) add(descendantText);
     try {
       const nestedLabels = getNestedAriaLabels(element);
       if (nestedLabels) add(nestedLabels);
@@ -1497,6 +1509,33 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     return !element || element.nodeType !== Node.ELEMENT_NODE ? false : element.tagName.toLowerCase() === "select";
   }
 
+  // Whether a one-character text node is worth a line of the read: a letter or a digit, or a
+  // separator that sits between two numbers ("4/5", "10:30", "3-4") -- the text right before it
+  // ends in a digit and the text right after it starts with one.
+  function keepsShortText(textNode, text) {
+    if (/[\p{L}\p{N}]/u.test(text)) return true;
+    if (!/^[\/:\-\u2013.,\u00d7]$/u.test(text)) return false;
+    const before = (textNode.previousSibling && textNode.previousSibling.textContent || "").trim();
+    const after = (textNode.nextSibling && textNode.nextSibling.textContent || "").trim();
+    return /\p{N}$/u.test(before) && /^\p{N}/u.test(after);
+  }
+
+  // A checkbox or radio the page hides behind a widget of its own (react-checkbox-tree, demoqa:
+  // `<label><input type=checkbox style="display:none"><span class=rct-checkbox>…</span>Home</label>`)
+  // has no line in the read, and neither has its state. Its visible LABEL stands in for it: the
+  // label carries the box's type and state (`inputData`) and is what a click toggles.
+  function hiddenToggleOf(element) {
+    try {
+      if (!element || element.tagName.toLowerCase() !== "label") return null;
+      const control = element.control || element.querySelector("input[type=checkbox], input[type=radio]");
+      if (!control || control.tagName.toLowerCase() !== "input") return null;
+      const type = (control.type || "").toLowerCase();
+      if (type !== "checkbox" && type !== "radio") return null;
+      if (isElementVisible(control)) return null;
+      return control;
+    } catch { return null; }
+  }
+
   function extractInputData(element) {
     if (!element) return null;
     const tag = element.tagName.toLowerCase();
@@ -1525,7 +1564,10 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         disabled: input.disabled || false,
         readonly: input.readOnly || false,
         multiline: false,
-        checked: input.checked || false
+        checked: input.checked || false,
+        // A tri-state box ("select all" over a partial selection) is neither: the page sets
+        // `indeterminate` by script and `checked` keeps its last value.
+        indeterminate: input.indeterminate || false
       };
       const style = getComputedStyleCached(element);
       if (style && (style.cursor === "not-allowed" || style.cursor === "no-drop")) data.disabled = true;
@@ -1670,8 +1712,9 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       }
       // A one-character text is a separator or a stray glyph ("|", "·", "×") -- unless it is a
       // letter or a digit: TodoMVC's `<strong>1</strong> item left` read "item left", and "Page
-      // <b>2</b> of 9" lost its page.
-      if (!text || (text.length <= 1 && !/[\p{L}\p{N}]/u.test(text))) return null;
+      // <b>2</b> of 9" lost its page -- or a separator BETWEEN two numbers: "Rating:
+      // <span>4</span>/<span>5</span>" read "Rating: 4 5" (W6 client review).
+      if (!text || (text.length <= 1 && !keepsShortText(textNode, text))) return null;
 
       try {
         const modals = getVisibleModalContainers();
@@ -1731,7 +1774,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
             .filter((child) => {
               if (child.nodeType !== Node.TEXT_NODE) return false;
               const t = (child.textContent || "").trim();
-              return t.length > 1 || /[\p{L}\p{N}]/u.test(t);
+              return t.length > 1 || (t.length === 1 && keepsShortText(child, t));
             })
             .indexOf(textNode) + 1;
         textXPathSegment = textIndex > 1 ? `text()[${textIndex}]` : "text()";
@@ -1750,7 +1793,11 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         isTopElement: false,
         isHighlighted: false,
         children: [],
-        attributes: keepsLines && text.includes("\n") ? { "aloha-pre": "1" } : {}
+        // A token of a code listing (`<pre>`/`<code>`, often one span per token) is the code's,
+        // not page chrome: the read keeps a lone "0" there (`border-spacing: 0`).
+        attributes: Object.assign(
+          keepsLines && text.includes("\n") ? { "aloha-pre": "1" } : {},
+          text.length < 3 && parent.closest && parent.closest("pre, code") ? { "aloha-code": "1" } : {})
       };
       const id = alohaIdFor(descriptor, null);
       nodeMap[id] = descriptor;
@@ -1869,6 +1916,12 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     }
     if (isFileInputLike(element)) descriptor.isFileInput = true;
     if (isContentEditableHost(element)) descriptor.isEditableHost = true;
+    const hiddenToggle = lowerTag === "label" ? hiddenToggleOf(element) : null;
+    if (hiddenToggle) {
+      const data = extractInputData(hiddenToggle);
+      descriptor.inputData = { type: data.type, value: "", placeholder: "", required: false, disabled: data.disabled,
+        readonly: false, multiline: false, checked: data.checked, indeterminate: data.indeterminate };
+    }
 
     let highlighted = false;
     descriptor.isVisible = isElementVisible(element);
@@ -1878,9 +1931,9 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       const role = element.getAttribute("role");
       const isMenuContainer = role === "menu" || role === "menubar" || role === "listbox";
       const isMenuItem = role === "option" || role === "menuitem" || role === "menuitemcheckbox" || role === "menuitemradio";
-      const isToggleRole = role === "switch" || role === "checkbox" || role === "radio";
+      const isToggleRole = role === "switch" || role === "checkbox" || role === "radio" || !!hiddenToggle;
       const hasCheckedState = element.hasAttribute("aria-checked") || element.hasAttribute("aria-pressed");
-      descriptor.isInteractive = isFormElement ? true : isInteractive(element);
+      descriptor.isInteractive = isFormElement || hiddenToggle ? true : isInteractive(element);
       // The genuine actionable signal, captured BEFORE the text-content promotion below. Only
       // truly actionable elements are probed for occlusion: a covered paragraph promoted to
       // "interactive" purely for emission is not something to annotate as "dismiss to interact".

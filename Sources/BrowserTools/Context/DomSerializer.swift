@@ -62,8 +62,12 @@ public struct DomInputData: Sendable {
     /// would submit. On the-internet's /checkboxes (W4, 2026-10-18) the model asked for seven
     /// screenshots and still could not tell which box was ticked (11 rounds for a 4-round task).
     public var checked: Bool?
+    /// A tri-state checkbox ("select all" over a partial selection): the page set
+    /// `input.indeterminate`, and the box reads "partly checked" whatever `checked` says.
+    public var indeterminate: Bool
     public init(type: String? = nil, placeholder: String? = nil, required: Bool = false,
-                disabled: Bool? = nil, value: String? = nil, isSecret: Bool = false, checked: Bool? = nil) {
+                disabled: Bool? = nil, value: String? = nil, isSecret: Bool = false, checked: Bool? = nil,
+                indeterminate: Bool = false) {
         self.type = type
         self.placeholder = placeholder
         self.required = required
@@ -71,6 +75,7 @@ public struct DomInputData: Sendable {
         self.value = value
         self.isSecret = isSecret
         self.checked = checked
+        self.indeterminate = indeterminate
     }
 }
 
@@ -722,7 +727,7 @@ private func openInteractiveTag(_ node: DomNode, _ tag: String) -> String {
             attrs.append("placeholder=\"\(placeholder)\"")
         }
         if inputData.required { attrs.append("required=true") }
-        if let checked = inputData.checked, isCheckOrRadioType(inputData.type) { attrs.append(checked ? "checked" : "unchecked") }
+        if let state = checkState(inputData) { attrs.append(state.replacingOccurrences(of: " ", with: "-")) }
         c += " " + attrs.joined(separator: " ")
     case "select" where node.content.optionData != nil:
         c += " name=\"\(node.element.attributes["name"] ?? "")\""
@@ -998,11 +1003,14 @@ private func renderInputControl(_ node: DomNode) -> String {
     // A checkbox or radio says whether it is ticked, and does not print the value its form would
     // submit: `value="on"` (every unlabelled checkbox's label too) reads like a state and is not
     // one. See `DomInputData.checked`.
-    if let checked = data?.checked, isCheckOrRadioType(data?.type) {
-        parts.append(checked ? "checked" : "unchecked")
-        // An unlabelled box's label falls back to its value, which is "on" unless the page set one.
-        let label = interactiveLabel(node)
-        if !label.isEmpty, label != "on" { parts.append("\"\(label)\"") }
+    if let data, let state = checkState(data) {
+        parts.append(state)
+        // A box's label is the page's label for it (`aria-label`, the walker's association with
+        // its `<label>`, a `title`), never its text: an input has none, and the fallback is its
+        // VALUE -- "on" unless the page set one, `input(checkbox, unchecked, "yes")` for an
+        // unlabelled `value="yes"` box (W6 client review).
+        let label = checkLabel(node)
+        if !label.isEmpty { parts.append("\"\(label)\"") }
         return "input(\(parts.joined(separator: ", ")))"
     }
     let label = interactiveLabel(node)
@@ -1013,6 +1021,29 @@ private func renderInputControl(_ node: DomNode) -> String {
 
 func isCheckOrRadioType(_ type: String?) -> Bool {
     type == "checkbox" || type == "radio"
+}
+
+/// A checkbox's or radio's state as the read says it -- "checked", "unchecked", or "partly
+/// checked" for a tri-state box -- or nil for any other field.
+func checkState(_ data: DomInputData) -> String? {
+    guard let checked = data.checked, isCheckOrRadioType(data.type) else { return nil }
+    if data.indeterminate { return "partly checked" }
+    return checked ? "checked" : "unchecked"
+}
+
+/// The label a checkbox or radio is read by: the page's own (`aria-label`, which the walker fills
+/// from the box's `<label>`; `aria-placeholder`; `title`), else the element's text unless that is
+/// only the box's VALUE ("on", or `value="yes"` on an unlabelled box) -- nothing then.
+private func checkLabel(_ node: DomNode) -> String {
+    for name in ["aria-label", "aria-placeholder", "title"] {
+        if let text = node.element.attributes[name].map(normalizeWhitespace), !text.isEmpty {
+            return truncateText(text, interactiveLabelCap)
+        }
+    }
+    let text = normalizeWhitespace(elementText(node))
+    let value = normalizeWhitespace(node.content.inputData?.value ?? node.element.attributes["value"] ?? "on")
+    if text.isEmpty || text == "on" || text == value { return "" }
+    return truncateText(text, interactiveLabelCap)
 }
 
 /// `value="..."` for a filled field, `value=(hidden)` for a secret one, nil for an empty one.
@@ -1039,7 +1070,7 @@ func emitInViewportElement(_ node: DomNode, _ depth: Int, _ nodesById: [String: 
     // the wrapper's duplicate line. An EXACT text match is required, so a wrapper with its
     // own text ("Submitted by <a>user</a>") and genuinely-actionable tags (a/button/…) are
     // untouched. This is the shared choke point of both render paths.
-    if dedupWrapperTags.contains(tag) {
+    if dedupWrapperTags.contains(tag), !isToggleProxy(node) {
         let dupText = normalizeWhitespace(node.content.comprehensiveText ?? node.element.textContent ?? "")
         if !dupText.isEmpty,
            textDuplicatesDescendants(dupText, node, nodesById),
@@ -1083,6 +1114,11 @@ func emitInViewportElement(_ node: DomNode, _ depth: Int, _ nodesById: [String: 
     default:
         let label = interactiveLabel(node)
         c = "[\(label)]"
+        // A LABEL STANDING IN FOR A HIDDEN BOX (the walker's `hiddenToggleOf`: a checkbox or radio
+        // behind a widget of the page's own) says the box's state; a click on it toggles the box.
+        if tag == "label", let data = node.content.inputData, let state = checkState(data), let type = data.type {
+            c += " [\(type): \(state)]"
+        }
     }
     if node.interactivity.isFileInput { c += " [uploadable]" }
     if isElementDisabled(node) { c += " [DISABLED]" }
@@ -1110,8 +1146,8 @@ func emitOutOfViewElement(_ node: DomNode, _ depth: Int, _ nodesById: [String: D
         if let placeholder = node.content.inputData?.placeholder, !placeholder.isEmpty {
             c += " placeholder=\"\(placeholder)\""
         }
-        if let data = node.content.inputData, let checked = data.checked, isCheckOrRadioType(data.type) {
-            c += checked ? " checked" : " unchecked"
+        if let data = node.content.inputData, let state = checkState(data) {
+            c += " " + state.replacingOccurrences(of: " ", with: "-")
         }
     }
     c = appendAriaAttributes(c, node, tag)
@@ -1229,7 +1265,10 @@ func renderInteractiveNode(_ node: DomNode, _ depth: Int, _ nodesById: [String: 
             return indent + "<\(tag) aloha-id=\"\(node.id)\"" + role + " /> " + text
         }
     }
-    let isCheckOrRadio = tag == "input" && (node.content.inputData?.type == "checkbox" || node.content.inputData?.type == "radio")
+    // A label standing in for a box the page hides (the walker's `hiddenToggleOf`) is kept as
+    // the box is: it is what a click toggles.
+    let isCheckOrRadio = (tag == "input" || tag == "label")
+        && (node.content.inputData?.type == "checkbox" || node.content.inputData?.type == "radio")
     let isTop = node.interactivity.isTopElement || isCheckOrRadio
     // An interactive element the hit-test found covered is KEPT and annotated rather than
     // silently dropped, so the model can see it and dismiss whatever overlays it. Decorative /
@@ -1295,6 +1334,12 @@ private func renderTableRow(_ node: DomNode, _ nodesById: [String: DomNode]) -> 
 }
 
 /// Whether a node renders as a kept interactive element (gets an actionable `{aloha-id …}` trailer).
+/// A `<label>` standing in for a checkbox or radio the page hides behind a widget of its own (the
+/// walker's `hiddenToggleOf`): a control, not a text wrapper -- never deduped against its text.
+func isToggleProxy(_ node: DomNode) -> Bool {
+    node.element.tagName.lowercased() == "label" && isCheckOrRadioType(node.content.inputData?.type)
+}
+
 func nodeIsKeptInteractive(_ node: DomNode) -> Bool {
     let tag = node.element.tagName.lowercased()
     let isCheckOrRadio = tag == "input" && (node.content.inputData?.type == "checkbox" || node.content.inputData?.type == "radio")
@@ -1375,6 +1420,15 @@ func isShortNumber(_ text: String) -> Bool {
         && text.contains(where: { $0.isNumber && $0 != "0" })
 }
 
+/// A short text that is a bare zero ("0", "00") or a glyph with no letter and no digit ("--",
+/// "»"), and carries no value symbol: chrome when it stands alone.
+func isBareZeroOrGlyph(_ text: String) -> Bool {
+    if text.contains(where: \.isLetter) || text.contains(where: { valueSymbols.contains($0) }) { return false }
+    let digits = text.filter(\.isNumber)
+    if digits.isEmpty { return true }
+    return digits.allSatisfy { $0 == "0" } && text.allSatisfy { $0.isNumber || "+-.,/:".contains($0) }
+}
+
 /// Elements that render NOTHING of their own in the read (no content branch) and so lose the
 /// sentence they hold to the fragments under them: `<span class="todo-count"><strong>1</strong>
 /// item left</span>` came back as "item left" (the 1 fell under the short-leaf gate), "Page
@@ -1394,6 +1448,7 @@ private let inlineFormattingTags: Set<String> = [
 private func isInlineSentence(_ node: DomNode, _ nodesById: [String: DomNode]) -> Bool {
     var ownText = false
     var inlineChild = false
+    var links = 0
     for childId in node.children {
         guard let child = nodesById[childId] else { continue }
         if child.nodeType == "TEXT_NODE" {
@@ -1401,17 +1456,31 @@ private func isInlineSentence(_ node: DomNode, _ nodesById: [String: DomNode]) -
             if text.contains(where: { $0.isLetter || $0.isNumber }) { ownText = true }
             continue
         }
-        guard inlineOnly(child, nodesById) else { return false }
+        guard inlineOnly(child, nodesById, &links) else { return false }
         inlineChild = true
     }
-    return ownText && inlineChild
+    return ownText && inlineChild && links <= sentenceLinksMax
 }
 
-private func inlineOnly(_ node: DomNode, _ nodesById: [String: DomNode]) -> Bool {
+/// The links a sentence may hold and still read as one line, each in place with its id: "Step
+/// <b>3</b> of <b>4</b>: <a>Edit</a>" read "Step" / "3" / "of" / "4" on four lines (W6 client
+/// review). More links than this is a menu or a list of links, read link by link.
+private let sentenceLinksMax = 2
+
+private func inlineOnly(_ node: DomNode, _ nodesById: [String: DomNode], _ links: inout Int) -> Bool {
     if node.nodeType == "TEXT_NODE" { return true }
-    guard inlineFormattingTags.contains(node.element.tagName.lowercased()), !nodeIsKeptInteractive(node) else { return false }
-    return node.children.allSatisfy { id in nodesById[id].map { inlineOnly($0, nodesById) } ?? true }
+    let tag = node.element.tagName.lowercased()
+    if tag == "a", nodeIsKeptInteractive(node) {
+        links += 1
+        return true
+    }
+    guard inlineFormattingTags.contains(tag), !nodeIsKeptInteractive(node) else { return false }
+    return node.children.allSatisfy { id in nodesById[id].map { inlineOnly($0, nodesById, &links) } ?? true }
 }
+
+/// One-character separators the walker keeps between two numbers ("4/5", "10:30", "3-4"), joined
+/// to both without a space.
+private let numberSeparators: Set<Character> = ["/", ":", "-", "\u{2013}", ".", ",", "\u{00D7}"]
 
 /// Punctuation that never takes a space before it when prose parts are rejoined.
 private let clingingPunctuation: Set<Character> = [".", ",", ";", ":", "!", "?", ")", "]", "}", "%", "\u{2019}"]
@@ -1450,7 +1519,7 @@ private func proseLine(
             // text) is left to the walker, which already dedups its redundant `{aloha-id}` label
             // line against the content line above it. Only a genuinely actionable element is
             // folded in here.
-            if dedupWrapperTags.contains(childTag) {
+            if dedupWrapperTags.contains(childTag), !isToggleProxy(child) {
                 taken.remove(id)
                 return
             }
@@ -1479,7 +1548,21 @@ private func proseLine(
     // so the parts are rejoined with a single space — except before clinging punctuation
     // ("… the community. It uses …", not "… the community . It …").
     var joined = ""
+    var glued = false
     for part in parts {
+        // A separator between two numbers joins them as the page shows them: "4/5", "10:30".
+        let separator = part.count == 1 && numberSeparators.contains(part.first!) && joined.last?.isNumber == true
+        if separator {
+            joined += part
+            glued = true
+            continue
+        }
+        if glued, part.first?.isNumber == true {
+            joined += part
+            glued = false
+            continue
+        }
+        glued = false
         if !joined.isEmpty, part.first.map(clingingPunctuation.contains) != true { joined += " " }
         joined += part
     }
@@ -1500,6 +1583,12 @@ func renderFullNode(
             return truncateText(preformattedText(node.element.textContent ?? ""), fullContentTextCap)
         }
         let text = truncateText(normalizeWhitespace(node.element.textContent ?? node.element.childText ?? ""), fullContentTextCap)
+        // A LONE SHORT TEXT gets the content-leaf gate's zero rule (``contentLeafLine``): the
+        // walker keeps one-character letters and digits so a sentence keeps its "1" or "A", and a
+        // sentence reads them in place (``proseLine``); a text standing alone that is a bare zero
+        // -- the vote / notification count every listing carries -- or a glyph with no letter
+        // and no digit is chrome (W6 client review: `<div class="zero-badge">0</div>` read "0").
+        if text.count < contentLeafMinChars, node.element.attributes["aloha-code"] == nil, isBareZeroOrGlyph(text) { return "" }
         return text.isEmpty ? "" : text
     }
     let tag = node.element.tagName.lowercased()
@@ -1583,7 +1672,7 @@ public func serializeFullMarkdown(_ nodes: [DomNode], _ options: DomSerializeOpt
         // landmark `[header]` line (which shows the tag, not its subtree text) never triggers
         // this. Genuinely-actionable tags (a/button/input) are NOT in `dedupWrapperTags`, so
         // their ids are never dropped; the wrapper's own interactive children still render.
-        if node.interactivity.isHighlighted, node.nodeType != "TEXT_NODE", dedupWrapperTags.contains(tag) {
+        if node.interactivity.isHighlighted, node.nodeType != "TEXT_NODE", dedupWrapperTags.contains(tag), !isToggleProxy(node) {
             let key = dedupKey(normalizeWhitespace(node.content.comprehensiveText ?? node.element.textContent ?? ""))
             if !key.isEmpty, shownTextKeys.contains(key) {
                 for childId in node.children { walk(childId, listLevel, emittedAncestorKeys, shownTextKeys) }
