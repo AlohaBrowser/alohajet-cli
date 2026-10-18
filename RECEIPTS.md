@@ -144,26 +144,49 @@ holds no receipt for the element the answer came from. After the turn, on the pa
 observed last (`AnswerPageTracker`: the tab of the latest page tool, by CDP target id), the host
 asks `answerReceipts(onTab:answer:prompt:)` for a receipt per value the final answer repeats from
 that page, and sends them with the verdict (llmdex `POST /v1/verdict`, `answer_receipts`, the
-tab's URL as `answer_url`). One line per value, at most 4:
+tab's URL as `answer_url`). One line per value, at most 4 (`AnswerReceipt.maxValues`; never more
+than 12, `maxLines`), each line shorter than 4000 characters (`maxLineLength`, llmdex's entry cap):
 
 ```
 answer "v3.8.5": [selector=body>div>main>section:nth-of-type(1)>div>h2>a] [tool=answer] [matches=1] [text="v3.8.5"] [attrs=href="/MHSanaei/3x-ui/releases/tag/v3.8.5"]
+answer "You logged into a secure area! ×": [selector=#flash] [tool=answer] [matches=1] [text="You logged into a secure area! ×"] [attrs=data-alert="" id="flash"] [list=body>div>div>div 1/3] [anchor=#flash]
+answer "Augusta Ada Byron 10 December 1815 London, England": [selector=td.infobox-data:has(.nickname)] [tool=answer] [matches=1] [text="…"] [list=…>table>tbody>tr>td 2/9] [anchor=td.infobox-data:has(.nickname)]
 ```
 
 - **Which elements.** Every visible element whose own text is at most 80 characters and that the
   answer repeats as a whole run of words the task did not already say; innermost element only; a
   lone word only when the answer bolded or quoted it, a lone number only with 3+ characters; with
   no word match, an element whose numbers all appear in the answer. The answer's bold / quoted
-  spans rank the candidates; an element the turn's `get_text` read (or one inside it) ranks first.
+  spans rank the candidates, **the earlier span first** (since 2026-10-18: the answer's lead value
+  is never pushed out by names it merely lists after it); an element the turn's `get_text` read (or
+  one inside it) ranks first; an element in the page's main content (`main`, `article`, role=main)
+  ranks above one in its chrome (`nav`, `aside`, a page-level `header` / `footer`). **A piece of a
+  value is not the value** (since 2026-10-18): when an element holds a whole bold / quoted span of
+  2+ words, an element whose text is only part of that span is dropped (unless the turn read it),
+  and of the elements holding the span only the innermost is kept.
+- **Which spans are values.** A bold span with the colon inside it (`**Time:** 50 min`) is a label,
+  and the rest of its line is the value. A bold span with the colon after it is a label only when it
+  opens its line or clause and a value follows on the same line (`**Walking distance**: 3.7 km`);
+  otherwise it IS the value (`attributed to **André Gide**:` followed by a line break, since
+  2026-10-18).
 - **Which brackets.** The `get_text` receipt of the element, built with the same writer and the
-  read rules (no anchor built from the value read), from the element's live position path; when
-  the element has a semantic anchor free of the value, exception 1 puts it in `[selector=]` and
-  the path in `[path=]`. `[tool=answer]` says who wrote it.
+  read rules (no anchor built from the value read; exception 2 when the selector holds the value).
+  `[selector=]` is, since 2026-10-18, the **selector ladder's** pick for the element (its id, test
+  hook, name, input type, link path, role or stable classes, from the attributes the page matcher
+  read), kept only when its live matches include the element. A ladder selector several elements
+  share is narrowed to `<selector>:has(.<class>)` with the first stable class inside the element
+  that makes it match exactly this element (at most three tried); otherwise it stays, and
+  `[index=]` says which of its matches the element is. With no ladder rung (or one that misses the
+  element) the element's live position path, as before; when it has a semantic anchor free of the
+  value, exception 1 puts that in `[selector=]` and the path in `[path=]`. `[tool=answer]` says who
+  wrote it. A line that would reach 4000 characters loses its `[attrs=]`; one still too long is
+  not sent.
 - **The prefix** `answer "<value>":` is prose: the element's text, with `"` written `'` and square
   brackets written as parentheses, so it never reads as a bracket.
 
 Writer: `AnswerReceipt` (`Sources/BrowserTools/Runtime/AnswerReceipt.swift`); the page side is
-exercised by `Tests/BrowserToolsTests/answer_receipt.js`.
+exercised by `Tests/BrowserToolsTests/answer_receipt.js`, the whole chain on a real page by
+`RealBrowserSeedPolishTests`.
 
 ## Change log
 
@@ -201,3 +224,4 @@ exercised by `Tests/BrowserToolsTests/answer_receipt.js`.
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | the ladder writes `[`/`]` inside an attribute value as `\00005b`/`\00005d` (CSS hex escapes) instead of refusing the value, so a Magento / Rails field keeps its name rung |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[text=]` and the anchor label never read a field's content: a text-entry input's `value` attribute or a textarea's text (a submit's, a checkbox's or a radio's `value` still names it). A click on a password field whose value the page kept in the attribute wrote the password into the receipt |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | answer receipts (`[tool=answer]`) and the tracker of the answer page move into this package from the agent repository (windows-on-snips `dc514f76`..`a74a7d63`); the temporary ids are found by their prefix, no marker attribute |
+| 2026-10-18 | this package, branch `e2e/polish-cli` | answer receipts: `[selector=]` is the selector ladder's pick (verified live; a shared one narrowed with `:has(.<class inside>)`), no longer always the position path; the answer's spans rank in their order; a bold span before a colon is a label only where a label stands; a piece of a value and an outer holder of it are dropped; main content outranks page chrome; at most 12 lines, each < 4000 characters (`[attrs=]` dropped first). No new bracket |
