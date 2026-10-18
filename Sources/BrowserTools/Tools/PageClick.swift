@@ -34,7 +34,7 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             let script = "aloha.\(route.call)(\(jsonStringLiteral(alohaId)))"
             // WHERE THE PAGE WAS BEFORE THE CLICK. Two cheap backend reads bracket the action so the
             // receipt can state whether anything moved; see `PageDelta`.

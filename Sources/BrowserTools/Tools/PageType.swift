@@ -114,7 +114,7 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             // Two backend URL reads bracket the action so the receipt can say whether the
             // page moved — see PageDelta, and the 44-row blind-receipt measurement behind it.
             let urlBefore = bridge.currentPageURL()
@@ -230,7 +230,7 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             let urlBefore = bridge.currentPageURL()
             // WHICH ELEMENT EACH FIELD WAS, in replayable terms, resolved BEFORE anything is typed:
             // typing can re-render the form and the snapshot would then hold different nodes. The

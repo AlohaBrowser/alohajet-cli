@@ -68,7 +68,7 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             let result = await operation(bridge)
             let receipt = RawToolResult(output: result.output, isError: result.isError ? true : nil)
             // A navigation that landed replaced the page by definition, so the page it landed on

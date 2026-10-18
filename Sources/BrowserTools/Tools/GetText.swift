@@ -107,13 +107,13 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             if capped.count == 1 {
                 // The read's receipt note, resolved BEFORE the read like every action's.
                 let note = await Self.readNote(capped[0], resolved.cdpTab, bridge)
                 let result = await bridge.getTextById(capped[0])
                 // The element read is what the turn's answer receipt prefers (`AnswerPageTracker`).
-                if !result.isError { AnswerPageTracker.current.noteRead(alohaId: capped[0]) }
+                if !result.isError { AnswerPageTracker.current(for: context.services).noteRead(alohaId: capped[0]) }
                 let text = result.isError ? result.output : Self.truncate(result.output, perId) + note
                 // ONE OPTIONAL LINE, at the moment a round was spent on one element. The schema has advertised
                 // the list form since this tool learned it, and a corpus row still spent EIGHT of thirteen
@@ -131,7 +131,7 @@ import ToolABI
             for id in capped {
                 let note = await Self.readNote(id, resolved.cdpTab, bridge)
                 let result = await bridge.getTextById(id)
-                if result.isError { failures += 1 } else { AnswerPageTracker.current.noteRead(alohaId: id) }
+                if result.isError { failures += 1 } else { AnswerPageTracker.current(for: context.services).noteRead(alohaId: id) }
                 // A failed read gets no note: there is nothing replayable about it.
                 blocks.append("[\(id)] \(result.isError ? result.output : Self.truncate(result.output, perId) + note)")
             }

@@ -34,7 +34,8 @@ import ToolABI
             toolCallId: context.toolCallId,
             session: session,
             abortSignal: context.signal,
-            webExtractionOptions: webExtractionOptions
+            webExtractionOptions: webExtractionOptions,
+            answerPageTracker: AnswerPageTracker.current(for: context.services)
         )
 
         let result: TabToolResult
@@ -184,6 +185,9 @@ struct ManageTabsActionContext {
     /// Resolved at the CLI composition root; `.baseline` keeps an unwired call site at the
     /// exact prior behavior.
     var webExtractionOptions: AgentWebExtractionOptions = .baseline
+    /// The calling chat's answer-page tracker (``AnswerPageTracker/current(for:)``): a read notes
+    /// its page there, and a close of that page waits in it.
+    var answerPageTracker: AnswerPageTracker = .current
 }
 
 /// Returns `nil` on success, or the error result the calling action should return.
@@ -313,7 +317,7 @@ private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: Man
             // THE PAGE'S MAIN HEADING, in receipt form, so a run that reads its answer from the
             // page leaves the mint a real selector for the read step (see `MainHeadingProbe`).
             if let cdpTab = tab as? CDPTabHandle {
-                let headingLine = await makePageBridge(cdpTab, ctx.abortSignal ?? AbortSignal()).mainHeadingReceiptLine()
+                let headingLine = await makePageBridge(cdpTab, ctx.abortSignal ?? AbortSignal(), ctx.answerPageTracker).mainHeadingReceiptLine()
                 if !headingLine.isEmpty { sections.append(headingLine) }
             }
             sections.append("Interactive view: the page rendered as structural markdown — # headings, - list items, [text](href) links, | a | b | table rows, and plain paragraphs. Content is clean and id-free; every actionable element (link, button, input, select, landmark) carries a trailing {aloha-id=\"ID\" tag} marker. Use that id with page_click, page_type, page_select and get_text; to act on a row or a card, use the id on its own link or button trailer. The page tools address the tab currently in use — manage_tabs open and manage_tabs use both set it. Cross-origin iframe internals (payment widgets, embedded auth) cannot be inspected and carry no inner ids; do not read payment values back out.")
@@ -495,7 +499,7 @@ func manageTabsClose(_ tabId: String, _ tabsWindow: TabsWindow, _ ctx: ManageTab
     // taken, when a runner asked for that (see `AnswerPageTracker`); to the agent it is closed now.
     // A deferred close still takes the tab out of use, as a close does, so the page tools do not
     // go on acting on a tab the agent was told is closed.
-    if AnswerPageTracker.current.deferCloseIfObserved(tabId: tabId, targetId: (tab as? CDPTabHandle)?.id) {
+    if ctx.answerPageTracker.deferCloseIfObserved(tabId: tabId, targetId: (tab as? CDPTabHandle)?.id) {
         if let active = tabsWindow.tabs.activeTabId, tabsWindow.tabs.tab(active)?.id == tab.id {
             tabsWindow.tabs.setActiveTabId(nil)
         }

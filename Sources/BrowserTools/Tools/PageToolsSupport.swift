@@ -90,10 +90,10 @@ func resolveActivePageTab(
     return .success(ResolvedPageTab(tab: tab, cdpTab: cdpTab))
 }
 
-func makePageBridge(_ cdpTab: CDPTabHandle, _ signal: AbortSignal) -> AgentBrowserBridge {
+func makePageBridge(_ cdpTab: CDPTabHandle, _ signal: AbortSignal, _ tracker: AnswerPageTracker) -> AgentBrowserBridge {
     // Every page tool comes through here, so this is where "the page the agent last looked at"
-    // is noted (see `AnswerPageTracker`).
-    AnswerPageTracker.current.noteObservation(targetId: cdpTab.id)
+    // is noted, in the calling chat's tracker (see `AnswerPageTracker.current(for:)`).
+    tracker.noteObservation(targetId: cdpTab.id)
     return AgentBrowserBridge(backend: CDPAgentBridgeBackend(tab: cdpTab, signal: signal))
 }
 
@@ -190,7 +190,8 @@ func postActionPageSnapshot(_ context: ToolExecutionContext, tabId: String) asyn
         toolCallId: context.toolCallId,
         session: session,
         abortSignal: context.signal,
-        webExtractionOptions: context.services?.webExtractionOptions ?? .baseline)
+        webExtractionOptions: context.services?.webExtractionOptions ?? .baseline,
+        answerPageTracker: AnswerPageTracker.current(for: context.services))
     let read = await manageTabsRead(tabId, tabsWindow, ctx, false)
     guard !read.isError, let body = read.output,
           !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }

@@ -22,6 +22,11 @@ import CDP
     func clearActiveBrowserTabIfMatches(_ tabId: String) { if active == tabId { active = nil } }
 }
 
+/// One chat's tool services, keeping that chat's tracker (a host running several chats at once).
+@MainActor private final class ChatServices: NativeToolServices, AnswerPageTrackerOwning {
+    let answerPageTracker = AnswerPageTracker()
+}
+
 @MainActor
 @Suite("Answer page tracker")
 struct AnswerPageTrackerTests {
@@ -178,5 +183,71 @@ struct AnswerPageTrackerTests {
         }
         #expect(window.tabs.tab(fixture.tabId) == nil)
         #expect(tracker.takeDeferredCloses().isEmpty)
+    }
+
+    // MARK: One tracker per chat
+
+    /// Services that keep a tracker are noted into it, whatever task the call runs in; services that
+    /// keep none fall back to `current` (a bound turn's, else the process-wide one).
+    @Test func servicesThatKeepATrackerAreNotedIntoIt() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        defer { Task { await fixture.client.close() } }
+        fixture.cdp.alohaRawCallReplies = [(match: "__aloha.getText(", reply: .string("v3.8.5"))]
+        let chat = ChatServices(tabsService: fixture.tabsService, session: TrackerSession())
+        let plain = NativeToolServices(tabsService: fixture.tabsService)
+        #expect(AnswerPageTracker.current(for: chat) === chat.answerPageTracker)
+        #expect(AnswerPageTracker.current(for: plain) === AnswerPageTracker.current)
+        #expect(AnswerPageTracker.current(for: nil) === AnswerPageTracker.current)
+        let bound = AnswerPageTracker()
+        await bound.tracking {
+            #expect(AnswerPageTracker.current(for: chat) === chat.answerPageTracker)
+            #expect(AnswerPageTracker.current(for: plain) === bound)
+        }
+        chat.answerPageTracker.beginTurn(deferringCloses: true)
+        _ = try await GetTextExecutorTool().execute(
+            .object(["aloha_id": .string("chat-own-read-1")]), makePageToolContext(services: chat))
+        let window = try #require(fixture.tabsService.window)
+        let targetId = try #require(window.tabs.tab(fixture.tabId)).id
+        #expect(chat.answerPageTracker.observedTargetId == targetId)
+        #expect(chat.answerPageTracker.readIds(onTarget: targetId) == ["chat-own-read-1"])
+        #expect(!AnswerPageTracker.shared.readIds(onTarget: targetId).contains("chat-own-read-1"))
+    }
+
+    /// W2-review-build F1: two desktop conversations whose turns overlap. Chat A reads a tab and
+    /// closes it (deferred: A's agent is told "Closed:"); chat B's turn starts and reads. With one
+    /// shared tracker B's begin dropped A's deferred close -- the tab was never closed -- and A's
+    /// receipts were looked for on B's page. Each chat's own tracker keeps its own.
+    @Test func anOverlappingTurnOfAnotherChatKeepsThisChatsPageAndClose() async throws {
+        let fixture = try await makePageToolsCDPFixture()
+        defer { Task { await fixture.client.close() } }
+        fixture.cdp.alohaRawCallReplies = [(match: "__aloha.getText(", reply: .string("v3.8.5"))]
+        let window = try #require(fixture.tabsService.window)
+        let chatA = ChatServices(tabsService: fixture.tabsService, session: TrackerSession())
+        let sessionB = TrackerSession()
+        let chatB = ChatServices(tabsService: fixture.tabsService, session: sessionB)
+
+        chatA.answerPageTracker.beginTurn(deferringCloses: true)
+        _ = try await GetTextExecutorTool().execute(
+            .object(["aloha_id": .string("a")]), makePageToolContext(services: chatA))
+        let closed = try await ManageTabsExecutorTool().execute(
+            .object(["action": .string("close"), "tab_id": .string(fixture.tabId)]),
+            makePageToolContext(services: chatA))
+        #expect(closed.output.contains("Closed:"))
+        let targetId = try #require(window.tabs.tab(fixture.tabId)).id
+
+        // Chat B's turn starts while A's is still running, and B's agent looks at a page.
+        chatB.answerPageTracker.beginTurn(deferringCloses: true)
+        sessionB.active = fixture.tabId
+        _ = try await GetTextExecutorTool().execute(
+            .object(["aloha_id": .string("b")]), makePageToolContext(services: chatB))
+        #expect(chatB.answerPageTracker.observedTargetId == targetId)
+        #expect(chatB.answerPageTracker.takeDeferredCloses().isEmpty)
+
+        // Chat A's turn ends: its page and its deferred close are still its own.
+        #expect(chatA.answerPageTracker.observedTargetId == targetId)
+        #expect(chatA.answerPageTracker.readIds(onTarget: targetId) == ["a"])
+        #expect(chatA.answerPageTracker.isCloseDeferred(tabId: fixture.tabId))
+        #expect(await chatA.answerPageTracker.closeDeferredTabs(in: window) == [fixture.tabId])
+        #expect(window.tabs.tab(fixture.tabId) == nil)
     }
 }

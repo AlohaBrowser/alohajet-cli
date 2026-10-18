@@ -37,7 +37,7 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             // Two backend URL reads bracket the action so the receipt can say whether the
             // page moved — see PageDelta, and the 44-row blind-receipt measurement behind it.
             let urlBefore = bridge.currentPageURL()

@@ -18,13 +18,17 @@ import ToolABI
 /// ``closeDeferredTabs(in:)``). Other tabs close at once. Off by default: only a runner that
 /// flushes at turn end turns it on, so nothing else ever keeps a tab open.
 ///
-/// WHICH TRACKER. The page tools note into ``current``: the tracker a runner bound around its turn
-/// with ``tracking(_:)`` (a task-local, so it reaches every tool the turn's task runs, and no other
-/// turn's), else the process-wide ``shared`` -- the agent repository's original shape. A host that
-/// runs one turn at a time can use ``shared`` and nothing else. A host that runs several chats'
-/// turns at once keeps a tracker per chat and runs each turn inside its ``tracking(_:)``; with
-/// ``shared`` alone the chats would share one "latest observation", and the worst case is a receipt
-/// looked for on the other chat's page, where the answer's words are not, so none is written.
+/// WHICH TRACKER. The page tools note into ``current(for:)`` of the call's tool services: the
+/// services' own tracker when they keep one (``AnswerPageTrackerOwning``, one per chat), else
+/// ``current`` -- the tracker a runner bound around its turn with ``tracking(_:)`` (a task-local, so
+/// it reaches every tool the turn's task runs, and no other turn's), else the process-wide
+/// ``shared``, the agent repository's original shape. A host that runs one turn at a time can use
+/// ``shared`` and nothing else. A host that runs several chats' turns at once gives each chat's
+/// services a tracker of their own: a task-local does not reach tools an agent loop runs in its own
+/// long-lived task, and with ``shared`` alone the chats share one "latest observation" and one list
+/// of deferred closes -- a second chat's ``beginTurn(deferringCloses:)`` drops the first chat's
+/// deferred close (its tab is never closed) and the first chat's receipts are looked for on the
+/// second chat's page.
 ///
 /// Ported from AlohaBrowser/alohajet `Sources/AgentRuntime/AnswerPageTracker.swift` (branch
 /// windows-on-snips, dc514f76..a74a7d63): the page tools moved into this package, so the tracker
@@ -35,6 +39,13 @@ public final class AnswerPageTracker {
     /// The tracker the page tools note into now: the one bound by ``tracking(_:)`` around the
     /// running turn, else ``shared``.
     public static var current: AnswerPageTracker { bound ?? shared }
+
+    /// The tracker the page tools of a call with `services` note into: the services' own when they
+    /// keep one (``AnswerPageTrackerOwning``: a host that runs several chats at once), else
+    /// ``current``.
+    public static func current(for services: NativeToolServices?) -> AnswerPageTracker {
+        (services as? AnswerPageTrackerOwning)?.answerPageTracker ?? current
+    }
 
     @TaskLocal static var bound: AnswerPageTracker?
 
@@ -125,4 +136,12 @@ public final class AnswerPageTracker {
         return tabsWindow.tabs.orderedTabs.lazy.compactMap { $0 as? CDPTabHandle }
             .first { $0.id == observedTargetId }
     }
+}
+
+/// Tool services that keep an ``AnswerPageTracker`` of their own, one per chat. Every page tool a
+/// call with these services runs notes into it (``AnswerPageTracker/current(for:)``), whichever task
+/// the call runs in, so two chats' turns that overlap never share an observation or a deferred
+/// close. The host's runner begins and ends each of the chat's turns on the same tracker.
+public protocol AnswerPageTrackerOwning: AnyObject {
+    var answerPageTracker: AnswerPageTracker { get }
 }

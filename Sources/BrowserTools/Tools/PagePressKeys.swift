@@ -33,7 +33,7 @@ import ToolABI
         case let .failure(errorResult):
             return errorResult
         case let .success(resolved):
-            let bridge = makePageBridge(resolved.cdpTab, context.signal)
+            let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             // Two URL reads bracket the action so the receipt can say whether the page moved.
             let urlBefore = bridge.currentPageURL()
             // Which element the keys go into, in replayable terms, resolved BEFORE the keys: a
