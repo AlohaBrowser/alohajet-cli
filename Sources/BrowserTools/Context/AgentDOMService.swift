@@ -1955,11 +1955,15 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
                 placeholder: placeholder,
                 value: value)
             let storedType = (rawType.isEmpty || rawType == "text") ? nil : rawType
+            // A checkbox's or radio's state is `input.checked`, not its value (see
+            // `DomInputData.checked`).
+            let checked = (rawType == "checkbox" || rawType == "radio") ? (inputValue.bool("checked") ?? false) : nil
             content.inputData = DomInputData(
                 type: storedType,
                 placeholder: placeholder,
                 value: value,
-                isSecret: secret)
+                isSecret: secret,
+                checked: checked)
         }
     }
 

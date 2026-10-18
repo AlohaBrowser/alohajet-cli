@@ -766,8 +766,9 @@ struct ClickEffect: Equatable, Sendable {
 }
 
 /// The two page round trips behind ``AgentBrowserBridge/watchClickEffects(alohaId:)`` and
-/// ``AgentBrowserBridge/clickEffects()``. Templates so a harness can run the shipped bytes against a
-/// fake document (`Tests/BrowserToolsTests/click_effect.js`).
+/// ``AgentBrowserBridge/clickEffects()``, and the ambient watch the page read installs
+/// (``ambientWatchJS``). Pinned in a real browser by `RealBrowserSeedPolishTests`
+/// (`aClickThatChangesThePageIsNotANoOp`, `aPageThatChangesOnItsOwnIsNotAClickEffect`).
 ///
 /// WHAT COUNTS, outside the clicked control (its own changes are ``ControlStateChange``'s):
 /// - an added node that is visible now and carries text -- `#output` filled in after Submit --
@@ -781,11 +782,68 @@ struct ClickEffect: Equatable, Sendable {
 /// layer) never count. That is also why the click receipt asks this watch, not the structural
 /// fingerprint, whether the page changed: the fingerprint counts elements, and the cursor marker
 /// the click itself draws (and fades out) moves that count.
+///
+/// NOR DOES A PART OF THE PAGE THAT CHANGES ON ITS OWN. A clock, a ticker, a countdown or a
+/// carousel rewrites its text whether or not anything is clicked, and an inert button on such a
+/// page came back "The click changed this page without navigating: new text is showing --
+/// "2026-10-18T09:35:30.906Z"" (W5 client review, finding 2) -- a false claim the trajectory then
+/// carries into a mint. The page read installs ``ambientWatchJS``: one observer that counts, per
+/// element, the changes the page makes while no click is being watched. An element that changed
+/// ``ambientMinChanges`` times or more, the last of them within ``ambientRecentMs`` before the
+/// click, is LIVE, and its changes during the click are not the click's.
 enum ClickEffectProbe {
     /// The quoted text, at most this long.
     static let maxQuoted = 160
     /// The watch keeps at most this many mutation records.
     static let maxRecords = 400
+    /// An element that changed on its own at least this many times is live (a single late result of
+    /// an earlier click, or a "Loading…" then "Done", is not).
+    static let ambientMinChanges = 3
+    /// ...and changed last at most this long before the click watch began.
+    static let ambientRecentMs = 15_000
+
+    /// Installs the ambient watch once per document (a no-op when it runs). Embedded in the page
+    /// read's walker, so the seconds between a read and the click that follows it are observed.
+    nonisolated static let ambientWatchJS = #"""
+    (function () { /* click effect: what the page changes on its own */
+      try {
+        var a = window.__alohaAmbient;
+        if (a && a.obs && a.doc === document) return;
+        if (typeof MutationObserver !== 'function' || !document.documentElement) return;
+        var elementOf = function (n) { return n && n.nodeType === 1 ? n : (n ? n.parentElement : null); };
+        var ours = function (n) {
+          for (var x = elementOf(n), k = 0; x && k < 4; x = x.parentElement, k++) {
+            var xid = String(x.id || '');
+            if (xid.indexOf('ai-') === 0 || xid.indexOf('alohajet-') === 0) return true;
+          }
+          return false;
+        };
+        a = { live: new WeakMap(), obs: null, doc: document, at: Date.now(), seen: 0 };
+        a.obs = new MutationObserver(function (list) {
+          if (window.__alohaClickWatch) return;
+          var now = Date.now();
+          for (var i = 0; i < list.length; i++) {
+            var r = list[i];
+            if (r.type === 'childList') {
+              var mine = true, k;
+              for (k = 0; mine && k < r.addedNodes.length; k++) if (!ours(r.addedNodes[k])) mine = false;
+              for (k = 0; mine && k < r.removedNodes.length; k++) if (!ours(r.removedNodes[k])) mine = false;
+              if (mine) continue;
+            }
+            var e = elementOf(r.target);
+            if (!e || ours(e)) continue;
+            var s = a.live.get(e);
+            if (s) { s.n++; s.last = now; } else a.live.set(e, { n: 1, last: now });
+          }
+          a.seen += list.length;
+          if (a.seen > 20000 || now - a.at > 600000) { try { a.obs.disconnect(); } catch (x) {} a.obs = null; }
+        });
+        a.obs.observe(document.documentElement, { childList: true, subtree: true, characterData: true,
+          attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-hidden'] });
+        window.__alohaAmbient = a;
+      } catch (e) {}
+    })();
+    """#
 
     static func watchExpression(alohaId: String) -> String {
         let idLiteral = JSValue.string(alohaId).stringify()
@@ -798,7 +856,7 @@ enum ClickEffectProbe {
             if (typeof MutationObserver !== 'function' || !document.documentElement) return 'n';
             var el = null, tagged = document.querySelectorAll('[aloha-id]');
             for (var k = 0; k < tagged.length; k++) if (tagged[k].getAttribute('aloha-id') === id) { el = tagged[k]; break; }
-            var w = { el: el, recs: [], obs: null, timer: null };
+            var w = { el: el, recs: [], obs: null, timer: null, began: Date.now() };
             w.obs = new MutationObserver(function (list) {
               for (var i = 0; i < list.length && w.recs.length < \#(maxRecords); i++) w.recs.push(list[i]);
             });
@@ -845,6 +903,12 @@ enum ClickEffectProbe {
           if (!shown(e)) return '';
           return clean(n.nodeType === 3 ? n.textContent : (e.innerText || e.textContent));
         };
+        var amb = window.__alohaAmbient, began = w.began || Date.now();
+        var live = function (n) {
+          if (!amb || !amb.live) return false;
+          var e = elementOf(n), s = e ? amb.live.get(e) : null;
+          return !!s && s.n >= \#(ambientMinChanges) && began - s.last <= \#(ambientRecentMs);
+        };
         var changed = false, quoted = [];
         var quote = function (t) {
           if (!t) return;
@@ -854,7 +918,7 @@ enum ClickEffectProbe {
         };
         for (var i = 0; i < recs.length; i++) {
           var r = recs[i];
-          if (!r || inControl(r.target) || ours(r.target) || skipTag(r.target)) continue;
+          if (!r || inControl(r.target) || ours(r.target) || skipTag(r.target) || live(r.target)) continue;
           if (r.type === 'childList') {
             for (var a = 0; a < r.addedNodes.length; a++) {
               var add = r.addedNodes[a];

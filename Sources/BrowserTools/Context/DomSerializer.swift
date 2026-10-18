@@ -56,14 +56,21 @@ public struct DomInputData: Sendable {
     /// replaced by a marker, so the model still learns the field is FILLED without being handed
     /// what is in it.
     public var isSecret: Bool
+    /// WHETHER A CHECKBOX OR RADIO IS TICKED, nil for every other kind of field. The walker has
+    /// always read `input.checked`; nothing carried it, so a checkbox rendered
+    /// `input(checkbox, "on", value="on")` ticked or not -- and "on" is only the value the form
+    /// would submit. On the-internet's /checkboxes (W4, 2026-10-18) the model asked for seven
+    /// screenshots and still could not tell which box was ticked (11 rounds for a 4-round task).
+    public var checked: Bool?
     public init(type: String? = nil, placeholder: String? = nil, required: Bool = false,
-                disabled: Bool? = nil, value: String? = nil, isSecret: Bool = false) {
+                disabled: Bool? = nil, value: String? = nil, isSecret: Bool = false, checked: Bool? = nil) {
         self.type = type
         self.placeholder = placeholder
         self.required = required
         self.disabled = disabled
         self.value = value
         self.isSecret = isSecret
+        self.checked = checked
     }
 }
 
@@ -599,7 +606,10 @@ public func truncateLabel(_ raw: String, _ maxLength: Int = 20) -> String {
 
 let fullContentTextCap = 1000
 /// Shortest standalone content-leaf text worth surfacing. Below this it's almost always UI chrome
-/// (a bare vote/count "0", a separator "."), never a price or label the reader needs.
+/// (a separator ".", a stray glyph), never a price or label the reader needs -- unless it is a
+/// NUMBER (``isShortNumber``): TodoMVC's `<strong>1</strong> item left` read "item left", and a
+/// cart badge's "1" is the one sign an add worked. A short leaf inside a sentence is read with its
+/// sentence (``inlineSentenceTags``), not on its own.
 let contentLeafMinChars = 3
 let interactiveLabelCap = 120
 
@@ -687,6 +697,14 @@ private func appendAriaStateMarkers(_ rendered: String, _ node: DomNode) -> Stri
     case "false": markers.append(" [aria: COLLAPSED]")
     default: break
     }
+    // A custom checkbox / radio / switch (`role="checkbox"` + `aria-checked`) states it like a
+    // native one does (`input(checkbox, checked)`).
+    switch attrs["aria-checked"] {
+    case "true": markers.append(" [aria: CHECKED]")
+    case "false": markers.append(" [aria: NOT CHECKED]")
+    case "mixed": markers.append(" [aria: PARTLY CHECKED]")
+    default: break
+    }
     if attrs["aria-selected"] == "true" { markers.append(" [aria: SELECTED]") }
     if attrs["aria-pressed"] == "true" { markers.append(" [aria: PRESSED]") }
     if attrs["aria-invalid"] == "true" { markers.append(" [aria: INVALID]") }
@@ -704,6 +722,7 @@ private func openInteractiveTag(_ node: DomNode, _ tag: String) -> String {
             attrs.append("placeholder=\"\(placeholder)\"")
         }
         if inputData.required { attrs.append("required=true") }
+        if let checked = inputData.checked, isCheckOrRadioType(inputData.type) { attrs.append(checked ? "checked" : "unchecked") }
         c += " " + attrs.joined(separator: " ")
     case "select" where node.content.optionData != nil:
         c += " name=\"\(node.element.attributes["name"] ?? "")\""
@@ -976,10 +995,24 @@ private func renderInputControl(_ node: DomNode) -> String {
         parts.append("placeholder=\"\(normalizeWhitespace(placeholder))\"")
     }
     if data?.required == true { parts.append("required") }
+    // A checkbox or radio says whether it is ticked, and does not print the value its form would
+    // submit: `value="on"` (every unlabelled checkbox's label too) reads like a state and is not
+    // one. See `DomInputData.checked`.
+    if let checked = data?.checked, isCheckOrRadioType(data?.type) {
+        parts.append(checked ? "checked" : "unchecked")
+        // An unlabelled box's label falls back to its value, which is "on" unless the page set one.
+        let label = interactiveLabel(node)
+        if !label.isEmpty, label != "on" { parts.append("\"\(label)\"") }
+        return "input(\(parts.joined(separator: ", ")))"
+    }
     let label = interactiveLabel(node)
     if !label.isEmpty { parts.append("\"\(label)\"") }
     if let rendered = renderInputValue(data) { parts.append(rendered) }
     return "input(\(parts.joined(separator: ", ")))"
+}
+
+func isCheckOrRadioType(_ type: String?) -> Bool {
+    type == "checkbox" || type == "radio"
 }
 
 /// `value="..."` for a filled field, `value=(hidden)` for a secret one, nil for an empty one.
@@ -1076,6 +1109,9 @@ func emitOutOfViewElement(_ node: DomNode, _ depth: Int, _ nodesById: [String: D
     if tag == "input" {
         if let placeholder = node.content.inputData?.placeholder, !placeholder.isEmpty {
             c += " placeholder=\"\(placeholder)\""
+        }
+        if let data = node.content.inputData, let checked = data.checked, isCheckOrRadioType(data.type) {
+            c += checked ? " checked" : " unchecked"
         }
     }
     c = appendAriaAttributes(c, node, tag)
@@ -1285,7 +1321,8 @@ private func dedupKey(_ s: String) -> String {
 }
 
 /// Value symbols that make a short string worth keeping even under the min-length gate — a "£5"
-/// price or "20%" must survive while a bare vote-count "0"/"19" is dropped.
+/// price or "20%" must survive while a bare vote-count "0" is dropped (a non-zero short number is
+/// kept, ``isShortNumber``).
 private let valueSymbols: Set<Character> = ["£", "$", "€", "¥", "₽", "₹", "%"]
 
 /// A content-bearing leaf that `renderFullNode` would otherwise drop — a non-highlighted element
@@ -1308,11 +1345,72 @@ private func contentLeafLine(_ node: DomNode, _ listLevel: Int, _ nodesById: [St
     let text = normalizeWhitespace(elementText(node))
     guard text.contains(where: { $0.isLetter || $0.isNumber }) else { return nil }
     let hasValueSymbol = text.contains(where: { valueSymbols.contains($0) })
-    guard text.count >= contentLeafMinChars || hasValueSymbol else { return nil }
+    guard text.count >= contentLeafMinChars || hasValueSymbol || isShortNumber(text) else { return nil }
     let key = dedupKey(text)
     if !key.isEmpty, emittedAncestorKeys.contains(key) { return nil }
     let indent = String(repeating: " ", count: min(max(listLevel, 0), 4) * 2)
     return indent + truncateText(text, fullContentTextCap)
+}
+
+/// A preformatted text's lines, each with its runs of spaces collapsed (indentation kept as one
+/// space per run) and trailing blanks dropped, at most one empty line in a row.
+func preformattedText(_ raw: String) -> String {
+    var lines: [String] = []
+    for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+        let collapsed = line.replacingOccurrences(of: "[ \t\r]+", with: " ", options: .regularExpression)
+        let trimmed = String(collapsed.reversed().drop(while: { $0 == " " }).reversed())
+        if trimmed.isEmpty, lines.last?.isEmpty ?? true { continue }
+        lines.append(trimmed)
+    }
+    while lines.last?.isEmpty == true { lines.removeLast() }
+    return stripLoneSurrogates(lines.joined(separator: "\n"))
+}
+
+/// A count, a page number, a badge: digits, optionally with a sign or a separator ("1", "12",
+/// "-3", "2/9"). Kept by the short-leaf gate in ``contentLeafLine`` -- except a bare zero, the
+/// vote / notification count chrome every listing carries ("0"); a zero that means something
+/// ("0 items left") sits in its sentence and is read with it.
+func isShortNumber(_ text: String) -> Bool {
+    text.contains(where: \.isNumber) && text.allSatisfy { $0.isNumber || "+-.,/:".contains($0) }
+        && text.contains(where: { $0.isNumber && $0 != "0" })
+}
+
+/// Elements that render NOTHING of their own in the read (no content branch) and so lose the
+/// sentence they hold to the fragments under them: `<span class="todo-count"><strong>1</strong>
+/// item left</span>` came back as "item left" (the 1 fell under the short-leaf gate), "Page
+/// <b>2</b> of <b>9</b>" in a `<div>` as "Page" / "of". Such an element whose content is only
+/// text and inline formatting -- no control, no block -- is read as ONE line, like a `<p>`.
+private let inlineSentenceTags: Set<String> = ["span", "div", "small", "label", "dd", "cite", "em", "strong", "b", "i"]
+
+/// Inline formatting that is part of the sentence around it.
+private let inlineFormattingTags: Set<String> = [
+    "b", "strong", "em", "i", "u", "s", "small", "sup", "sub", "mark", "abbr", "time", "data", "code",
+    "span", "kbd", "del", "ins", "q", "cite", "var", "bdi", "bdo", "font", "tt", "big", "wbr"
+]
+
+/// Whether `node` holds one sentence of text and inline formatting (see ``inlineSentenceTags``):
+/// at least one text node of its own with a letter or digit, at least one inline element, and
+/// no control, block or other element anywhere under it.
+private func isInlineSentence(_ node: DomNode, _ nodesById: [String: DomNode]) -> Bool {
+    var ownText = false
+    var inlineChild = false
+    for childId in node.children {
+        guard let child = nodesById[childId] else { continue }
+        if child.nodeType == "TEXT_NODE" {
+            let text = child.element.textContent ?? child.element.childText ?? ""
+            if text.contains(where: { $0.isLetter || $0.isNumber }) { ownText = true }
+            continue
+        }
+        guard inlineOnly(child, nodesById) else { return false }
+        inlineChild = true
+    }
+    return ownText && inlineChild
+}
+
+private func inlineOnly(_ node: DomNode, _ nodesById: [String: DomNode]) -> Bool {
+    if node.nodeType == "TEXT_NODE" { return true }
+    guard inlineFormattingTags.contains(node.element.tagName.lowercased()), !nodeIsKeptInteractive(node) else { return false }
+    return node.children.allSatisfy { id in nodesById[id].map { inlineOnly($0, nodesById) } ?? true }
 }
 
 /// Punctuation that never takes a space before it when prose parts are rejoined.
@@ -1364,6 +1462,14 @@ private func proseLine(
             // `emitInViewportElement` returns "" for `<code>` and for a wrapper whose label an
             // interactive descendant already carries — descend rather than swallow the subtree.
         }
+        // An element whose text nodes the walk did not keep (a one-character "2" in "Page
+        // <b>2</b> of 9") still carries that text itself.
+        if !child.children.contains(where: { nodesById[$0] != nil }) {
+            guard child.positioning.isVisible else { return }
+            let own = normalizeWhitespace(elementText(child))
+            if !own.isEmpty { parts.append(own) }
+            return
+        }
         for grandchild in child.children { visit(grandchild) }
     }
     for childId in node.children { visit(childId) }
@@ -1389,6 +1495,10 @@ func renderFullNode(
 ) -> String {
     if node.nodeType == "TEXT_NODE" {
         if !node.positioning.isInViewport { return "" }
+        // Preformatted text (`<pre>`, white-space:pre*) keeps its lines: the walker marks it.
+        if node.element.attributes["aloha-pre"] != nil {
+            return truncateText(preformattedText(node.element.textContent ?? ""), fullContentTextCap)
+        }
         let text = truncateText(normalizeWhitespace(node.element.textContent ?? node.element.childText ?? ""), fullContentTextCap)
         return text.isEmpty ? "" : text
     }
@@ -1443,6 +1553,9 @@ func renderFullNode(
     if inlineTextTags.contains(tag) && node.positioning.isVisible {
         let text = proseLine(node, nodesById, options, &consumed) ?? contentText(node)
         return text.isEmpty ? "" : text
+    }
+    if inlineSentenceTags.contains(tag), node.positioning.isVisible, isInlineSentence(node, nodesById) {
+        return proseLine(node, nodesById, options, &consumed) ?? ""
     }
     return ""
 }

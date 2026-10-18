@@ -21,6 +21,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     return #"""
 (() => {
     const DEBUG = \#(debug);
+    \#(ClickEffectProbe.ambientWatchJS)
     \#(sensitiveFieldPredicateJS)
     const collectDomTree = (collectAllInteractive = true, debug = false) => {
   const DEBUG = debug;
@@ -1649,15 +1650,28 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       // so saucedemo's price div held "$" and "29.99": the one-character "$" was dropped below and the
       // read said "29.99". An element with no child elements and several text nodes is emitted once,
       // on its first text node, with the element's whole text.
+      // A `<pre>` (or any white-space:pre* box) keeps its line breaks: collapsing them read a block
+      // of code or a poem as one line. The text node says so (`aloha-pre`), and the read keeps them.
+      let keepsLines = parent.tagName.toLowerCase() === "pre";
+      if (!keepsLines && text.includes("\n"))
+        try {
+          const ws = (getComputedStyleCached(parent) || {}).whiteSpace || "";
+          if (/^pre|break-spaces/.test(ws)) keepsLines = true;
+        } catch {}
       if (parent.children.length === 0) {
         const parts = Array.from(parent.childNodes)
           .filter((child) => child.nodeType === Node.TEXT_NODE && (child.textContent || "").trim());
         if (parts.length > 1) {
           if (parts[0] !== textNode) return null;
-          text = (parent.textContent || "").replace(/\s+/g, " ").trim();
+          text = keepsLines
+            ? (parent.textContent || "").trim()
+            : (parent.textContent || "").replace(/\s+/g, " ").trim();
         }
       }
-      if (!text || text.length <= 1) return null;
+      // A one-character text is a separator or a stray glyph ("|", "·", "×") -- unless it is a
+      // letter or a digit: TodoMVC's `<strong>1</strong> item left` read "item left", and "Page
+      // <b>2</b> of 9" lost its page.
+      if (!text || (text.length <= 1 && !/[\p{L}\p{N}]/u.test(text))) return null;
 
       try {
         const modals = getVisibleModalContainers();
@@ -1714,7 +1728,11 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       if (parentEl) {
         const textIndex =
           Array.from(parentEl.childNodes)
-            .filter((child) => child.nodeType === Node.TEXT_NODE && (child.textContent || "").trim().length > 1)
+            .filter((child) => {
+              if (child.nodeType !== Node.TEXT_NODE) return false;
+              const t = (child.textContent || "").trim();
+              return t.length > 1 || /[\p{L}\p{N}]/u.test(t);
+            })
             .indexOf(textNode) + 1;
         textXPathSegment = textIndex > 1 ? `text()[${textIndex}]` : "text()";
       }
@@ -1732,7 +1750,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         isTopElement: false,
         isHighlighted: false,
         children: [],
-        attributes: {}
+        attributes: keepsLines && text.includes("\n") ? { "aloha-pre": "1" } : {}
       };
       const id = alohaIdFor(descriptor, null);
       nodeMap[id] = descriptor;
@@ -1850,6 +1868,7 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       };
     }
     if (isFileInputLike(element)) descriptor.isFileInput = true;
+    if (isContentEditableHost(element)) descriptor.isEditableHost = true;
 
     let highlighted = false;
     descriptor.isVisible = isElementVisible(element);
@@ -2124,15 +2143,21 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
       }
       return found;
     };
+    //   - an editor (a contenteditable host) is never a region: it is the field page_type types
+    //     into, and a message body holding four links lost its id (W5 client review);
+    //   - a clickable table row (`<tr onclick>`) holding four or more controls keeps its line and
+    //     id as a transparent container: the row is what opens the item, its buttons act on it.
     const transparent = new Set();
     for (const id in map) {
       const nodeData = map[id];
       if (!nodeData || !nodeData.isHighlighted || nodeData.type === 'TEXT_NODE') continue;
       if (CONTROL_TAGS.has(nodeData.tagName || '') || nodeData.isInput || nodeData.isTextarea || nodeData.isSelect || nodeData.isFileInput) continue;
+      if (nodeData.isEditableHost) continue;
       const role = String((nodeData.attributes && nodeData.attributes.role) || '').trim().toLowerCase();
       if (role && WIDGET_ROLES.has(role)) continue;
       const controls = controlsInside(id, CONTAINER_CONTROLS);
-      if (controls >= CONTAINER_CONTROLS) nodeData.isHighlighted = false;
+      if (controls >= CONTAINER_CONTROLS && nodeData.tagName === 'tr') transparent.add(id);
+      else if (controls >= CONTAINER_CONTROLS) nodeData.isHighlighted = false;
       else if (controls >= 2 && (nodeData.comprehensiveText || '').length > CONTAINER_TEXT_MIN) transparent.add(id);
     }
 

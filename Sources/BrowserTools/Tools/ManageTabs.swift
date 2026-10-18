@@ -51,8 +51,13 @@ import ToolABI
             }
             result = manageTabsList(tabsWindow, session, askingChat: context.sessionId)
         case "read":
-            guard let tabId else {
-                return RawToolResult(output: "tab_id is required for the read action", isError: true)
+            // READ WITHOUT A tab_id READS THE TAB IN USE -- the one every page tool addresses, so
+            // there is nothing to guess. A model that had only that tab's page in mind (after a
+            // replay, after a click) listed the tabs first to learn its id: one round for nothing.
+            guard let tabId = tabId ?? inUseTabId(session: session, tabs: tabsWindow.tabs) else {
+                return RawToolResult(
+                    output: "No tab is in use, so read needs a tab_id: call list for the ids, or open a page.",
+                    isError: true)
             }
             // The baseline default is `true`, so an omitted argument keeps the prior
             // `!= false` behavior.
