@@ -37,43 +37,78 @@ public nonisolated enum AnswerReceipt {
     static let temporaryIdPrefix = "aloha-answer-"
 
     /// The values an answer reports: its **bold** spans and its quoted spans ("…", “…”, «…»), in
-    /// order, de-duplicated. A bold LABEL (`**Distance:**`) is not a value and is skipped.
+    /// order, de-duplicated. A bold LABEL (`**Distance:**`, `**Distance**: 3.7 km`) is not a value
+    /// and is skipped; the value after it is taken instead.
+    ///
+    /// WHAT A LABEL IS (2026-10-18). A bold span with the colon INSIDE it (`**Time:** 50 min`) is
+    /// always a label. One with the colon AFTER it (`**Walking distance**: 3.7 km`) is a label only
+    /// when it opens its line or clause (start of line, a list bullet, or after `.`, `;`, `,`, `|`,
+    /// a dash or `(`) AND a value follows it on the same line. Otherwise the bold span IS the value
+    /// and the colon introduces what the answer says about it: quotes-love-first-author's teach run
+    /// answered "The first quote is attributed to **André Gide**:" and put the quote on the next
+    /// line, and André Gide -- the answer's lead value -- was dropped as a label, so the page's four
+    /// longest author names, which the answer merely listed, took every receipt slot and the mint
+    /// read the second quote's author.
     public static func values(in answer: String) -> [String] {
-        // A bold LABEL followed by its value -- `**Walking distance**: 3.7 km`, `**Time:** 50 min`
-        // (osm-route-r79): the value is the rest of the line, a trailing "(…)" gloss dropped. The
-        // label itself is skipped below.
+        let ns = answer as NSString
+        let whole = NSRange(location: 0, length: ns.length)
         var found: [(Int, String)] = []
-        if let labelled = try? NSRegularExpression(pattern: #"\*\*[^*\n]+?(?::\*\*|\*\*:)[ \t]*([^\n*]+)"#) {
-            let ns = answer as NSString
-            for match in labelled.matches(in: answer, range: NSRange(location: 0, length: ns.length)) where match.numberOfRanges > 1 {
-                var value = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+        // Where each bold LABEL starts: the bold pass below skips those spans.
+        var labelStarts = Set<Int>()
+        // A bold label followed by its value -- `**Walking distance**: 3.7 km`, `**Time:** 50 min`
+        // (osm-route-r79): the value is the rest of the line, a trailing "(…)" gloss dropped.
+        if let labelled = try? NSRegularExpression(pattern: #"\*\*[^*\n]+?(:\*\*|\*\*:)[ \t]*([^\n*]*)"#) {
+            for match in labelled.matches(in: answer, range: whole) where match.numberOfRanges > 2 {
+                let colonInside = ns.substring(with: match.range(at: 1)) == ":**"
+                var value = ns.substring(with: match.range(at: 2)).trimmingCharacters(in: .whitespaces)
                 if let paren = value.range(of: #"\s*\([^)]*\)\s*$"#, options: .regularExpression) { value.removeSubrange(paren) }
-                found.append((match.range(at: 1).location, value))
+                let valued = cleanValue(value) != nil
+                if colonInside || (valued && opensClause(answer, at: match.range.location)) {
+                    labelStarts.insert(match.range.location)
+                    if valued { found.append((match.range(at: 2).location, value)) }
+                }
             }
         }
-        let patterns = [#"\*\*(.+?)\*\*(?!:)"#, #"“([^”\n]+)”"#, #"«\s*([^»\n]+?)\s*»"#, #""([^"\n]+)""#]
-        for pattern in patterns {
+        let patterns = [#"\*\*(.+?)\*\*"#, #"“([^”\n]+)”"#, #"«\s*([^»\n]+?)\s*»"#, #""([^"\n]+)""#]
+        for (index, pattern) in patterns.enumerated() {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
-            let ns = answer as NSString
-            for match in regex.matches(in: answer, range: NSRange(location: 0, length: ns.length)) where match.numberOfRanges > 1 {
+            for match in regex.matches(in: answer, range: whole) where match.numberOfRanges > 1 {
+                if index == 0, labelStarts.contains(match.range.location) { continue }
                 found.append((match.range.location, ns.substring(with: match.range(at: 1))))
             }
         }
         var out: [String] = []
         for (_, raw) in found.sorted(by: { $0.0 < $1.0 }) {
-            var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if value.hasSuffix(":") { continue }
-            for wrap in [("\"", "\""), ("“", "”"), ("«", "»"), ("'", "'")] where value.hasPrefix(wrap.0) && value.hasSuffix(wrap.1) && value.count > 1 {
-                value = String(value.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
-            }
-            while let last = value.last, ".,;!".contains(last) { value.removeLast() }
-            guard !value.isEmpty, value.count <= maxValueLength,
-                  value.split(whereSeparator: { $0.isWhitespace }).count <= maxWords,
-                  !out.contains(value) else { continue }
+            guard let value = cleanValue(raw), !out.contains(value) else { continue }
             out.append(value)
             if out.count == maxValues { break }
         }
         return out
+    }
+
+    /// A span as a value: trimmed, unwrapped from its quotes, trailing punctuation dropped; nil
+    /// when it is empty, a label (ends in `:`), or a sentence (over ``maxValueLength`` characters
+    /// or ``maxWords`` words).
+    static func cleanValue(_ raw: String) -> String? {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasSuffix(":") { return nil }
+        for wrap in [("\"", "\""), ("“", "”"), ("«", "»"), ("'", "'")] where value.hasPrefix(wrap.0) && value.hasSuffix(wrap.1) && value.count > 1 {
+            value = String(value.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        while let last = value.last, ".,;!".contains(last) { value.removeLast() }
+        guard !value.isEmpty, value.count <= maxValueLength,
+              value.split(whereSeparator: { $0.isWhitespace }).count <= maxWords else { return nil }
+        return value
+    }
+
+    /// Whether the text before UTF-16 offset `location` puts it at the start of a line or a clause:
+    /// nothing but whitespace, quote markers and a list bullet since the line break, or a `.`, `;`,
+    /// `,`, `|`, a dash or `(` right before it. "attributed to **André Gide**:" does not open one.
+    static func opensClause(_ text: String, at location: Int) -> Bool {
+        let before = (text as NSString).substring(to: location)
+        let line = before.split(separator: "\n", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+        if line.range(of: #"^[ \t>]*(?:(?:[-*+•]|\d+[.)])[ \t]+)?$"#, options: .regularExpression) != nil { return true }
+        return line.range(of: #"[.;,|(—–-][ \t]*$"#, options: .regularExpression) != nil
     }
 
     /// THE PAGE DECIDES WHAT THE VALUES ARE. Every visible element on the final page whose own text
@@ -97,9 +132,17 @@ public nonisolated enum AnswerReceipt {
     /// later read before the earlier; without a read, or when its element is gone, the order is as
     /// above.
     ///
-    /// Returns a JSON array of `{id, path, text}` (at most ``maxValues``, best first), each element
-    /// given a temporary aloha-id (``temporaryIdPrefix``) when it has none, `path` its live position
-    /// path built the way the live-selector probe builds one; "" when nothing matches. A temporary
+    /// THE ANSWER'S SPANS IN ORDER, THE MAIN CONTENT, THE WHOLE VALUE (2026-10-18). An earlier bold /
+    /// quoted span ranks above a later one; an element in the page's main content above one in its
+    /// navigation, sidebar or page header/footer; and when an element holds a whole multi-word span,
+    /// an element holding only part of it ("10 December" for "10 December 1815") is dropped, as is an
+    /// element around another that holds the same span.
+    ///
+    /// Returns a JSON array of `{id, path, text, tag, attrs, desc}` (at most ``maxValues``, best
+    /// first), each element given a temporary aloha-id (``temporaryIdPrefix``) when it has none,
+    /// `path` its live position path built the way the live-selector probe builds one, `tag` and
+    /// `attrs` what the selector ladder reads (id, test hooks, name, type, href, role, class) and
+    /// `desc` the first class tokens inside it; "" when nothing matches. A temporary
     /// id an earlier call left behind is removed first. A template (`\#(answerLiteral)`,
     /// `\#(promptLiteral)`, `\#(hintsLiteral)`, `\#(readsLiteral)`, `\#(maxValues)`) so a harness can
     /// run the shipped bytes against a fake document: `Tests/BrowserToolsTests/answer_receipt.js`.
@@ -143,6 +186,30 @@ public nonisolated enum AnswerReceipt {
             // Concurrency”** for a title the page gives in full. A bold / quoted span of 2+ words
             // matches an element whose text contains it as a whole run.
             var HM = H.filter(function (h) { return h.split(' ').length >= 2; });
+            // THE ANSWER'S OWN SPANS IN ITS OWN ORDER: a hint ranks above every unhinted candidate,
+            // and an earlier hint above a later one, so the lead value is never pushed out by the
+            // longer names the answer merely lists after it (quotes-love-first-author: "**André
+            // Gide**" first, then thirteen more authors; the four longest took every slot).
+            var hintRank = function (T) { var hi = H.indexOf(T); return hi === -1 ? 0 : 100 + (H.length - hi); };
+            // THE MAIN CONTENT FIRST. Among candidates the answer repeats, one inside the page's
+            // main content (`main`, `article`, role=main) ranks above one in its chrome (`nav`,
+            // `aside`, a page-level `header` / `footer`, their roles): the same value in a sidebar
+            // list and in the release heading is the heading's (github-ss-r87).
+            var place = function (e) {
+              var chain = [];
+              for (var n = e; n && n !== document.body; n = n.parentElement) chain.push(n);
+              var iMain = -1, chrome = false;
+              for (var a = 0; a < chain.length; a++) {
+                var t = chain[a].tagName, role = chain[a].getAttribute ? String(chain[a].getAttribute('role') || '').toLowerCase() : '';
+                if (iMain === -1 && (t === 'MAIN' || t === 'ARTICLE' || role === 'main')) iMain = a;
+              }
+              for (var b = 0; b < chain.length; b++) {
+                var t2 = chain[b].tagName, role2 = chain[b].getAttribute ? String(chain[b].getAttribute('role') || '').toLowerCase() : '';
+                if (t2 === 'NAV' || t2 === 'ASIDE' || role2 === 'navigation' || role2 === 'complementary' || role2 === 'search') chrome = true;
+                else if ((t2 === 'HEADER' || t2 === 'FOOTER' || role2 === 'banner' || role2 === 'contentinfo') && !(iMain > b)) chrome = true;
+              }
+              return chrome ? -20 : (iMain >= 0 ? 20 : 0);
+            };
             var words = [], numbers = [];
             var all = document.body.querySelectorAll('*');
             for (var i = 0; i < all.length; i++) {
@@ -166,14 +233,15 @@ public nonisolated enum AnswerReceipt {
                 if (toks(c.innerText).join(' ') === T) { inner = true; break; }
               }
               if (inner) continue;
-              var hinted = (H.indexOf(T) !== -1 ? 100 : 0) + readBonus(e);
+              var hinted = hintRank(T) + readBonus(e) + place(e);
               if (A.indexOf(' ' + T + ' ') !== -1 && P.indexOf(' ' + T + ' ') === -1 && substantive(tk, T)) {
-                words.push({ e: e, T: T, raw: raw, score: hinted + (/\d/.test(T) ? 10 : 0) + T.length });
+                words.push({ e: e, T: T, raw: raw, h: H.indexOf(T) !== -1 ? T : '', score: hinted + (/\d/.test(T) ? 10 : 0) + T.length });
                 continue;
               }
               var holds = HM.filter(function (h) { return (' ' + T + ' ').indexOf(' ' + h + ' ') !== -1 && P.indexOf(' ' + h + ' ') === -1; });
               if (holds.length) {
-                words.push({ e: e, T: T, raw: raw, score: readBonus(e) + 50 + holds[0].length - (T.length - holds[0].length) / 10 });
+                words.push({ e: e, T: T, raw: raw, h: holds[0], holder: true,
+                             score: readBonus(e) + place(e) + 50 + holds[0].length - (T.length - holds[0].length) / 10 });
                 continue;
               }
               var en = nums(raw);
@@ -182,7 +250,36 @@ public nonisolated enum AnswerReceipt {
                 numbers.push({ e: e, T: T, raw: raw, score: hinted + en.length });
               }
             }
+            // THE FULL VALUE, NOT A PIECE OF IT (wiki-ada-lovelace-birthdate, 2026-10-18). When an
+            // element holds a whole bold / quoted span of the answer ("10 December 1815", in the
+            // infobox cell), an element whose text is only PART of that span ("10 December", a
+            // reference's access date further down) is not where the answer came from: it is
+            // dropped, unless the turn read it. And of the elements holding the same span, the
+            // innermost is kept: the cell, not its row; the author's own `<small>`, not the
+            // "by André Gide (about)" line around it.
+            var full = {};
+            for (var w = 0; w < words.length; w++) if (words[w].h) full[words[w].h] = true;
+            var within = function (inner, outer) {
+              for (var n = inner ? inner.parentElement : null; n; n = n.parentElement) if (n === outer) return true;
+              return false;
+            };
+            words = words.filter(function (m) {
+              if (readBonus(m.e) > 0) return true;
+              for (var h in full) {
+                if (h !== m.T && (' ' + h + ' ').indexOf(' ' + m.T + ' ') !== -1) return false;
+              }
+              if (m.holder) {
+                for (var o = 0; o < words.length; o++) {
+                  if (words[o] !== m && words[o].h === m.h && within(words[o].e, m.e)) return false;
+                }
+              }
+              return true;
+            });
             var pool = (words.length ? words : numbers).sort(function (a, b) { return b.score - a.score; });
+            // What the client's selector ladder (`StepTraceSelector`) reads off an element, so the
+            // receipt can name it by an id, a test hook, a name or a class rather than its position;
+            // and the class tokens inside it, to narrow a class that several elements share.
+            var LADDER = ['id', 'data-testid', 'data-test', 'name', 'type', 'href', 'role', 'class'];
             var out = [], seen = {};
             for (var k = 0; k < pool.length && out.length < maxN; k++) {
               var m = pool[k];
@@ -203,8 +300,19 @@ public nonisolated enum AnswerReceipt {
                 segs.unshift(same > 1 ? tg + ':nth-of-type(' + at + ')' : tg);
                 if (segs.length > \#(StepTraceSelector.maxPathSegments)) { ok = false; break; }
               }
-              if (ok) out.push({ id: id, path: ['body'].concat(segs).join('>'), text: m.raw.slice(0, 60) });
-              else if (id.indexOf(TMP) === 0) m.e.removeAttribute('aloha-id');
+              if (!ok) { if (id.indexOf(TMP) === 0) m.e.removeAttribute('aloha-id'); continue; }
+              var attrs = {};
+              for (var li = 0; li < LADDER.length; li++) {
+                var av = m.e.getAttribute(LADDER[li]);
+                if (av !== null && av !== undefined && String(av) !== '') attrs[LADDER[li]] = String(av).slice(0, 200);
+              }
+              var desc = [], inside = m.e.querySelectorAll ? m.e.querySelectorAll('*') : [];
+              for (var di = 0; di < inside.length && di < 200 && desc.length < 6; di++) {
+                var cl = String((inside[di].getAttribute && inside[di].getAttribute('class')) || '').split(/\s+/);
+                for (var ci = 0; ci < cl.length && desc.length < 6; ci++) if (cl[ci] && desc.indexOf(cl[ci]) === -1) desc.push(cl[ci]);
+              }
+              out.push({ id: id, path: ['body'].concat(segs).join('>'), text: m.raw.slice(0, 60),
+                         tag: String(m.e.tagName || '').toLowerCase(), attrs: attrs, desc: desc });
             }
             return out.length ? JSON.stringify(out) : '';
           } catch (e) { return ''; }
@@ -252,7 +360,8 @@ public nonisolated enum AnswerReceipt {
 
 extension AgentBrowserBridge {
     /// The answer receipts for `answer` (to the task `prompt`) on this bridge's page (see
-    /// ``AnswerReceipt``). Read-only apart from the temporary ids, which are removed.
+    /// ``AnswerReceipt``). Read-only apart from the temporary ids, which are removed. At most
+    /// ``AnswerReceipt/maxLines`` lines, each shorter than ``AnswerReceipt/maxLineLength``.
     func answerReceipts(for answer: String, prompt: String, readIds: [String] = []) async -> [AnswerReceipt.Line] {
         guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         var lines: [AnswerReceipt.Line] = []
@@ -262,20 +371,125 @@ extension AgentBrowserBridge {
         // the cleanup would not reach either (the next match removes what is left, see above).
         guard let raw = await evaluateForReceipt(expression), !raw.isEmpty else { return [] }
         if let found = JSValue.parse(raw), let items = found.arrayValue {
-            for item in items {
+            for item in items where lines.count < AnswerReceipt.maxLines {
                 guard let id = item.string("id"), !id.isEmpty, let path = item.string("path"), !path.isEmpty else { continue }
                 let text = item.string("text") ?? ""
+                let address = await answerAddress(item: item, alohaId: id, path: path, text: text)
                 // The read rules: the anchor may not be built from the element's own text, which
-                // is the value read.
-                let note = PageToolReceipt.selectorNote(
-                    selector: path, matches: await selectorMatchCount(path), text: text.isEmpty ? nil : text,
-                    identity: await elementIdentity(selector: path, alohaId: id, forRead: true),
-                    tool: "answer")
-                if !note.isEmpty { lines.append(.init(value: text, receipt: note)) }
+                // is the value read; and the selector may not contain it either (exception 2).
+                let identity = await elementIdentity(selector: address.selector, alohaId: id, forRead: true)
+                let shown = text.isEmpty ? nil : text
+                let free = GetTextExecutorTool.answerFreeReadAddress(selector: address.selector, text: shown, identity: identity)
+                let note: (ElementIdentity?) -> String = { identity in
+                    if let free {
+                        var placed = free.identity
+                        if identity?.attributes.isEmpty == true { placed = placed.map { AnswerReceipt.withoutAttributes($0) } }
+                        return PageToolReceipt.selectorNote(
+                            selector: free.selector, matches: free.matches, text: shown, identity: placed, tool: "answer")
+                    }
+                    return PageToolReceipt.selectorNote(
+                        selector: address.selector, matches: address.matches, text: shown, identity: identity, tool: "answer")
+                }
+                // ONE LINE STAYS UNDER llmdex's ENTRY CAP (4000 runes, `answerReceiptChars`), which
+                // cuts a longer one mid-bracket: the attributes go first, then the line.
+                var line = AnswerReceipt.Line(value: text, receipt: note(identity))
+                if !AnswerReceipt.fits(line), let identity {
+                    line = AnswerReceipt.Line(value: text, receipt: note(AnswerReceipt.withoutAttributes(identity)))
+                }
+                if !line.receipt.isEmpty, AnswerReceipt.fits(line) { lines.append(line) }
             }
         }
         _ = await evaluateForReceipt(AnswerReceipt.cleanupExpression)
         return lines
+    }
+
+    /// WHERE A RECEIPT FOR A MATCHED ELEMENT POINTS, and how many elements that matches now.
+    ///
+    /// The selector ladder first, as every tool receipt's (`StepTraceSelector`: an id a person
+    /// wrote, a test hook, a form name, a link's path, a role, stable classes), from the
+    /// attributes the page matcher read off the element, VERIFIED on the live page. Until
+    /// 2026-10-18 an answer receipt always carried the element's position path, so the mint copied
+    /// `body>div:nth-of-type(1)>div>div` for the-internet's `#flash` and a twelve-segment path for
+    /// Wikipedia's infobox cell: it reads right until the layout moves, then reads a different
+    /// element with no error.
+    ///
+    /// A ladder selector that several elements share (`td.infobox-data`, every infobox cell) is
+    /// NARROWED when a class inside the element makes it unique: `td.infobox-data:has(.nickname)`
+    /// names Ada Lovelace's "Born" cell on any revision of the article. Tried only with classes the
+    /// ladder itself would accept, and only one that resolves to exactly this element is kept.
+    /// Otherwise the shared selector stays, and `[index=]` says which of its matches the element is.
+    ///
+    /// With no ladder rung, or one the live page no longer matches, the element's live position
+    /// path (the matcher's `path`), as before.
+    func answerAddress(item: JSValue, alohaId: String, path: String, text: String) async -> (selector: String, matches: Int?) {
+        if let ladder = AnswerReceipt.ladderSelector(item: item), let count = await liveMatchesContaining(ladder, alohaId: alohaId) {
+            if count > 1 {
+                for candidate in AnswerReceipt.narrowed(ladder, insideClasses: item.array("desc") ?? [], text: text) {
+                    if await liveMatchesContaining(candidate, alohaId: alohaId) == 1 { return (candidate, 1) }
+                }
+            }
+            return (ladder, count)
+        }
+        return (path, await selectorMatchCount(path))
+    }
+
+    /// How many elements `selector` matches on the live page, when the element `alohaId` is among
+    /// them; nil when it is not, the selector does not parse, or the page cannot answer. The
+    /// live-selector probe's own round trip (``LiveSelectorProbe``), its rebuild ignored.
+    func liveMatchesContaining(_ selector: String, alohaId: String) async -> Int? {
+        guard !selector.isEmpty, !alohaId.isEmpty,
+              let value = try? await backend.evaluateViaCdp(LiveSelectorProbe.expression(selector: selector, alohaId: alohaId)),
+              let json = value.stringValue, let reply = LiveSelectorProbe.parse(json), reply.contains,
+              let matches = reply.matches, matches >= 1 else { return nil }
+        return matches
+    }
+}
+
+extension AnswerReceipt {
+    /// At most this many receipt lines per answer, whatever ``maxValues`` is: llmdex folds no more
+    /// than twelve into a run (`answerReceiptsKept`).
+    public static let maxLines = 12
+    /// Every line is SHORTER than this many Unicode scalars (Go runes): llmdex keeps the first 4000
+    /// of an entry (`answerReceiptChars`) and would cut a longer line inside a bracket.
+    public static let maxLineLength = 4000
+    /// At most this many `:has(.class)` narrowings are tried per element (one page round trip each).
+    static let maxNarrowings = 3
+
+    static func fits(_ line: Line) -> Bool { line.text.unicodeScalars.count < maxLineLength }
+
+    static func withoutAttributes(_ identity: ElementIdentity) -> ElementIdentity {
+        var bare = ElementIdentity(index: identity.index, attributes: [])
+        bare.list = identity.list
+        bare.anchor = identity.anchor
+        return bare
+    }
+
+    /// The selector ladder's pick for the element the matcher described (`tag`, `attrs`), or nil
+    /// when nothing on it is stable. No position rung here: the matcher's live path is that.
+    static func ladderSelector(item: JSValue) -> String? {
+        guard let tag = item.string("tag"), !tag.isEmpty else { return nil }
+        var attributes: [String: String] = [:]
+        for (name, value) in item.object("attrs") ?? [] {
+            if let value = value.stringValue { attributes[name] = value }
+        }
+        guard !attributes.isEmpty else { return nil }
+        return stableCSSSelector(for: DomNode(id: "", element: DomElement(tagName: tag, attributes: attributes)))
+    }
+
+    /// `ladder:has(.c)` for the first stable class tokens found inside the element, in document
+    /// order -- never one whose selector would contain the value read (`text`, 3+ characters).
+    static func narrowed(_ ladder: String, insideClasses: [JSValue], text: String) -> [String] {
+        let needle = text.count >= 3 ? text.lowercased() : nil
+        var out: [String] = []
+        for raw in insideClasses {
+            guard let token = raw.stringValue else { continue }
+            guard let stable = StepTraceSelector.stableClassTokens(token).first, stable == token else { continue }
+            let candidate = ladder + ":has(." + stable + ")"
+            if let needle, candidate.lowercased().contains(needle) { continue }
+            if !out.contains(candidate) { out.append(candidate) }
+            if out.count == maxNarrowings { break }
+        }
+        return out
     }
 }
 

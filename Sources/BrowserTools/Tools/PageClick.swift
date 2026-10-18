@@ -88,6 +88,10 @@ import ToolABI
             // without answering it, so the mouse event below reaches the element rather than the
             // layer. Nil when nothing covered the target. See hideCoveringOverlay.
             let overlayNote = await bridge.hideCoveringOverlay(alohaId: alohaId)
+            // AND WHAT THE PAGE AROUND THE CONTROL DOES IN RESPONSE: a result written elsewhere on the
+            // page (demoqa's `#output` under its Submit) changes neither the URL nor the control.
+            // Started after the overlay hider, so hiding a layer is not mistaken for the click's effect.
+            let watching = await bridge.watchClickEffects(alohaId: alohaId)
             // .inline, NOT the default. The script is built above from a typed click_type and a
             // quoted aloha-id -- there is no model-authored code in it -- so it does not need the
             // page to compile a string, and asking the page to do that is what a strict CSP refuses.
@@ -104,6 +108,8 @@ import ToolABI
             let clickLanded = !result.isError
                 && (result.pendingResults.first(where: { $0.type == route.pendingType })?.success ?? false)
             let urlAfter = clickLanded ? await bridge.settledPageURL(after: urlBefore) : urlBefore
+            // Read -- and stop -- the watch on every path; a navigation took its document with it.
+            let effect = watching ? await bridge.clickEffects() : nil
             // A CLICK THAT MOVED THE PAGE off a filled-in form is what a submission looks like from
             // here. Recorded only then: a click that changed nothing submitted nothing, and recording
             // it would refuse the retry that is supposed to follow.
@@ -130,22 +136,35 @@ import ToolABI
             // ORDER MATTERS BETWEEN THE TWO PROBES. If the control moved, the click did its job, and
             // the obstruction note -- which would go on to report that a form is currently invalid --
             // would be a second, contradicting answer to a question already settled.
+            //
+            // A PAGE THAT CHANGED IS NOT A NO-OP, whatever the control did: the watch saw something
+            // appear, change or go (or, without a watch, the structure moved), so the obstruction
+            // probe does not say "did NOTHING observable", and text that appeared is quoted when
+            // nothing else explained the click.
+            let fingerprintAfter = await bridge.pageFingerprint()
+            let pageMoved = AgentBrowserBridge.pageMoved(before: fingerprintBefore, after: fingerprintAfter)
             if clickLanded, urlAfter == urlBefore {
                 let stateAfter = await bridge.controlState(alohaId: alohaId)
+                // The watch's answer when it ran: the fingerprint also counts the cursor marker the
+                // click draws and fades, so it moves on a click that changed nothing on the page.
+                let structureMoved = fingerprintBefore != nil && fingerprintAfter != nil && fingerprintBefore != fingerprintAfter
                 if let changed = ControlStateChange.note(from: stateBefore, to: stateAfter) {
                     receipt.output += changed
-                } else if let why = await bridge.clickObstructionNote(alohaId: alohaId) {
+                } else if let why = await bridge.clickObstructionNote(
+                    alohaId: alohaId, pageChanged: effect.map(\.changed) ?? structureMoved) {
                     receipt.output += why
+                } else if let shown = effect?.note {
+                    receipt.output += shown
                 }
             }
             // THE PAGE THE NEXT ACTION MUST USE, in this result, when the click changed it -- and the
             // mark that tells a host so. Stamped AFTER naming, which skips a result that already
-            // carries metadata. See withPageSnapshot and PageStructureChange.
-            let fingerprintAfter = await bridge.pageFingerprint()
-            let pageMoved = AgentBrowserBridge.pageMoved(before: fingerprintBefore, after: fingerprintAfter)
+            // carries metadata. See withPageSnapshot and PageStructureChange. Text written into an
+            // element that was already there moves no fingerprint, and is still a page the model
+            // has not seen: it is sent too.
             return PageStructureChange.stamp(
                 resolved.tab.naming(
-                    await withPageSnapshot(receipt, context, resolved, changed: pageMoved)),
+                    await withPageSnapshot(receipt, context, resolved, changed: pageMoved || effect?.appeared != nil)),
                 moved: pageMoved)
         }
     }

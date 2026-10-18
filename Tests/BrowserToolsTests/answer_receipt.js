@@ -137,7 +137,7 @@ const githubTask = "Go to github.com and use its search box to look up 'shadowso
 //    the heading's aloha-id read, the heading; with a read of the whole release row, the value inside it.
 {
   const page = () => el('body', {}, [
-    el('nav', {}, [el('ul', {}, [el('li', {}, [el('a', { 'aloha-id': 'd61f-nav2' }, [el('span', {}, [], 'v3.8.5')])])])]),
+    el('div', {}, [el('ul', {}, [el('li', {}, [el('a', { 'aloha-id': 'd61f-nav2' }, [el('span', {}, [], 'v3.8.5')])])])]),
     el('section', { 'aloha-id': 'd61f-row' }, [
       el('span', {}, [el('a', { 'aloha-id': 'd61f-6c0653d', href: '/MHSanaei/3x-ui/releases/tag/v3.8.5' }, [], 'v3.8.5')]),
       el('span', { 'aloha-id': 'd61f-badge' }, [], 'Latest'),
@@ -145,14 +145,14 @@ const githubTask = "Go to github.com and use its search box to look up 'shadowso
   ]);
   const answer = 'The latest release name is **v3.8.5**.';
   const none = run(page(), answer, githubTask, ['v3.8.5']);
-  check('without a read, the first v3.8.5 in the page', none.length === 1 && none[0].path.startsWith('body>nav'), none);
+  check('without a read, the first v3.8.5 in the page', none.length === 1 && none[0].path.startsWith('body>div'), none);
   const read = run(page(), answer, githubTask, ['v3.8.5'], ['d61f-badge', 'd61f-6c0653d']);
   check('with the heading read, the receipt is the element read',
     read.length === 1 && read[0].id === 'd61f-6c0653d' && read[0].path.startsWith('body>section'), read);
   const row = run(page(), answer, githubTask, ['v3.8.5'], ['d61f-row']);
   check('with the row read, the value inside the row', row.length === 1 && row[0].id === 'd61f-6c0653d', row);
   const gone = run(page(), answer, githubTask, ['v3.8.5'], ['d61f-elsewhere']);
-  check('a read whose element is gone changes nothing', gone.length === 1 && gone[0].path.startsWith('body>nav'), gone);
+  check('a read whose element is gone changes nothing', gone.length === 1 && gone[0].path.startsWith('body>div'), gone);
 }
 
 // 10. A FIELD'S CONTENT IS NOT A VALUE THE PAGE SAID: a textarea holding what the user typed (or a
@@ -186,6 +186,69 @@ function runCleanup(body) {
   const removed = runCleanup(page);
   check('the cleanup removes the temporary id', removed === '1' && fresh.getAttribute('aloha-id') === null, { removed, attrs: fresh._attrs });
   check("the cleanup keeps the page's own id", kept.getAttribute('aloha-id') === '7959-1f3a9c2b', kept._attrs);
+}
+
+
+// 12. THE MAIN CONTENT BEFORE THE PAGE'S CHROME (github-ss-r87's shape, no read this time): the same
+//     value in a sidebar <nav> list and in the <main> release heading goes to the heading; a
+//     page-level <header> counts as chrome, an <article>'s own header does not.
+{
+  const page = el('body', {}, [
+    el('nav', {}, [el('ul', {}, [el('li', {}, [el('a', {}, [], 'v3.8.5')])])]),
+    el('main', {}, [el('h2', {}, [el('a', { href: '/r/v3.8.5' }, [], 'v3.8.5')])]),
+  ]);
+  const r = run(page, 'The latest release name is **v3.8.5**.', githubTask, ['v3.8.5']);
+  check('the value in <main> beats the same value in <nav>', r.length === 1 && r[0].path.startsWith('body>main'), r);
+  const page2 = el('body', {}, [
+    el('header', {}, [el('span', {}, [], 'Ada Lovelace')]),
+    el('article', {}, [el('header', {}, [el('h1', {}, [], 'Ada Lovelace')])]),
+  ]);
+  const r2 = run(page2, 'The article is about **Ada Lovelace**.', 'Open the article and tell me who it is about.', ['Ada Lovelace']);
+  check("an article's own header is content; the page header is chrome", r2.length === 1 && r2[0].path.startsWith('body>article'), r2);
+}
+
+// 13. THE ANSWER'S LEAD VALUE KEEPS ITS SLOT (quotes-love-first-author, teach run F0C8A4B4, the real
+//     answer): "The first quote is attributed to **André Gide**:" and then a list of the thirteen
+//     other authors. The hints are what `values(in:)` yields for that answer (AnswerReceiptTests).
+{
+  const authors = ['André Gide', 'Marilyn Monroe', 'Bob Marley', 'Elie Wiesel', 'Friedrich Nietzsche', 'Pablo Neruda',
+    'Marilyn Monroe', 'Marilyn Monroe', 'James Baldwin', 'Jane Austen'];
+  const quotes = authors.map(a => el('div', { class: 'quote' }, [el('span', { class: 'text' }, [], '“A quote by someone that is long enough to be a sentence and not a value.”'),
+    el('span', {}, [el('small', { class: 'author', itemprop: 'author' }, [], a), el('a', { href: '#' }, [], '(about)')], 'by'),
+    el('div', { class: 'tags' }, [el('a', { class: 'tag', href: '/tag/love/' }, [], 'love')])]));
+  const page = el('body', {}, [el('div', { class: 'container' }, [el('div', { class: 'row' }, [el('div', { class: 'col-md-8' }, quotes)])])]);
+  const answer = 'The first quote is attributed to **André Gide**:\n\n> “It is better to be hated for what you are than to be loved for what you are not.”\n\n'
+    + 'There are 14 quotes tagged “love” across [page 1](https://quotes.toscrape.com/tag/love/page/1/) and [page 2](https://quotes.toscrape.com/tag/love/page/2/). '
+    + 'The rest are attributed, in order, to **Marilyn Monroe, Bob Marley, Elie Wiesel, Friedrich Nietzsche, Pablo Neruda, Marilyn Monroe, Marilyn Monroe, James Baldwin, Jane Austen, C.S. Lewis, Alfred Tennyson, Jane Austen,** and **J.M. Barrie**.';
+  const r = run(page, answer, 'Show the quotes tagged love and tell me who wrote the first one.', ['André Gide', 'love', 'J.M. Barrie']);
+  check('the lead value is the first receipt', r.length >= 1 && r[0].text === 'André Gide', r.map(x => x.text));
+  check('the line around the author ("by André Gide (about)") is not a second receipt for it',
+    !r.some(x => /^by /.test(x.text)), r.map(x => x.text));
+  check('the cap still holds', r.length === maxValues, r.length);
+  check("the task's own word (love) is no receipt", !r.some(x => x.text === 'love'), r.map(x => x.text));
+}
+
+// 14. A PIECE OF THE VALUE IS NOT THE VALUE (wiki-ada-lovelace-birthdate, 2026-10-18): the answer's
+//     "**10 December 1815**" sits in the infobox cell among other text; a reference's access date
+//     "10 December" repeats only part of it. One receipt: the cell -- not its row, not the citation.
+{
+  // The cell's own text node holds the date (the fake DOM puts an element's own text first).
+  const cell = el('td', { class: 'infobox-data' }, [el('div', { class: 'nickname' }, [], 'Augusta Ada Byron'),
+    el('span', { style: 'display:none' }, [el('span', { class: 'bday' }, [], '1815-12-10')], '', false),
+    el('div', { class: 'birthplace' }, [], 'London, England')], '10 December 1815');
+  const row = el('tr', {}, [el('th', { class: 'infobox-label' }, [], 'Born'), cell]);
+  const refs = el('ol', { class: 'references' }, [el('li', {}, [el('cite', {}, [el('span', { id: 'mwCTM' }, [], '10 December')], 'Retrieved')])]);
+  const page = el('body', {}, [el('main', {}, [el('table', { class: 'infobox' }, [el('tbody', {}, [row])]), refs])]);
+  const answer = "Ada Lovelace was born on **10 December 1815**. I've opened the [Wikipedia article](https://en.wikipedia.org/wiki/Ada_Lovelace).";
+  const r = run(page, answer, 'Open the Wikipedia article on Ada Lovelace and tell me her date of birth.', ['10 December 1815']);
+  check('one receipt, the cell that holds the whole value', r.length === 1 && r[0].path.endsWith('>tr>td'), r);
+  check('the partial citation date is not a receipt', !r.some(x => x.text === '10 December'), r.map(x => x.text));
+  check('the ladder sees the cell: its tag, its class, the classes inside it',
+    r[0] && r[0].tag === 'td' && r[0].attrs.class === 'infobox-data' && r[0].desc.join(',') === 'nickname,bday,birthplace', r[0]);
+  // Without the whole value on the page, the piece is still the best there is.
+  const lone = el('body', {}, [el('main', {}, [el('span', {}, [], '10 December')])]);
+  const r2 = run(lone, answer, 'Open the Wikipedia article on Ada Lovelace and tell me her date of birth.', ['10 December 1815']);
+  check('a piece is kept when nothing holds the whole value', r2.length === 1 && r2[0].text === '10 December', r2);
 }
 
 console.log(failures ? `${failures} FAILED` : 'all answer-receipt checks passed');

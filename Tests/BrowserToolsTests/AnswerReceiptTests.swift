@@ -33,6 +33,40 @@ struct AnswerReceiptValuesTests {
         #expect(AnswerReceipt.values(in: "**Walking distance: 3.7 km**") == ["Walking distance: 3.7 km"])
     }
 
+    /// quotes-love-first-author, teach run F0C8A4B4 (2026-10-18), the answer verbatim: the lead value
+    /// is bold and followed by a colon, and the quote it introduces is on the next line. It was taken
+    /// for a LABEL (`**…**:`), so the answer's own value got no hint and no receipt.
+    @Test func aBoldValueBeforeAColonAndALineBreakIsAValue() {
+        let answer = """
+        The first quote is attributed to **André Gide**:
+
+        > “It is better to be hated for what you are than to be loved for what you are not.”
+
+        There are 14 quotes tagged “love” across [page 1](https://quotes.toscrape.com/tag/love/page/1/) and \
+        [page 2](https://quotes.toscrape.com/tag/love/page/2/). The rest are attributed, in order, to **Marilyn Monroe, \
+        Bob Marley, Elie Wiesel, Friedrich Nietzsche, Pablo Neruda, Marilyn Monroe, Marilyn Monroe, James Baldwin, \
+        Jane Austen, C.S. Lewis, Alfred Tennyson, Jane Austen,** and **J.M. Barrie**.
+        """
+        #expect(AnswerReceipt.values(in: answer) == ["André Gide", "love", "J.M. Barrie"])
+        // The same answer with the colon at the end of the text, or the quote on the same line.
+        #expect(AnswerReceipt.values(in: "The first quote is attributed to **André Gide**:") == ["André Gide"])
+        #expect(AnswerReceipt.values(in: "It is by **André Gide**: “It is better to be hated.”") == ["André Gide", "It is better to be hated"])
+    }
+
+    /// A bold span with the colon AFTER it is a label only where a label stands -- at the start of a
+    /// line or a clause -- and only with a value after it on the same line.
+    @Test func aLabelOpensItsLineOrClauseAndHasAValue() {
+        #expect(AnswerReceipt.values(in: "- **Author**: André Gide") == ["André Gide"])
+        #expect(AnswerReceipt.values(in: "**Walking distance**: 3.7 kilometers. **Estimated time**: 50 minutes.")
+                == ["3.7 kilometers", "50 minutes"])
+        #expect(AnswerReceipt.values(in: "The author is **André Gide**: a French writer.") == ["André Gide"])
+        // A "value" that is a sentence makes the bold span the value, wherever it stands.
+        #expect(AnswerReceipt.values(in: "**André Gide**: it is better to be hated for what you are than to be loved for what you are not")
+                == ["André Gide"])
+        // The colon inside the bold is always a label, with or without a value after it.
+        #expect(AnswerReceipt.values(in: "**Time:**\n50 min") == [])
+    }
+
     @Test func sentencesDuplicatesAndTheCapAreHandled() {
         let sentence = "**" + Array(repeating: "word", count: AnswerReceipt.maxWords + 1).joined(separator: " ") + "**"
         #expect(AnswerReceipt.values(in: sentence) == [])
@@ -70,6 +104,27 @@ private final class MarkerProbeBackend: AgentBridgeBackend {
     func evaluateViaCdp(_ expression: String) async throws -> JSValue? {
         scripts.append(expression)
         return replies.first { expression.contains($0.marker) }?.value ?? nil
+    }
+    @discardableResult
+    func sendCdpCommand(domain: String, command: String, params: [String: JSValue]) async throws -> JSValue { .null }
+    func captureViewport() async throws -> (base64: String, imageWidth: Int, imageHeight: Int)? { nil }
+    func viewportDimensions() -> ViewportSize? { nil }
+    func resolveSandboxSavePath(_ path: String) -> String? { nil }
+    func writeScreenshot(base64: String, hostPath: String, isPng: Bool) async throws {}
+}
+
+/// Answers each script with `reply` (nil: the page could not answer), and records every script.
+@MainActor
+private final class ScriptedProbeBackend: AgentBridgeBackend {
+    let reply: (String) -> JSValue?
+    private(set) var scripts: [String] = []
+    init(_ reply: @escaping (String) -> JSValue?) { self.reply = reply }
+
+    var isAborted: Bool { false }
+    func consumeAgentDownloads() -> [CapturedDownload] { [] }
+    func evaluateViaCdp(_ expression: String) async throws -> JSValue? {
+        scripts.append(expression)
+        return reply(expression)
     }
     @discardableResult
     func sendCdpCommand(domain: String, command: String, params: [String: JSValue]) async throws -> JSValue { .null }
@@ -166,6 +221,118 @@ struct AnswerReceiptBridgeTests {
         let lines = await AgentBrowserBridge(backend: backend).answerReceipts(for: "It has 512 stars.", prompt: "How many stars?")
         #expect(lines.map(\.value) == ["512"])
         #expect(lines.first?.receipt == " [selector=body>p:nth-of-type(2)] [tool=answer] [matches=1] [text=\"512\"]")
+    }
+
+    // MARK: The selector: the ladder's, narrowed, verified (2026-10-18)
+
+    /// the-internet /secure (heroku-login-secure-area): the flash the answer quotes is `div#flash`,
+    /// and the receipt said `body>div:nth-of-type(1)>div>div`. The ladder's id is verified live
+    /// (its matches hold the element) and becomes the selector; the position path is not written.
+    @Test func theLaddersIdIsTheSelector() async {
+        let backend = ScriptedProbeBackend { script in
+            if script.contains(pageMatch) {
+                return .string(#"[{"id":"aloha-answer-0","path":"body>div:nth-of-type(1)>div>div","text":"You logged into a secure area! ×","tag":"div","attrs":{"id":"flash","class":"flash success","data-alert":""},"desc":["close"]}]"#)
+            }
+            if script.contains("/* receipt: live selector */") { return .string(#"{"n":1,"has":true,"path":"","pathN":0}"#) }
+            if script.contains("/* receipt: identity */") { return .string(#"{"index":1,"attrs":[["data-alert",""],["id","flash"]]}"#) }
+            if script.contains("window.__snips.resolveAll === 'function'") { return .string("y") }
+            if script.contains("/* receipt: anchor */") { return .string(##"{"s":"#flash","n":1}"##) }
+            if script.contains(cleanup) { return .string("1") }
+            return nil
+        }
+        let lines = await AgentBrowserBridge(backend: backend).answerReceipts(
+            for: #"Logged in. The page message was: **"You logged into a secure area!"**"#,
+            prompt: "Log in on this page as tomsmith using the demo credentials it shows, and tell me the message you get.")
+        #expect(lines.map(\.receipt) == [
+            #" [selector=#flash] [tool=answer] [matches=1] [text="You logged into a secure area! ×"] [attrs=data-alert="" id="flash"] [anchor=#flash]"#,
+        ])
+        #expect(!backend.scripts.contains { $0.contains("/* receipt: match count */") })   // the path was never needed
+    }
+
+    /// Wikipedia's infobox (wiki-ada-lovelace-birthdate): the ladder gives `td.infobox-data`, which
+    /// every infobox cell matches. A class INSIDE the cell narrows it to exactly this one; the
+    /// first narrowing that resolves to one element -- this element -- wins.
+    @Test func aSharedClassIsNarrowedByAClassInsideTheElement() async {
+        let backend = ScriptedProbeBackend { script in
+            if script.contains(pageMatch) {
+                return .string(#"[{"id":"aloha-answer-0","path":"body>div>main>table>tbody>tr:nth-of-type(3)>td","text":"Augusta Ada Byron 10 December 1815 London, England","tag":"td","attrs":{"class":"infobox-data"},"desc":["css-1x2y3z","nickname","bday"]}]"#)
+            }
+            if script.contains("/* receipt: live selector */") {
+                if script.contains(#""td.infobox-data""#) { return .string(#"{"n":9,"has":true,"path":"","pathN":0}"#) }
+                if script.contains(#""td.infobox-data:has(.nickname)""#) { return .string(#"{"n":2,"has":true,"path":"","pathN":0}"#) }
+                if script.contains(#""td.infobox-data:has(.bday)""#) { return .string(#"{"n":1,"has":true,"path":"","pathN":0}"#) }
+                return .string(#"{"n":0,"has":false,"path":"","pathN":0}"#)
+            }
+            if script.contains("/* receipt: identity */") { return .string(#"{"index":1,"attrs":[]}"#) }
+            if script.contains("window.__snips.resolveAll === 'function'") { return .string("y") }
+            if script.contains(cleanup) { return .string("1") }
+            return nil
+        }
+        let lines = await AgentBrowserBridge(backend: backend).answerReceipts(
+            for: "Ada Lovelace was born on **10 December 1815**.",
+            prompt: "Open the Wikipedia article on Ada Lovelace and tell me her date of birth.")
+        #expect(lines.first?.receipt.hasPrefix(" [selector=td.infobox-data:has(.bday)] [tool=answer] [matches=1]") == true, "\(lines)")
+        // A hashed class is never tried; the shared one stays when nothing narrows it.
+        #expect(!backend.scripts.contains { $0.contains("css-1x2y3z") })
+        #expect(AnswerReceipt.narrowed("td.infobox-data", insideClasses: [.string("Born")], text: "born") == [])
+    }
+
+    /// A ladder selector the live page does not match on this element (a class the page swapped)
+    /// is not written: the live position path is, as before.
+    @Test func aLadderSelectorThatMissesFallsBackToThePath() async {
+        let backend = ScriptedProbeBackend { script in
+            if script.contains(pageMatch) {
+                return .string(#"[{"id":"aloha-answer-0","path":"body>main>p","text":"512","tag":"p","attrs":{"class":"stars"},"desc":[]}]"#)
+            }
+            if script.contains("/* receipt: live selector */") { return .string(#"{"n":3,"has":false,"path":"body>main>p","pathN":1}"#) }
+            if script.contains("/* receipt: match count */") { return .number(1) }
+            if script.contains("/* receipt: identity */") { return .string(#"{"index":1,"attrs":[]}"#) }
+            if script.contains(cleanup) { return .string("1") }
+            return nil
+        }
+        let lines = await AgentBrowserBridge(backend: backend).answerReceipts(for: "It has **512** stars.", prompt: "How many stars?")
+        #expect(lines.map(\.receipt) == [#" [selector=body>main>p] [tool=answer] [matches=1] [text="512"]"#])
+    }
+
+    // MARK: The caps llmdex reads them with (open ask 6)
+
+    /// Every line is shorter than 4000 runes -- llmdex keeps the first 4000 of an entry and would cut
+    /// a longer one inside a bracket. The attributes go first; a line still too long is not sent.
+    @Test func aLineStaysUnderTheEntryCap() async {
+        let longPath = "body>" + Array(repeating: "div", count: 500).joined(separator: ">")          // ~2000
+        let longList = "body>" + Array(repeating: "section", count: 190).joined(separator: ">")     // ~1500
+        let attrs = (0..<12).map { #"["data-k\#($0)","\#(String(repeating: "v", count: 60))"]"# }.joined(separator: ",")
+        let backend = ScriptedProbeBackend { script in
+            if script.contains(pageMatch) {
+                return .string(#"[{"id":"aloha-answer-0","path":"\#(longPath)","text":"512"},{"id":"aloha-answer-1","path":"\#(longPath)>\#(longPath)","text":"513"}]"#)
+            }
+            if script.contains("/* receipt: match count */") { return .number(1) }
+            if script.contains("/* receipt: identity */") {
+                return .string(#"{"index":1,"attrs":[\#(attrs)],"list":{"selector":"\#(longList)","index":1,"count":2}}"#)
+            }
+            if script.contains(cleanup) { return .string("2") }
+            return nil
+        }
+        let lines = await AgentBrowserBridge(backend: backend).answerReceipts(for: "It has 512 or 513 stars.", prompt: "How many stars?")
+        #expect(lines.map(\.value) == ["512"])
+        #expect(lines.allSatisfy { $0.text.unicodeScalars.count < AnswerReceipt.maxLineLength })
+        #expect(lines.first.map { !$0.receipt.contains("[attrs=") && $0.receipt.contains("[list=") } == true)
+    }
+
+    /// At most twelve lines per answer, whatever the page answers.
+    @Test func atMostTwelveLines() async {
+        let items = (0..<15).map { #"{"id":"aloha-answer-\#($0)","path":"body>p:nth-of-type(\#($0 + 1))","text":"v\#($0).0.1"}"# }
+        let backend = ScriptedProbeBackend { script in
+            if script.contains(pageMatch) { return .string("[" + items.joined(separator: ",") + "]") }
+            if script.contains("/* receipt: match count */") { return .number(1) }
+            if script.contains("/* receipt: identity */") { return .string(#"{"index":1,"attrs":[]}"#) }
+            if script.contains(cleanup) { return .string("15") }
+            return nil
+        }
+        let lines = await AgentBrowserBridge(backend: backend).answerReceipts(for: "Versions v0.0.1 to v14.0.1.", prompt: "List them.")
+        #expect(lines.count == AnswerReceipt.maxLines)
+        #expect(AnswerReceipt.maxValues <= AnswerReceipt.maxLines)
+        #expect(AnswerReceipt.maxLines == 12 && AnswerReceipt.maxLineLength == 4000)
     }
 
     // MARK: The public entry, on a real (MockCDP-backed) tab

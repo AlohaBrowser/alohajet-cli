@@ -74,6 +74,55 @@ struct ClickReceiptProbesTests {
         #expect(await failed.clickObstructionNote(alohaId: "80bb-666e8684") == nil)
     }
 
+    /// demoqa-text-box-submit (2026-10-18): the caller knows the page changed around the control, so
+    /// the probe must not claim the click did nothing; the default keeps the old behaviour.
+    @Test func aChangedPageSuppressesTheNoOpSentence() async {
+        let backend = ProbeBackend(marker: "elementFromPoint", answer: .string(""))
+        let bridge = AgentBrowserBridge(backend: backend)
+        _ = await bridge.clickObstructionNote(alohaId: "80bb-666e8684")
+        _ = await bridge.clickObstructionNote(alohaId: "80bb-666e8684", pageChanged: true)
+        #expect(backend.scripts.count == 2)
+        #expect(backend.scripts[0].contains("var pageChanged = false;"))
+        #expect(backend.scripts[1].contains("var pageChanged = true;"))
+        #expect(backend.scripts.allSatisfy { $0.contains("if (buttonish && note === \"\" && !pageChanged)") })
+    }
+
+    // MARK: click effects
+
+    @Test func theWatchStartsAndAFailedOneIsSilent() async {
+        let started = AgentBrowserBridge(backend: ProbeBackend(marker: "/* receipt: click effect watch */", answer: .string("y")))
+        #expect(await started.watchClickEffects(alohaId: "80bb-666e8684"))
+        let unsupported = AgentBrowserBridge(backend: ProbeBackend(marker: "/* receipt: click effect watch */", answer: .string("n")))
+        #expect(await unsupported.watchClickEffects(alohaId: "80bb-666e8684") == false)
+        let failed = AgentBrowserBridge(backend: ProbeBackend(marker: "/* receipt: click effect watch */", answer: nil, error: ProbeError()))
+        #expect(await failed.watchClickEffects(alohaId: "80bb-666e8684") == false)
+    }
+
+    @Test func theEffectIsParsedAndQuoted() async {
+        let shown = AgentBrowserBridge(backend: ProbeBackend(
+            marker: "/* receipt: click effect */", answer: .string(#"{"changed":true,"text":"Name:Jane Doe | Email:jane.doe@example.com"}"#)))
+        let effect = await shown.clickEffects()
+        #expect(effect == ClickEffect(changed: true, appeared: "Name:Jane Doe | Email:jane.doe@example.com"))
+        #expect(effect?.note == #" The click changed this page without navigating: new text is showing -- "Name:Jane Doe | Email:jane.doe@example.com"."#)
+        // Restyled or removed, nothing new to quote: changed, but no sentence.
+        let styled = AgentBrowserBridge(backend: ProbeBackend(marker: "/* receipt: click effect */", answer: .string(#"{"changed":true,"text":""}"#)))
+        let restyle = await styled.clickEffects()
+        #expect(restyle == ClickEffect(changed: true, appeared: nil) && restyle?.note == nil)
+        // No watch (a navigation took the document), or a page that cannot answer: nothing.
+        #expect(await AgentBrowserBridge(backend: ProbeBackend(marker: "/* receipt: click effect */", answer: .string(""))).clickEffects() == nil)
+        #expect(await AgentBrowserBridge(backend: ProbeBackend(marker: "/* receipt: click effect */", answer: nil)).clickEffects() == nil)
+    }
+
+    /// The watch and its read are the bytes `click_effect.js` would run; here only their shape: the
+    /// element is found by its aloha-id, our own overlays and the control's own subtree never count.
+    @Test func theProbesNameTheirElementAndSkipTheirOwnLayers() {
+        let watch = ClickEffectProbe.watchExpression(alohaId: "80bb-\"q")
+        #expect(watch.contains(#"})("80bb-\"q")"#))
+        #expect(watch.contains("attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-hidden']"))
+        #expect(ClickEffectProbe.readExpression.contains("xid.indexOf('ai-') === 0 || xid.indexOf('alohajet-') === 0"))
+        #expect(ClickEffectProbe.readExpression.contains("inControl(r.target)"))
+    }
+
     // MARK: control state
 
     @Test func controlStateIsParsedFromTheProbe() async {
