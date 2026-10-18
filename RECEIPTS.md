@@ -86,7 +86,8 @@ the answer's own bold / quoted values are checked as well as the element's text:
 - with no list, `[selector=]` becomes the answer-free `[anchor=]`, with `[matches=]` its count
   and, when it matches 2+, `[index=]` the element's place among those matches (since 2026-10-18).
 
-The old selector is dropped. No `[path=]` is added. `[anchor=]` is still written.
+The old selector is dropped. No `[path=]` is added. `[anchor=]` is still written -- unless it
+spells the value too (since 2026-10-18), and exception 1 never promotes such an anchor for a read.
 
 **Anchor rule** (`ReceiptAnchorProbe`, `Sources/BrowserTools/Runtime/ReceiptAnchor.swift`). Candidates
 are tried in this order, and the first one that resolves back to the element wins:
@@ -229,4 +230,4 @@ exercised by `Tests/BrowserToolsTests/answer_receipt.js`, the whole chain on a r
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[text=]` and the anchor label never read a field's content: a text-entry input's `value` attribute or a textarea's text (a submit's, a checkbox's or a radio's `value` still names it). A click on a password field whose value the page kept in the attribute wrote the password into the receipt |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | answer receipts (`[tool=answer]`) and the tracker of the answer page move into this package from the agent repository (windows-on-snips `dc514f76`..`a74a7d63`); the temporary ids are found by their prefix, no marker attribute |
 | 2026-10-18 | this package, branch `e2e/polish-cli` | answer receipts: `[selector=]` is the selector ladder's pick (verified live; a shared one narrowed with `:has(.<class inside>)`), no longer always the position path; the answer's spans rank in their order; a bold span before a colon is a label only where a label stands; a piece of a value and an outer holder of it are dropped; main content outranks page chrome; at most 12 lines, each < 4000 characters (`[attrs=]` dropped first). No new bracket |
-| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` (W6) | exception 2 and the answer narrowing compare the value as an address spells it (folded, word for word) and, for answer receipts, the answer's own values too; a state / promotion class never narrows; the answer's spans now really rank in their order (a hint step outweighs length). No new bracket |
+| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` (W6) | exception 2 and the answer narrowing compare the value as an address spells it (folded, word for word) and, for answer receipts, the answer's own values too; a state / promotion class never narrows; the answer's spans now really rank in their order (a hint step outweighs length); for a read, an anchor that spells the value is neither promoted by exception 1 nor written as `[anchor=]`. No new bracket |
