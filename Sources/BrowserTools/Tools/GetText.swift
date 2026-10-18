@@ -53,18 +53,26 @@ import ToolABI
     /// case), the element is addressed by its place in its LIST (`[selector]` = the list,
     /// `[matches]` its size, `[index]` the place) or, with no list, by its answer-free anchor. nil
     /// when the selector is already free of the text, or there is nothing better to offer.
-    static func answerFreeReadAddress(selector: String, text: String?, identity: ElementIdentity?)
+    ///
+    /// THE VALUE AS AN ADDRESS SPELLS IT counts too (W5 client review, finding 3): a link's path
+    /// writes "Charles Babbage" as `/wiki/Charles_Babbage`, a release as `v3-8-5`, a title with
+    /// `%20` -- ``selector(_:bears:)`` folds case, accents, percent-escapes and the separators an
+    /// address uses before it compares. And an answer receipt checks the answer's own values
+    /// (`alsoValues`, its bold and quoted spans) as well as the element's text: books.toscrape's
+    /// link reads "A Light in the ..." while its `title` holds the whole "A Light in the Attic".
+    static func answerFreeReadAddress(selector: String, text: String?, identity: ElementIdentity?, alsoValues: [String] = [])
         -> (selector: String, matches: Int?, identity: ElementIdentity?)? {
-        guard let text, text.count >= 3 else { return nil }
-        let needle = text.lowercased()
-        guard selector.lowercased().contains(needle) else { return nil }
-        if let list = identity?.list, !list.selector.lowercased().contains(needle) {
+        let values = ([text].compactMap { $0 } + alsoValues).filter { $0.count >= 3 }
+        guard !values.isEmpty else { return nil }
+        let bears = { (candidate: String) in values.contains { Self.selector(candidate, bears: $0) } }
+        guard bears(selector) else { return nil }
+        if let list = identity?.list, !bears(list.selector) {
             var placed = ElementIdentity(index: list.index, attributes: identity?.attributes ?? [])
             placed.list = list
             placed.anchor = identity?.anchor
             return (list.selector, list.count, placed)
         }
-        if let anchor = identity?.anchor, anchor.nth == nil, !anchor.selector.lowercased().contains(needle) {
+        if let anchor = identity?.anchor, anchor.nth == nil, !bears(anchor.selector) {
             // The anchor was verified to resolve to this element: it IS the one match, or -- a
             // rule-0 link that several links share -- the element is the `index`th of its matches.
             var named = ElementIdentity(index: anchor.index ?? 1, attributes: identity?.attributes ?? [])
@@ -73,6 +81,35 @@ import ToolABI
             return (anchor.selector, anchor.count ?? 1, named)
         }
         return nil
+    }
+
+    /// Whether `selector` carries `value` (3+ characters): as written, in any case, or folded the
+    /// way an address spells it (``valueFold(_:)``), word for word.
+    static func selector(_ selector: String, bears value: String) -> Bool {
+        guard value.count >= 3 else { return false }
+        if selector.lowercased().contains(value.lowercased()) { return true }
+        let needle = valueFold(value)
+        guard needle.filter({ $0.isLetter || $0.isNumber }).count >= 3 else { return false }
+        return (" " + valueFold(selector) + " ").contains(" " + needle + " ")
+    }
+
+    /// Lowercase, accents and percent-escapes undone, and every run of characters that is not a
+    /// letter or a digit (`_`, `-`, `+`, `.`, `/`, quotes, brackets) one space.
+    static func valueFold(_ text: String) -> String {
+        let decoded = text.replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? text
+        let folded = decoded.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).lowercased()
+        var out = ""
+        var gap = false
+        for ch in folded {
+            if ch.isLetter || ch.isNumber {
+                if gap, !out.isEmpty { out.append(" ") }
+                out.append(ch)
+                gap = false
+            } else {
+                gap = true
+            }
+        }
+        return out
     }
 
     public func execute(_ input: WorkflowValue?, _ context: ToolExecutionContext) async throws -> RawToolResult {

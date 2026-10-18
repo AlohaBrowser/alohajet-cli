@@ -251,5 +251,20 @@ function runCleanup(body) {
   check('a piece is kept when nothing holds the whole value', r2.length === 1 && r2[0].text === '10 December', r2);
 }
 
+// 15. THE ANSWER'S ORDER, NOT THE VALUES' LENGTH (W5 client review, finding 8): "**Anna**, then
+//     **Alexander Hamilton**" -- the short lead value comes first although the second is longer; a
+//     read element still outranks both.
+{
+  const page = el('body', {}, [el('main', {}, [
+    el('ul', {}, [el('li', {}, [], 'Alexander Hamilton'), el('li', {}, [], 'Anna')]),
+  ])]);
+  const answer = 'The first is **Anna**, then **Alexander Hamilton**.';
+  const r = run(page, answer, 'Who are the two names on the list, in order?', ['Anna', 'Alexander Hamilton']);
+  check('the hints keep the answer order', r.map(x => x.text).join('|') === 'Anna|Alexander Hamilton', r.map(x => x.text));
+  page.children[0].children[0].children[0].setAttribute('aloha-id', 'read-1');
+  const r2 = run(page, answer, 'Who are the two names on the list, in order?', ['Anna', 'Alexander Hamilton'], ['read-1']);
+  check('a read element still comes first', r2[0] && r2[0].text === 'Alexander Hamilton', r2.map(x => x.text));
+}
+
 console.log(failures ? `${failures} FAILED` : 'all answer-receipt checks passed');
 process.exit(failures ? 1 : 0);

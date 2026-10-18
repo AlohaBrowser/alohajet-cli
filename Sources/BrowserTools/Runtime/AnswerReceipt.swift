@@ -162,14 +162,14 @@ public nonisolated enum AnswerReceipt {
             var A = ' ' + toks(answer).join(' ') + ' ', P = ' ' + toks(prompt).join(' ') + ' ';
             var AN = nums(answer), PN = nums(prompt);
             var H = hints.map(function (h) { return toks(h).join(' '); });
-            // The read elements' rank: later reads higher. 1000 for the element itself, 500 for
+            // The read elements' rank: later reads higher. 10000 for the element itself, 5000 for
             // an element inside one; 0 when no read element holds it.
             var R = {};
             for (var ri = 0; ri < reads.length; ri++) R[reads[ri]] = ri + 1;
             var readBonus = function (e) {
               for (var n = e, up = 0; n && n !== document.body; n = n.parentElement, up++) {
                 var rid = n.getAttribute ? n.getAttribute('aloha-id') : null;
-                if (rid && Object.prototype.hasOwnProperty.call(R, rid)) return (up === 0 ? 1000 : 500) + R[rid];
+                if (rid && Object.prototype.hasOwnProperty.call(R, rid)) return (up === 0 ? 10000 : 5000) + R[rid];
               }
               return 0;
             };
@@ -190,7 +190,10 @@ public nonisolated enum AnswerReceipt {
             // and an earlier hint above a later one, so the lead value is never pushed out by the
             // longer names the answer merely lists after it (quotes-love-first-author: "**André
             // Gide**" first, then thirteen more authors; the four longest took every slot).
-            var hintRank = function (T) { var hi = H.indexOf(T); return hi === -1 ? 0 : 100 + (H.length - hi); };
+            // A hint's step outweighs everything else a candidate scores below the read bonus (its
+            // length, up to 80; a digit, 10; main content vs chrome, 40), so the answer's order holds
+            // ("**Anna**, then **Alexander Hamilton**": Anna first). The read bonus still comes first.
+            var hintRank = function (T) { var hi = H.indexOf(T); return hi === -1 ? 0 : 100 + (H.length - hi) * 131; };
             // THE MAIN CONTENT FIRST. Among candidates the answer repeats, one inside the page's
             // main content (`main`, `article`, role=main) ranks above one in its chrome (`nav`,
             // `aside`, a page-level `header` / `footer`, their roles): the same value in a sidebar
@@ -365,8 +368,9 @@ extension AgentBrowserBridge {
     func answerReceipts(for answer: String, prompt: String, readIds: [String] = []) async -> [AnswerReceipt.Line] {
         guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         var lines: [AnswerReceipt.Line] = []
+        let hints = AnswerReceipt.values(in: answer)
         let expression = AnswerReceipt.pageMatchExpression(
-            answer: answer, prompt: prompt, hints: AnswerReceipt.values(in: answer), readIds: readIds)
+            answer: answer, prompt: prompt, hints: hints, readIds: readIds)
         // "" is "nothing matched" and stamped nothing; nil is a page that could not answer, which
         // the cleanup would not reach either (the next match removes what is left, see above).
         guard let raw = await evaluateForReceipt(expression), !raw.isEmpty else { return [] }
@@ -374,12 +378,13 @@ extension AgentBrowserBridge {
             for item in items where lines.count < AnswerReceipt.maxLines {
                 guard let id = item.string("id"), !id.isEmpty, let path = item.string("path"), !path.isEmpty else { continue }
                 let text = item.string("text") ?? ""
-                let address = await answerAddress(item: item, alohaId: id, path: path, text: text)
+                let address = await answerAddress(item: item, alohaId: id, path: path, text: text, values: hints)
                 // The read rules: the anchor may not be built from the element's own text, which
                 // is the value read; and the selector may not contain it either (exception 2).
                 let identity = await elementIdentity(selector: address.selector, alohaId: id, forRead: true)
                 let shown = text.isEmpty ? nil : text
-                let free = GetTextExecutorTool.answerFreeReadAddress(selector: address.selector, text: shown, identity: identity)
+                let free = GetTextExecutorTool.answerFreeReadAddress(
+                    selector: address.selector, text: shown, identity: identity, alsoValues: hints)
                 let note: (ElementIdentity?) -> String = { identity in
                     if let free {
                         var placed = free.identity
@@ -421,10 +426,10 @@ extension AgentBrowserBridge {
     ///
     /// With no ladder rung, or one the live page no longer matches, the element's live position
     /// path (the matcher's `path`), as before.
-    func answerAddress(item: JSValue, alohaId: String, path: String, text: String) async -> (selector: String, matches: Int?) {
+    func answerAddress(item: JSValue, alohaId: String, path: String, text: String, values: [String] = []) async -> (selector: String, matches: Int?) {
         if let ladder = AnswerReceipt.ladderSelector(item: item), let count = await liveMatchesContaining(ladder, alohaId: alohaId) {
             if count > 1 {
-                for candidate in AnswerReceipt.narrowed(ladder, insideClasses: item.array("desc") ?? [], text: text) {
+                for candidate in AnswerReceipt.narrowed(ladder, insideClasses: item.array("desc") ?? [], text: text, values: values) {
                     if await liveMatchesContaining(candidate, alohaId: alohaId) == 1 { return (candidate, 1) }
                 }
             }
@@ -446,6 +451,36 @@ extension AgentBrowserBridge {
 }
 
 extension AnswerReceipt {
+    /// Words that make a class a STATE or a promotion of an item rather than what the item is.
+    static let stateClassWords: Set<String> = [
+        "active", "inactive", "selected", "current", "checked", "focus", "focused", "hover", "visited",
+        "open", "opened", "closed", "expanded", "collapsed", "hidden", "visible", "show", "shown",
+        "disabled", "enabled", "loading", "loaded", "error", "success", "warning", "valid", "invalid",
+        "new", "sale", "hot", "featured", "badge", "promo", "promoted", "sponsored", "ad", "ads", "discount",
+        "special", "highlight", "highlighted", "stock", "instock", "outofstock", "sold", "soldout", "out",
+        "odd", "even", "first", "last", "is", "has", "on", "off", "unread", "read", "pinned", "top"
+    ]
+
+    /// Whether a class token reads as a state (`is-active`, `out-of-stock`, `badge-new`, `sale`):
+    /// any of its words, split on `-` / `_` / camel case, is in ``stateClassWords``.
+    static func isStateClass(_ token: String) -> Bool {
+        var words: [String] = []
+        var current = ""
+        for ch in token {
+            if ch == "-" || ch == "_" {
+                if !current.isEmpty { words.append(current) }
+                current = ""
+            } else if ch.isUppercase, !current.isEmpty, current.last?.isLowercase == true {
+                words.append(current)
+                current = String(ch)
+            } else {
+                current.append(ch)
+            }
+        }
+        if !current.isEmpty { words.append(current) }
+        return words.contains { stateClassWords.contains($0.lowercased()) }
+    }
+
     /// At most this many receipt lines per answer, whatever ``maxValues`` is: llmdex folds no more
     /// than twelve into a run (`answerReceiptsKept`).
     public static let maxLines = 12
@@ -477,15 +512,19 @@ extension AnswerReceipt {
     }
 
     /// `ladder:has(.c)` for the first stable class tokens found inside the element, in document
-    /// order -- never one whose selector would contain the value read (`text`, 3+ characters).
-    static func narrowed(_ ladder: String, insideClasses: [JSValue], text: String) -> [String] {
-        let needle = text.count >= 3 ? text.lowercased() : nil
+    /// order -- never one whose selector would contain the value read (`text` or one of the
+    /// answer's `values`, 3+ characters, as an address spells it), and never a STATE class
+    /// (``isStateClass(_:)``): a list item narrowed by `.sale` or `.out-of-stock` names whichever
+    /// item carries that state on the next visit, and reads it without an error (W5 client review,
+    /// finding 9). With no such class the shared ladder stays and `[index=]` places the element.
+    static func narrowed(_ ladder: String, insideClasses: [JSValue], text: String, values: [String] = []) -> [String] {
+        let needles = [text] + values
         var out: [String] = []
         for raw in insideClasses {
             guard let token = raw.stringValue else { continue }
-            guard let stable = StepTraceSelector.stableClassTokens(token).first, stable == token else { continue }
+            guard let stable = StepTraceSelector.stableClassTokens(token).first, stable == token, !isStateClass(stable) else { continue }
             let candidate = ladder + ":has(." + stable + ")"
-            if let needle, candidate.lowercased().contains(needle) { continue }
+            if needles.contains(where: { GetTextExecutorTool.selector(candidate, bears: $0) }) { continue }
             if !out.contains(candidate) { out.append(candidate) }
             if out.count == maxNarrowings { break }
         }

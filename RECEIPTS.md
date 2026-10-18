@@ -77,7 +77,10 @@ qualifies):
 
 **Exception 2 (2026-10-02, reads only): a read's `[selector=]` never contains what it read.**
 When the ladder's selector contains the text a `get_text` read (3+ characters, any case), for
-example `a[href="/…/releases/tag/v3.8.5"]` for the read `v3.8.5`:
+example `a[href="/…/releases/tag/v3.8.5"]` for the read `v3.8.5` -- or contains it as an address
+spells it (since 2026-10-18: case, accents, percent-escapes and `_ - . / +` folded, compared word
+for word, so `a[href="/wiki/Charles_Babbage"]` holds "Charles Babbage"); for an answer receipt
+the answer's own bold / quoted values are checked as well as the element's text:
 - `[selector=]` becomes the element's `[list=]` selector, with `[matches=]` the list's size and
   `[index=]` its place;
 - with no list, `[selector=]` becomes the answer-free `[anchor=]`, with `[matches=]` its count
@@ -175,7 +178,8 @@ answer "Augusta Ada Byron 10 December 1815 London, England": [selector=td.infobo
   hook, name, input type, link path, role or stable classes, from the attributes the page matcher
   read), kept only when its live matches include the element. A ladder selector several elements
   share is narrowed to `<selector>:has(.<class>)` with the first stable class inside the element
-  that makes it match exactly this element (at most three tried); otherwise it stays, and
+  that makes it match exactly this element (at most three tried; never a state or promotion class
+  such as `.sale`, `.out-of-stock`, `.is-active`, nor one that spells the value); otherwise it stays, and
   `[index=]` says which of its matches the element is. With no ladder rung (or one that misses the
   element) the element's live position path, as before; when it has a semantic anchor free of the
   value, exception 1 puts that in `[selector=]` and the path in `[path=]`. `[tool=answer]` says who
@@ -225,3 +229,4 @@ exercised by `Tests/BrowserToolsTests/answer_receipt.js`, the whole chain on a r
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | `[text=]` and the anchor label never read a field's content: a text-entry input's `value` attribute or a textarea's text (a submit's, a checkbox's or a radio's `value` still names it). A click on a password field whose value the page kept in the attribute wrote the password into the receipt |
 | 2026-10-18 | this package, branch `e2e/snips-2026-10-17` | answer receipts (`[tool=answer]`) and the tracker of the answer page move into this package from the agent repository (windows-on-snips `dc514f76`..`a74a7d63`); the temporary ids are found by their prefix, no marker attribute |
 | 2026-10-18 | this package, branch `e2e/polish-cli` | answer receipts: `[selector=]` is the selector ladder's pick (verified live; a shared one narrowed with `:has(.<class inside>)`), no longer always the position path; the answer's spans rank in their order; a bold span before a colon is a label only where a label stands; a piece of a value and an outer holder of it are dropped; main content outranks page chrome; at most 12 lines, each < 4000 characters (`[attrs=]` dropped first). No new bracket |
+| 2026-10-18 | this package, branch `e2e/snips-2026-10-17` (W6) | exception 2 and the answer narrowing compare the value as an address spells it (folded, word for word) and, for answer receipts, the answer's own values too; a state / promotion class never narrows; the answer's spans now really rank in their order (a hint step outweighs length). No new bracket |
