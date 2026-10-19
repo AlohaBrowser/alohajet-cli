@@ -1927,7 +1927,8 @@ func parseDomNode(_ value: JSValue) -> DomNode? {
                 DomSelectOption(
                     text: option.string("text"),
                     value: option.string("value"),
-                    selected: option.bool("selected") ?? false)
+                    selected: option.bool("selected") ?? false,
+                    group: option.string("group").flatMap { $0.isEmpty ? nil : $0 })
             }
             content.optionData = DomOptionData(options: options, multiple: optionValue.bool("multiple") ?? false)
         }

@@ -624,7 +624,9 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
           }
         }
       }
-      return cursorIsInteractive ? true : tag === "input" || tag === "select" || tag === "textarea" || tag === "button";
+      // A details' summary toggles it whatever its cursor (the UA sheet gives it none): without
+      // this an unstyled "Return policy" read as plain text with no id to open it by.
+      return cursorIsInteractive ? true : tag === "input" || tag === "select" || tag === "textarea" || tag === "button" || isDetailsSummary(element);
     }
     const role = element.getAttribute("role");
     if (role === "switch" || role === "checkbox" || role === "radio")
@@ -1333,6 +1335,17 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
     return false;
   }
 
+  // The summary that toggles its `<details>`: the parent's first `<summary>` child.
+  function isDetailsSummary(element) {
+    try {
+      const parent = element && element.parentElement;
+      if (!parent || !element.tagName || element.tagName.toLowerCase() !== "summary") return false;
+      if (!parent.tagName || parent.tagName.toLowerCase() !== "details") return false;
+      for (const child of parent.children) if (child.tagName && child.tagName.toLowerCase() === "summary") return child === element;
+    } catch {}
+    return false;
+  }
+
   function isLikelyInteractive(element) {
     if (!element || element.nodeType !== Node.ELEMENT_NODE) return false;
     const tag = element.tagName.toLowerCase();
@@ -1877,6 +1890,20 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
         }
       } catch {}
     }
+    // WHAT A NATIVE ELEMENT STATES THAT NO CAPTURED ATTRIBUTE CARRIES. A `<details>`' summary is
+    // its toggle, and whether the section is open lives on the parent (`details.open`); the
+    // closed section's text is still walked, so without this the read printed a closed answer
+    // exactly like an open one. An `<abbr>`'s expansion is its `title`, which the read dropped
+    // from a sentence ("handled by the DCN team"). Neither touches the id (`alohaIdFor` hashes
+    // the xpath or the authored id, never attributes).
+    try {
+      const nativeTag = element.tagName.toLowerCase();
+      if (isDetailsSummary(element)) descriptor.attributes["aloha-details"] = element.parentElement.open ? "open" : "closed";
+      else if (nativeTag === "abbr") {
+        const title = element.getAttribute("title");
+        if (title && title.trim()) descriptor.attributes["title"] = title;
+      }
+    } catch {}
 
     const lowerTag = element.tagName.toLowerCase();
     if (isTextInput(element)) {
@@ -1895,7 +1922,11 @@ nonisolated public func buildAgentDomTreeScript(highlight: Bool, focusInteractiv
           options: Array.from(select.options || []).map((option) => ({
             value: option.value,
             text: option.textContent || "",
-            selected: option.selected
+            selected: option.selected,
+            // The `<optgroup label>` an option sits under: "Riga" under Europe and "Riga"
+            // under Asia are two different choices.
+            group: option.parentElement && option.parentElement.tagName && option.parentElement.tagName.toLowerCase() === "optgroup"
+              ? (option.parentElement.label || option.parentElement.getAttribute("label") || "") : ""
           })),
           multiple: select.multiple || false
         };
