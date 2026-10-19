@@ -714,8 +714,25 @@ private func appendAriaStateMarkers(_ rendered: String, _ node: DomNode) -> Stri
     if attrs["aria-pressed"] == "true" { markers.append(" [aria: PRESSED]") }
     if attrs["aria-invalid"] == "true" { markers.append(" [aria: INVALID]") }
     if attrs["aria-busy"] == "true" { markers.append(" [aria: LOADING]") }
+    markers.append(ariaCurrentMarker(node))
     return rendered + markers.joined()
 }
+
+/// THE ONE IN FORCE among several like items: the page of a pager, the step of a checkout, the
+/// section of a menu, the day of a calendar (`aria-current`). Every sibling state attribute had a
+/// marker and this one reached the read not at all -- the live read prints no raw attributes --
+/// so a pager read `[1] [2] [3]` with nothing saying which page the tab is on, and a stepper read
+/// as three equal steps. Any value other than `false` (or empty) means "current" (ARIA); the five
+/// tokens the spec names are said, and anything else reads as plain CURRENT -- the page's own
+/// string never reaches the marker. Empty for an element that is not current.
+func ariaCurrentMarker(_ node: DomNode) -> String {
+    guard let raw = node.element.attributes["aria-current"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+          !raw.isEmpty, raw != "false" else { return "" }
+    return ariaCurrentTokens.contains(raw) ? " [aria: CURRENT \(raw.uppercased())]" : " [aria: CURRENT]"
+}
+
+private let ariaCurrentTokens: Set<String> = ["page", "step", "location", "date", "time"]
 
 private func openInteractiveTag(_ node: DomNode, _ tag: String) -> String {
     var c = "<\(tag) aloha-id=\"\(node.id)\""
@@ -1324,7 +1341,7 @@ private func renderTableRow(_ node: DomNode, _ nodesById: [String: DomNode]) -> 
         let cellTag = cell.element.tagName.lowercased()
         guard cellTag == "th" || cellTag == "td" else { continue }
         if cellTag == "th" { sawTh = true }
-        cells.append(contentText(cell))
+        cells.append(contentText(cell) + ariaCurrentMarker(cell))
     }
     guard !cells.isEmpty else { return "" }
     let row = "| " + cells.joined(separator: " | ") + " |"
@@ -1394,7 +1411,7 @@ private func contentLeafLine(_ node: DomNode, _ listLevel: Int, _ nodesById: [St
     let key = dedupKey(text)
     if !key.isEmpty, emittedAncestorKeys.contains(key) { return nil }
     let indent = String(repeating: " ", count: min(max(listLevel, 0), 4) * 2)
-    return indent + truncateText(text, fullContentTextCap)
+    return indent + truncateText(text, fullContentTextCap) + ariaCurrentMarker(node)
 }
 
 /// A preformatted text's lines, each with its runs of spaces collapsed (indentation kept as one
@@ -1610,7 +1627,7 @@ func renderFullNode(
     if tag == "li" && node.positioning.isVisible {
         let text = contentText(node)
         let indentLevel = min(max(depth - 1, 0), 4)
-        return String(repeating: " ", count: indentLevel * 2) + "- " + text
+        return String(repeating: " ", count: indentLevel * 2) + "- " + text + ariaCurrentMarker(node)
     }
 
     // Containers and cells render nothing on their own line; their content is folded into the row.
@@ -1644,7 +1661,20 @@ func renderFullNode(
         return text.isEmpty ? "" : text
     }
     if inlineSentenceTags.contains(tag), node.positioning.isVisible, isInlineSentence(node, nodesById) {
-        return proseLine(node, nodesById, options, &consumed) ?? ""
+        return (proseLine(node, nodesById, options, &consumed) ?? "") + ariaCurrentMarker(node)
+    }
+    // AN ELEMENT MARKED CURRENT THAT RENDERS NOTHING OF ITS OWN -- a pager's `<span
+    // aria-current="page">2</span>`, whose text node would print "2" on its own line with
+    // nothing saying it is the page in force: its text, once, with the marker, and its text
+    // nodes are folded into that line.
+    let current = ariaCurrentMarker(node)
+    if !current.isEmpty, node.positioning.isVisible, !node.children.isEmpty,
+       node.children.allSatisfy({ nodesById[$0].map { $0.nodeType == "TEXT_NODE" } ?? true }) {
+        let text = contentText(node)
+        if !text.isEmpty {
+            consumed.formUnion(node.children)
+            return text + current
+        }
     }
     return ""
 }
