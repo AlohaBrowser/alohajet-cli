@@ -83,10 +83,13 @@ public struct DomSelectOption: Sendable {
     public var text: String?
     public var value: String?
     public var selected: Bool
-    public init(text: String? = nil, value: String? = nil, selected: Bool = false) {
+    /// The `<optgroup label>` the option sits under, nil outside a group.
+    public var group: String?
+    public init(text: String? = nil, value: String? = nil, selected: Bool = false, group: String? = nil) {
         self.text = text
         self.value = value
         self.selected = selected
+        self.group = group
     }
 }
 
@@ -637,8 +640,15 @@ public func renderSelectOptions(_ id: String, _ options: [DomSelectOption], _ mu
     let selectedBeyondCap = options.enumerated().dropFirst(selectOptionsVisibleCap).filter(\.element.selected)
     let selectedBeyondShown = selectedBeyondCap.prefix(selectSelectedBeyondCap)
 
+    // An option under an `<optgroup>` is read under its group's label, said once where the group
+    // starts: `Europe: [id.0] Tallinn, [id.1] Riga, Asia: [id.2] Osaka, [id.3] Riga` -- the two
+    // Rigas were indistinguishable before.
+    var currentGroup: String?
     var rendered = visible.enumerated().map { index, option in
-        "[\(id).\(index)] \(option.selected ? "*" : "")\(label(option))"
+        let group = option.group.map { truncateLabel(normalizeWhitespace($0), 20) }.flatMap { $0.isEmpty ? nil : $0 }
+        let header = group != nil && group != currentGroup ? "\(group!): " : ""
+        currentGroup = group
+        return header + "[\(id).\(index)] \(option.selected ? "*" : "")\(label(option))"
     }
     rendered += selectedBeyondShown.map { "[\(id).\($0.offset)] *\(label($0.element))" }
 
@@ -697,7 +707,7 @@ private let quotedAriaAttributeNames = [
 private func appendAriaStateMarkers(_ rendered: String, _ node: DomNode) -> String {
     let attrs = node.element.attributes
     var markers: [String] = []
-    switch attrs["aria-expanded"] {
+    switch attrs["aria-expanded"] ?? nativeDisclosureState(node) {
     case "true": markers.append(" [aria: EXPANDED]")
     case "false": markers.append(" [aria: COLLAPSED]")
     default: break
@@ -714,8 +724,36 @@ private func appendAriaStateMarkers(_ rendered: String, _ node: DomNode) -> Stri
     if attrs["aria-pressed"] == "true" { markers.append(" [aria: PRESSED]") }
     if attrs["aria-invalid"] == "true" { markers.append(" [aria: INVALID]") }
     if attrs["aria-busy"] == "true" { markers.append(" [aria: LOADING]") }
+    markers.append(ariaCurrentMarker(node))
     return rendered + markers.joined()
 }
+
+/// A `<details>` summary's open state, as `aria-expanded` would say it: the walker's
+/// `aloha-details` (the parent's `open`). A closed section's text is still in the read, so the
+/// summary says the section is closed; the page's own `aria-expanded` wins when it has one.
+private func nativeDisclosureState(_ node: DomNode) -> String? {
+    switch node.element.attributes["aloha-details"] {
+    case "open": return "true"
+    case "closed": return "false"
+    default: return nil
+    }
+}
+
+/// THE ONE IN FORCE among several like items: the page of a pager, the step of a checkout, the
+/// section of a menu, the day of a calendar (`aria-current`). Every sibling state attribute had a
+/// marker and this one reached the read not at all -- the live read prints no raw attributes --
+/// so a pager read `[1] [2] [3]` with nothing saying which page the tab is on, and a stepper read
+/// as three equal steps. Any value other than `false` (or empty) means "current" (ARIA); the five
+/// tokens the spec names are said, and anything else reads as plain CURRENT -- the page's own
+/// string never reaches the marker. Empty for an element that is not current.
+func ariaCurrentMarker(_ node: DomNode) -> String {
+    guard let raw = node.element.attributes["aria-current"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+          !raw.isEmpty, raw != "false" else { return "" }
+    return ariaCurrentTokens.contains(raw) ? " [aria: CURRENT \(raw.uppercased())]" : " [aria: CURRENT]"
+}
+
+private let ariaCurrentTokens: Set<String> = ["page", "step", "location", "date", "time"]
 
 private func openInteractiveTag(_ node: DomNode, _ tag: String) -> String {
     var c = "<\(tag) aloha-id=\"\(node.id)\""
@@ -1324,7 +1362,7 @@ private func renderTableRow(_ node: DomNode, _ nodesById: [String: DomNode]) -> 
         let cellTag = cell.element.tagName.lowercased()
         guard cellTag == "th" || cellTag == "td" else { continue }
         if cellTag == "th" { sawTh = true }
-        cells.append(contentText(cell))
+        cells.append(contentText(cell) + ariaCurrentMarker(cell))
     }
     guard !cells.isEmpty else { return "" }
     let row = "| " + cells.joined(separator: " | ") + " |"
@@ -1394,7 +1432,35 @@ private func contentLeafLine(_ node: DomNode, _ listLevel: Int, _ nodesById: [St
     let key = dedupKey(text)
     if !key.isEmpty, emittedAncestorKeys.contains(key) { return nil }
     let indent = String(repeating: " ", count: min(max(listLevel, 0), 4) * 2)
-    return indent + truncateText(text, fullContentTextCap)
+    // AN IMAGE'S TEXT IS ITS ALT (or title): read as an image, `![alt]`, so it is never taken
+    // for the caption, heading or paragraph beside it -- a figure printed its alt and its
+    // `<figcaption>` as two identical-looking lines.
+    if tag == "img" { return indent + "![" + truncateText(text, fullContentTextCap) + "]" }
+    if let expanded = abbreviationLine(node, nodesById) { return indent + truncateText(expanded, fullContentTextCap) + ariaCurrentMarker(node) }
+    return indent + truncateText(text, fullContentTextCap) + ariaCurrentMarker(node)
+}
+
+/// An `<abbr title>` read as the page shows it, its expansion after it: "DCN (Distribution
+/// Center North)". The walker's own texts for it (`comprehensiveText`, `textContent`) are the
+/// title glued in front of the abbreviation ("Distribution Center North DCN"); in a sentence the
+/// title was dropped. What it SHOWS is its text nodes: the kept ones in `nodesById`, else the
+/// walker's `childText`. Nil for any other element, an abbr without a title, or one whose title
+/// only repeats its text.
+private func abbreviationLine(_ node: DomNode, _ nodesById: [String: DomNode]) -> String? {
+    guard node.element.tagName.lowercased() == "abbr",
+          let title = node.element.attributes["title"].map(normalizeWhitespace), !title.isEmpty else { return nil }
+    func shownText(_ n: DomNode) -> [String] {
+        n.children.compactMap { nodesById[$0] }.flatMap { child -> [String] in
+            child.nodeType == "TEXT_NODE"
+                ? [normalizeWhitespace(child.element.textContent ?? child.element.childText ?? "")]
+                : shownText(child)
+        }
+    }
+    var shown = shownText(node).filter { !$0.isEmpty }.joined(separator: " ")
+    if shown.isEmpty { shown = normalizeWhitespace(node.element.childText ?? "") }
+    guard !shown.isEmpty else { return nil }
+    if dedupKey(shown) == dedupKey(title) { return shown }
+    return "\(shown) (\(title))"
 }
 
 /// A preformatted text's lines, each with its runs of spaces collapsed (indentation kept as one
@@ -1504,6 +1570,13 @@ private func proseLine(
     var parts: [String] = []
     var seen = Set<String>()    // recursion guard
     var taken = Set<String>()   // ids folded into this line — the walker must not print them again
+    func markTaken(_ node: DomNode) {
+        for id in node.children where nodesById[id] != nil && !seen.contains(id) {
+            seen.insert(id)
+            taken.insert(id)
+            if let grandchild = nodesById[id] { markTaken(grandchild) }
+        }
+    }
     func visit(_ id: String) {
         guard let child = nodesById[id], !seen.contains(id) else { return }
         seen.insert(id)
@@ -1514,6 +1587,14 @@ private func proseLine(
             return
         }
         let childTag = child.element.tagName.lowercased()
+        // An abbreviation in a sentence keeps its expansion: "the DCN (Distribution Center
+        // North) team".
+        if childTag == "abbr", !nodeIsKeptInteractive(child), let expanded = abbreviationLine(child, nodesById) {
+            guard child.positioning.isVisible else { return }
+            markTaken(child)
+            parts.append(expanded)
+            return
+        }
         if nodeIsKeptInteractive(child) {
             // A PROMOTED text wrapper (a `<span>`/`<div>` "interactive" only because it carries
             // text) is left to the walker, which already dedups its redundant `{aloha-id}` label
@@ -1610,7 +1691,7 @@ func renderFullNode(
     if tag == "li" && node.positioning.isVisible {
         let text = contentText(node)
         let indentLevel = min(max(depth - 1, 0), 4)
-        return String(repeating: " ", count: indentLevel * 2) + "- " + text
+        return String(repeating: " ", count: indentLevel * 2) + "- " + text + ariaCurrentMarker(node)
     }
 
     // Containers and cells render nothing on their own line; their content is folded into the row.
@@ -1644,7 +1725,20 @@ func renderFullNode(
         return text.isEmpty ? "" : text
     }
     if inlineSentenceTags.contains(tag), node.positioning.isVisible, isInlineSentence(node, nodesById) {
-        return proseLine(node, nodesById, options, &consumed) ?? ""
+        return (proseLine(node, nodesById, options, &consumed) ?? "") + ariaCurrentMarker(node)
+    }
+    // AN ELEMENT MARKED CURRENT THAT RENDERS NOTHING OF ITS OWN -- a pager's `<span
+    // aria-current="page">2</span>`, whose text node would print "2" on its own line with
+    // nothing saying it is the page in force: its text, once, with the marker, and its text
+    // nodes are folded into that line.
+    let current = ariaCurrentMarker(node)
+    if !current.isEmpty, node.positioning.isVisible, !node.children.isEmpty,
+       node.children.allSatisfy({ nodesById[$0].map { $0.nodeType == "TEXT_NODE" } ?? true }) {
+        let text = contentText(node)
+        if !text.isEmpty {
+            consumed.formUnion(node.children)
+            return text + current
+        }
     }
     return ""
 }
