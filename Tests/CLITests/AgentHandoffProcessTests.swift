@@ -43,7 +43,7 @@ struct AgentHandoffProcessTests {
 
     @Test("mcp-stdio becomes alohajet-agent mcp, and the client's stdin is the agent's", arguments: [
         (["mcp-stdio"], ["mcp"]),
-        (["mcp-stdio", "--accept-terms", "--no-headless"], ["mcp", "--no-headless", "--accept-terms"]),
+        (["mcp-stdio", "--no-headless"], ["mcp", "--no-headless"]),
         (["mcp-stdio", "--headless"], ["mcp"]),
     ])
     func mcpStdioHandsOverStdin(_ arguments: [String], _ expected: [String]) throws {
@@ -62,6 +62,20 @@ struct AgentHandoffProcessTests {
         #expect(agent.argv == expected)
         #expect(agent.stdin == frames)
         #expect(run.stdout == "agent stdout\n")
+    }
+
+    @Test("mcp-stdio --accept-terms is refused: alohajet-agent mcp runs no turn and asks for no Terms")
+    func mcpStdioRefusesAcceptTerms() throws {
+        let agent = try FakeAgent()
+        defer { agent.remove() }
+        let run = try runCLI(["mcp-stdio", "--accept-terms"],
+                             stdin: #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"# + "\n",
+                             environment: agent.environment)
+        #expect(run.status == 2, "\(run.combined)")
+        #expect(run.stdout.isEmpty)
+        #expect(run.stderr == "alohajet: an MCP session runs no turn and asks for no Terms of Service:"
+            + " drop --accept-terms\n")
+        #expect(agent.argv == nil, "the agent ran anyway")
     }
 
     /// This suite spawns the CLI the way a Swift MCP host would, through `Process` from a
@@ -216,7 +230,7 @@ struct AgentHandoffProcessTests {
         let relay = try runCLI(["mcp-stdio", "--help"])
         #expect(relay.status == 0)
         #expect(relay.stdout.contains("alohajet-agent mcp"), "\(relay.stdout)")
-        #expect(relay.stdout.contains("--accept-terms"), "\(relay.stdout)")
+        #expect(!relay.stdout.contains("--accept-terms"), "\(relay.stdout)")
         #expect(relay.stdout.contains("mcp --endpoint"), "\(relay.stdout)")
     }
 }

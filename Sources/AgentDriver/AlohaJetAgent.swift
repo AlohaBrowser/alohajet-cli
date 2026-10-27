@@ -51,20 +51,14 @@ public enum AlohaJetAgent {
                 permissions; alohajet-agent grants the page none
                 """))
         }
-        return .success(["-p", prompt] + (json ? ["--json"] : [])
-            + options(noHeadless: noHeadless, acceptTerms: acceptTerms))
+        return .success(["-p", prompt] + (json ? ["--json"] : []) + (noHeadless ? ["--no-headless"] : [])
+            + (acceptTerms ? ["--accept-terms"] : []))
     }
 
     /// `alohajet mcp-stdio` as `alohajet-agent mcp`.
-    public static func mcpArguments(
-        headless: Bool = false, noHeadless: Bool = false, acceptTerms: Bool = false
-    ) -> Result<[String], FlagError> {
+    public static func mcpArguments(headless: Bool = false, noHeadless: Bool = false) -> Result<[String], FlagError> {
         if headless, noHeadless { return .failure(bothWindowModes) }
-        return .success(["mcp"] + options(noHeadless: noHeadless, acceptTerms: acceptTerms))
-    }
-
-    private static func options(noHeadless: Bool, acceptTerms: Bool) -> [String] {
-        (noHeadless ? ["--no-headless"] : []) + (acceptTerms ? ["--accept-terms"] : [])
+        return .success(["mcp"] + (noHeadless ? ["--no-headless"] : []))
     }
 
     private static let bothWindowModes = FlagError(message: "--headless and --no-headless: pass one")

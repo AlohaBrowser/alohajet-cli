@@ -36,6 +36,16 @@ import ToolABI
 // The user pastes NO secret: the port comes from `--endpoint` (or the legacy default)
 // and the bearer token is read per run by `AutomationToken`, the same reader `-p` uses.
 
+/// Neither MCP server behind these commands gates on the Terms — the app's runs no turn,
+/// and alohajet-agent's does not either — so the flag would be dropped, and a saved entry
+/// carrying it would read as an acceptance that never happened.
+func refuseAcceptTermsOnMCP(_ args: Args) -> CLIError? {
+    guard args.has("--accept-terms") else { return nil }
+    return CLIError(
+        message: "an MCP session runs no turn and asks for no Terms of Service: drop --accept-terms",
+        code: exitUsage)
+}
+
 enum MCPRelay {
 
     /// Relay this process's stdin/stdout to `<endpoint>/mcp` until either side ends.
@@ -49,7 +59,7 @@ enum MCPRelay {
             return error.code
         }
 
-        if let refusal = refuseAcceptTerms(args, endpoint: endpoint) {
+        if let refusal = refuseAcceptTermsOnMCP(args) {
             writeToStandardError("alohajet: \(refusal.message)\n")
             return refusal.code
         }

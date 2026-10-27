@@ -132,20 +132,22 @@ struct MCPRelayLaneTests {
                              environment: Self.pinnedToken)
         #expect(run.status == 2, "\(run.combined)")
         #expect(run.stdout.isEmpty)
-        #expect(run.stderr.contains("the agent at http://127.0.0.1:8765 asks for them itself"), "\(run.stderr)")
+        #expect(run.stderr == Self.acceptTermsRefusal, "\(run.stderr)")
     }
     #endif
 
-    /// The flag is alohajet-agent's, and a relay hands nothing to it: dropping it would
-    /// leave a host believing the Terms were accepted for it.
+    private static let acceptTermsRefusal =
+        "alohajet: an MCP session runs no turn and asks for no Terms of Service: drop --accept-terms\n"
+
+    /// The app's MCP server gates no Terms, and a relay hands nothing to alohajet-agent:
+    /// dropping the flag would leave a host believing the Terms were accepted for it.
     @Test("--accept-terms on a relay is refused rather than dropped", arguments: ["mcp", "mcp-stdio"])
     func acceptTermsIsRefusedOnARelay(_ command: String) throws {
         let run = try runCLI([command, "--endpoint", "http://127.0.0.1:1", "--accept-terms"],
                              stdin: Self.toolsCall, environment: Self.pinnedToken)
         #expect(run.status == 2, "\(run.combined)")
         #expect(run.stdout.isEmpty)
-        #expect(run.stderr.contains("--accept-terms accepts the Terms of Service for alohajet-agent"), "\(run.stderr)")
-        #expect(run.stderr.contains("the agent at http://127.0.0.1:1 asks for them itself"), "\(run.stderr)")
+        #expect(run.stderr == Self.acceptTermsRefusal, "\(run.stderr)")
     }
 
     // MARK: - The flag picks the lane

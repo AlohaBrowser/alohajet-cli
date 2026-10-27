@@ -23,9 +23,12 @@ enum AgentHost {
     }
 
     static func mcp(_ args: Args) -> Int32 {
-        handOff(AlohaJetAgent.mcpArguments(
-            headless: args.has("--headless"), noHeadless: args.has("--no-headless"),
-            acceptTerms: args.has("--accept-terms")))
+        if let refusal = refuseAcceptTermsOnMCP(args) {
+            writeToStandardError("alohajet: \(refusal.message)\n")
+            return refusal.code
+        }
+        return handOff(AlohaJetAgent.mcpArguments(
+            headless: args.has("--headless"), noHeadless: args.has("--no-headless")))
     }
 
     private static func handOff(_ arguments: Result<[String], AlohaJetAgent.FlagError>) -> Int32 {

@@ -60,12 +60,11 @@ final class AlohaJetAgentTests {
         #expect(AlohaJetAgent.turnArguments(prompt: "--json") == .success(["-p", "--json"]))
     }
 
-    @Test("mcp-stdio maps onto alohajet-agent mcp")
+    @Test("mcp-stdio maps onto alohajet-agent mcp, which takes the window mode alone")
     func mcpArguments() {
         #expect(AlohaJetAgent.mcpArguments() == .success(["mcp"]))
         #expect(AlohaJetAgent.mcpArguments(headless: true) == .success(["mcp"]))
-        #expect(AlohaJetAgent.mcpArguments(noHeadless: true, acceptTerms: true)
-            == .success(["mcp", "--no-headless", "--accept-terms"]))
+        #expect(AlohaJetAgent.mcpArguments(noHeadless: true) == .success(["mcp", "--no-headless"]))
     }
 
     // MARK: - What only the macOS app can do

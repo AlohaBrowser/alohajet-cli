@@ -309,7 +309,8 @@ stderr, exit status and signals are the command's own:
 | `--accept-terms` | `--accept-terms` |
 | `--headless`, `--grant-permissions none` | nothing: both are the agent's default |
 | `--resume`, `--continue`, any other `--grant-permissions` | refused, exit 2: conversations and page permissions are the macOS app's |
-| `mcp-stdio [--no-headless] [--accept-terms]` | `alohajet-agent mcp [--no-headless] [--accept-terms]` |
+| `mcp-stdio [--no-headless]` | `alohajet-agent mcp [--no-headless]` |
+| `mcp-stdio --accept-terms` | refused, exit 2: an MCP session runs no turn and asks for no Terms |
 
 The agent is the `alohajet-agent` in the directory `alohajet` resolves to, so a symlink on
 `PATH` finds the one unpacked beside the real file. The AlohaJet Linux package ships the
@@ -322,15 +323,16 @@ $ /tmp/aloha/bin/alohajet -p "book me a table"
 alohajet: no alohajet-agent at /tmp/aloha/bin/alohajet-agent — it ships beside alohajet; install it there, or set ALOHAJET_AGENT_BIN to its absolute path
 ```
 
-The Terms of Service and the Privacy Policy are the agent's to ask for: on a terminal it
-asks once, and a run with no terminal to ask on — a server, CI, an MCP host — passes
+The Terms of Service and the Privacy Policy are the agent's to ask for, before a turn: on
+a terminal it asks once, and a `-p` with no terminal to ask on — a server, CI — passes
 `--accept-terms`. With neither, the turn fails with `terms_not_accepted` and the model is
-not asked. Where no agent runs the flag would be dropped, so it is refused (exit 2): on
-macOS, where the app asks, and with `--endpoint`, where the host at that URL does.
+not asked. Where no agent turn runs the flag would be dropped, so it is refused (exit 2):
+on macOS, where the app asks; with `--endpoint`, where the host at that URL does; and on
+`mcp-stdio` and `mcp --endpoint`, whose MCP server — the app's, served by the app on macOS
+and by `alohajet-agent` on Linux — runs no turn and asks for none.
 
 A Claude Desktop entry saved as `"args": ["mcp-stdio"]`, the one macOS uses, works
-unchanged; add `"--accept-terms"` to `args` on a machine where the Terms were never
-accepted on a terminal.
+unchanged.
 
 `--endpoint` still names an agent server, as on macOS — a port forward to a Mac running
 the app, say: `-p --endpoint <url>` speaks [docs/agent-endpoint.md](docs/agent-endpoint.md)

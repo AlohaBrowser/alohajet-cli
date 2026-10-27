@@ -129,11 +129,11 @@ let hostEnvironmentUsage = """
 """
 #else
 let mcpStdioHelp = """
-    alohajet mcp-stdio [--accept-terms] [--no-headless] [--endpoint <url>]
+    alohajet mcp-stdio [--no-headless]
+    alohajet mcp-stdio --endpoint <url>
       Serve the MCP server of alohajet-agent, which ships beside alohajet: this
       process becomes alohajet-agent mcp, so a Claude Desktop entry saved with
-      "args": ["mcp-stdio"] works as it does on macOS. --accept-terms accepts
-      the Terms of Service and Privacy Policy for a host with no terminal.
+      "args": ["mcp-stdio"] works as it does on macOS.
       With --endpoint, relay stdio to the MCP server at <url>/mcp instead,
       under the same validation and token rules as mcp --endpoint <url>.
     """
