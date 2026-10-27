@@ -147,17 +147,7 @@ public struct AlohaBrowser: Sendable {
     /// registered copy the machine prefers. The bundle identifiers are the last resort,
     /// for a helper that ships inside no app at all.
     public static let liveOpen: Opener = {
-        let path = appPath()
-        var failures: [String] = []
-        for arguments in openArguments(appPath: path) {
-            do {
-                try run("/usr/bin/open", arguments)
-                return
-            } catch let error as AlohaBrowserError {
-                failures.append(error.description)
-            }
-        }
-        throw AlohaBrowserError.launchFailed(failures.joined(separator: "; "))
+        try openFirst(of: openArguments(appPath: appPath())) { try run("/usr/bin/open", $0) }
     }
 
     /// The `.app` this run drives: `ALOHA_BROWSER_APP` when it names one, else the
@@ -190,6 +180,21 @@ public struct AlohaBrowser: Sendable {
         if let appPath { return [["-g", "-a", appPath]] }
         return ["com.alohabrowser.alohabrowser", "com.alohabrowser.alohajet"]
             .map { ["-g", "-b", $0] }
+    }
+
+    /// Hands each argument list to `open` in turn until one launches; when none does, the
+    /// one error carries every attempt's reason.
+    nonisolated static func openFirst(of attempts: [[String]], with open: ([String]) throws -> Void) throws {
+        var failures: [String] = []
+        for arguments in attempts {
+            do {
+                try open(arguments)
+                return
+            } catch let AlohaBrowserError.launchFailed(detail) {
+                failures.append(detail)
+            }
+        }
+        throw AlohaBrowserError.launchFailed(failures.joined(separator: "; "))
     }
 
     /// Run a child process to completion; a non-zero exit is a `launchFailed` carrying its

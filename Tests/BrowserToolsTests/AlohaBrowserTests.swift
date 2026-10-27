@@ -162,6 +162,31 @@ struct AlohaBrowserTests {
             == [["-g", "-a", "/Volumes/dev/AlohaJet.app"]])
     }
 
+    @Test("a launch that fails every way says so once, with every way's reason")
+    func everyFailedLaunchIsReportedUnderOnePrefix() throws {
+        let attempts = AlohaBrowser.openArguments(appPath: nil)
+        var tried: [[String]] = []
+        let error = try #require(throws: AlohaBrowserError.self) {
+            try AlohaBrowser.openFirst(of: attempts) { arguments in
+                tried.append(arguments)
+                throw AlohaBrowserError.launchFailed("/usr/bin/open exited 1: no \(arguments[2])")
+            }
+        }
+        #expect(tried == attempts)
+        #expect(error.description == """
+            could not launch the Aloha browser: \
+            /usr/bin/open exited 1: no com.alohabrowser.alohabrowser; \
+            /usr/bin/open exited 1: no com.alohabrowser.alohajet
+            """)
+    }
+
+    @Test("the first way that launches is the last one tried")
+    func firstSuccessfulLaunchStops() throws {
+        var tried: [[String]] = []
+        try AlohaBrowser.openFirst(of: AlohaBrowser.openArguments(appPath: nil)) { tried.append($0) }
+        #expect(tried == [["-g", "-b", "com.alohabrowser.alohabrowser"]])
+    }
+
     @Test("the child-process runner throws the exit code and stderr on failure")
     func runReportsExitCode() {
         #expect(throws: AlohaBrowserError.self) {
