@@ -46,6 +46,26 @@ func refuseAcceptTerms(_ args: Args, endpoint: URL) -> CLIError? {
         """, code: exitUsage)
 }
 
+let turnFlags = Set(["-p", "--json", "--endpoint", "--resume", "--continue", "--headless", "--accept-terms"])
+#if os(Linux)
+.union(agentHostTurnFlags)
+#endif
+
+func refuseUnreadArguments(_ args: Args) -> CLIError? {
+    let unread = args.flags.keys.filter { !turnFlags.contains($0) }.sorted()
+    if !unread.isEmpty {
+        return CLIError(
+            message: "-p does not read \(unread.joined(separator: ", ")): alohajet --help lists the agent options",
+            code: exitUsage)
+    }
+    if let extra = args.positional.first {
+        return CLIError(
+            message: "-p takes the prompt as one argument, and \"\(extra)\" is another: quote the whole prompt",
+            code: exitUsage)
+    }
+    return nil
+}
+
 enum AgentTurn {
 
     /// Run one turn and return the process exit code. Mirrors the exit contract every
@@ -57,6 +77,10 @@ enum AgentTurn {
         guard let prompt = args.value("-p") else {
             writeToStandardError("alohajet: -p needs a prompt, e.g. alohajet -p \"book me a table\"\n")
             return exitUsage
+        }
+        if let refusal = refuseUnreadArguments(args) {
+            writeToStandardError("alohajet: \(refusal.message)\n")
+            return refusal.code
         }
 
         #if os(Linux)

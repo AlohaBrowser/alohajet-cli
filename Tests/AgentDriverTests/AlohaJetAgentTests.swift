@@ -34,6 +34,7 @@ final class AlohaJetAgentTests {
     struct Turn: Sendable, CustomTestStringConvertible {
         var json = false, headless = false, noHeadless = false, acceptTerms = false
         var grantPermissions: String?
+        var outcome: String?
         let expected: [String]
         var testDescription: String { expected.joined(separator: " ") }
     }
@@ -47,12 +48,29 @@ final class AlohaJetAgentTests {
         Turn(grantPermissions: "none", expected: ["-p", "book a table"]),
         Turn(json: true, noHeadless: true, acceptTerms: true,
              expected: ["-p", "book a table", "--json", "--no-headless", "--accept-terms"]),
+        Turn(outcome: "success", expected: ["-p", "book a table", "--outcome", "success"]),
+        Turn(outcome: "Failure", expected: ["-p", "book a table", "--outcome", "failure"]),
+        Turn(noHeadless: true, acceptTerms: true, outcome: "skip",
+             expected: ["-p", "book a table", "--no-headless", "--accept-terms", "--outcome", "skip"]),
     ])
     func turnArguments(_ turn: Turn) {
         #expect(AlohaJetAgent.turnArguments(
             prompt: "book a table", json: turn.json, headless: turn.headless,
             noHeadless: turn.noHeadless, acceptTerms: turn.acceptTerms,
-            grantPermissions: turn.grantPermissions) == .success(turn.expected))
+            grantPermissions: turn.grantPermissions, outcome: turn.outcome) == .success(turn.expected))
+    }
+
+    @Test("a verdict that is not success, failure or skip is refused", arguments: ["done", "", "succeeded"])
+    func unknownVerdictsAreRefused(_ value: String) {
+        let shown = value.isEmpty ? "\"\"" : value
+        #expect(AlohaJetAgent.turnArguments(prompt: "hi", outcome: value) == .failure(.init(
+            message: "--outcome expects success, failure or skip, not \(shown)")))
+    }
+
+    @Test("--outcome with --json is refused: --json reports no verdict")
+    func outcomeWithJSONIsRefused() {
+        #expect(AlohaJetAgent.turnArguments(prompt: "hi", json: true, outcome: "success") == .failure(.init(
+            message: "--outcome and --json: --json reports no verdict; pass one")))
     }
 
     @Test("a prompt that looks like a flag is still the prompt")

@@ -23,7 +23,7 @@ public enum AlohaJetAgent {
     public static func turnArguments(
         prompt: String, json: Bool = false, headless: Bool = false, noHeadless: Bool = false,
         acceptTerms: Bool = false, resume: Bool = false, continueLast: Bool = false,
-        grantPermissions: String? = nil
+        grantPermissions: String? = nil, outcome: String? = nil
     ) -> Result<[String], FlagError> {
         if headless, noHeadless { return .failure(bothWindowModes) }
         if resume { return .failure(needsConversations("--resume")) }
@@ -35,8 +35,15 @@ public enum AlohaJetAgent {
                 permissions; alohajet-agent grants the page none
                 """))
         }
+        if let outcome {
+            if json { return .failure(FlagError(message: "--outcome and --json: --json reports no verdict; pass one")) }
+            guard ["success", "failure", "skip"].contains(outcome.lowercased()) else {
+                let shown = outcome.isEmpty ? "\"\"" : outcome
+                return .failure(FlagError(message: "--outcome expects success, failure or skip, not \(shown)"))
+            }
+        }
         return .success(["-p", prompt] + (json ? ["--json"] : []) + (noHeadless ? ["--no-headless"] : [])
-            + (acceptTerms ? ["--accept-terms"] : []))
+            + (acceptTerms ? ["--accept-terms"] : []) + (outcome.map { ["--outcome", $0.lowercased()] } ?? []))
     }
 
     public static func mcpArguments(headless: Bool = false, noHeadless: Bool = false) -> Result<[String], FlagError> {

@@ -17,7 +17,8 @@ struct AgentHandoffProcessTests {
         (["--no-headless", "-p", "-50%"], ["-p", "-50%", "--no-headless"]),
         (["-p", "hi", "--accept-terms", "--json"], ["-p", "hi", "--json", "--accept-terms"]),
         (["-p", "hi", "--headless", "--grant-permissions", "none"], ["-p", "hi"]),
-        (["-p", "hi", "--cdp", "9222", "--tab", "T1"], ["-p", "hi"]),
+        (["-p", "hi", "--outcome", "failure"], ["-p", "hi", "--outcome", "failure"]),
+        (["-p", "hi", "--outcome=SKIP", "--accept-terms"], ["-p", "hi", "--accept-terms", "--outcome", "skip"]),
     ])
     func promptArguments(_ arguments: [String], _ expected: [String]) throws {
         let agent = try FakeAgent()
@@ -187,6 +188,39 @@ struct AgentHandoffProcessTests {
         #expect(agent.argv == nil, "the agent ran anyway")
     }
 
+    @Test("a flag -p does not read, or a second argument, is refused before anything runs", arguments: [
+        (["-p", "hi", "--bogus-flag"], "-p does not read --bogus-flag: alohajet --help lists the agent options"),
+        (["-p", "hi", "--cdp", "9222", "--tab", "T1"],
+         "-p does not read --cdp, --tab: alohajet --help lists the agent options"),
+        (["--launch", "-p", "hi"], "-p does not read --launch: alohajet --help lists the agent options"),
+        (["-p", "book", "a", "table"], "-p takes the prompt as one argument, and \"a\" is another: quote the whole prompt"),
+        (["open", "-p", "hi"], "-p takes the prompt as one argument, and \"open\" is another: quote the whole prompt"),
+    ])
+    func unreadArgumentsAreRefused(_ arguments: [String], _ message: String) throws {
+        let agent = try FakeAgent()
+        defer { agent.remove() }
+        let run = try runCLI(arguments, environment: agent.environment)
+        #expect(run.status == 2, "\(run.combined)")
+        #expect(run.stdout.isEmpty)
+        #expect(run.stderr == "alohajet: \(message)\n", "\(run.stderr)")
+        #expect(agent.argv == nil, "the agent ran anyway")
+    }
+
+    @Test("an --outcome the agent would refuse is refused before it runs", arguments: [
+        (["-p", "hi", "--outcome", "done"], "--outcome expects success, failure or skip, not done"),
+        (["-p", "hi", "--outcome="], "--outcome expects success, failure or skip, not \"\""),
+        (["-p", "hi", "--outcome", "success", "--json"], "--outcome and --json: --json reports no verdict; pass one"),
+        (["-p", "hi", "--outcome"], "--outcome expects a value"),
+    ])
+    func unusableOutcomeIsRefused(_ arguments: [String], _ message: String) throws {
+        let agent = try FakeAgent()
+        defer { agent.remove() }
+        let run = try runCLI(arguments, environment: agent.environment)
+        #expect(run.status == 2, "\(run.combined)")
+        #expect(run.stderr == "alohajet: \(message)\n", "\(run.stderr)")
+        #expect(agent.argv == nil, "the agent ran anyway")
+    }
+
     @Test("--headless and --no-headless together are refused", arguments: [
         ["-p", "hi", "--headless", "--no-headless"], ["mcp-stdio", "--no-headless", "--headless"],
     ])
@@ -222,6 +256,7 @@ struct AgentHandoffProcessTests {
          "-p sends no page permissions to the agent at http://127.0.0.1:1: drop --grant-permissions camera"),
         (["--grant-permissions="],
          "-p sends no page permissions to the agent at http://127.0.0.1:1: drop --grant-permissions \"\""),
+        (["--outcome", "success"], "-p reports no verdict to the agent at http://127.0.0.1:1: drop --outcome"),
     ])
     func agentOnlyFlagsAreRefusedWithAnEndpoint(_ extra: [String], _ message: String) throws {
         let agent = try FakeAgent()
@@ -256,7 +291,7 @@ struct AgentHandoffProcessTests {
     func helpNamesTheAgentHost() throws {
         let usage = try runCLI(["--help"])
         #expect(usage.status == 0)
-        for phrase in ["alohajet-agent", "--accept-terms", "--no-headless", "ALOHAJET_AGENT_BIN"] {
+        for phrase in ["alohajet-agent", "--accept-terms", "--no-headless", "--outcome", "ALOHAJET_AGENT_BIN"] {
             #expect(usage.stdout.contains(phrase), "--help does not mention \(phrase)")
         }
         #expect(!usage.stdout.contains("launched if needed"))

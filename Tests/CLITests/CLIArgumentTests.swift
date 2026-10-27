@@ -256,6 +256,18 @@ struct CLIArgumentTests {
         #expect(run.stderr.contains("the agent at http://127.0.0.1:1 asks for them itself"), "\(run.stderr)")
     }
 
+    @Test("-p refuses what it does not read rather than run the turn without it", arguments: [
+        (["--bogus-flag"], "-p does not read --bogus-flag: alohajet --help lists the agent options"),
+        (["--cdp", "9222", "--launch"], "-p does not read --cdp, --launch: alohajet --help lists the agent options"),
+        (["a", "table"], "-p takes the prompt as one argument, and \"a\" is another: quote the whole prompt"),
+    ])
+    func unreadTurnArgumentsAreRefused(_ extra: [String], _ message: String) throws {
+        let run = try runCLI(["-p", "book", "--endpoint", "http://127.0.0.1:1", "--json"] + extra)
+        #expect(run.status == 2, "exited \(run.status): \(run.combined)")
+        #expect(run.stdout.isEmpty)
+        #expect(run.stderr == "alohajet: \(message)\n", "\(run.stderr)")
+    }
+
     /// `--endpoint "$VAR"` with the variable unset has still NAMED a host; answering it
     /// with the local default would run the prompt against a browser nobody asked for.
     @Test func anEmptyEndpointIsAUsageError() throws {

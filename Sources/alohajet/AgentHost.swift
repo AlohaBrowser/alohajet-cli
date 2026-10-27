@@ -4,7 +4,8 @@ import Foundation
 import ToolABI
 
 /// Unlisted, `camera` in `--grant-permissions camera` would parse as the command.
-let agentHostValueFlags: Set<String> = ["--grant-permissions"]
+let agentHostValueFlags: Set<String> = ["--grant-permissions", "--outcome"]
+let agentHostTurnFlags = agentHostValueFlags.union(["--no-headless"])
 
 enum AgentHost {
 
@@ -13,7 +14,7 @@ enum AgentHost {
             prompt: prompt, json: args.has("--json"), headless: args.has("--headless"),
             noHeadless: args.has("--no-headless"), acceptTerms: args.has("--accept-terms"),
             resume: args.has("--resume"), continueLast: args.has("--continue"),
-            grantPermissions: args.flags["--grant-permissions"]))
+            grantPermissions: args.flags["--grant-permissions"], outcome: args.flags["--outcome"]))
     }
 
     static func mcp(_ args: Args) -> Int32 {
@@ -37,6 +38,11 @@ enum AgentHost {
                 -p sends no page permissions to the agent at \(endpoint.absoluteString): \
                 drop --grant-permissions \(shown)
                 """, code: exitUsage)
+        }
+        if args.has("--outcome") {
+            return CLIError(
+                message: "-p reports no verdict to the agent at \(endpoint.absoluteString): drop --outcome",
+                code: exitUsage)
         }
         return nil
     }

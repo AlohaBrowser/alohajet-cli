@@ -144,6 +144,8 @@ let agentOptionsUsage = """
   --accept-terms          accept the Terms of Service and Privacy Policy, for
                           a run with no terminal to ask on
   --no-headless           show the agent's Chromium window (needs a display)
+  --outcome <verdict>     tell llmdex whether the task was done: success,
+                          failure or skip; not with --json
   --endpoint <url>        send the turn to that agent server instead; http to
                           this machine, https anywhere, and no token leaves
                           this machine unless ALOHAJET_AGENT_TOKEN names one
