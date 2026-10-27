@@ -4,6 +4,11 @@
 reports what comes back. The default is `http://127.0.0.1:8765`, the Aloha browser's own  
 automation server; `--endpoint <url>` names any other.
 
+**On Linux** there is no Aloha app, and so no default server. Without `--endpoint`, `-p`
+speaks none of what follows: it becomes `alohajet-agent`, which runs the turn itself
+([README](../README.md#on-linux--p-and-mcp-stdio-are-alohajet-agent)). With `--endpoint`
+everything below holds unchanged, and nothing is launched for it.
+
 ## Ground rules
 
 **Base URL.** Routes are appended to `--endpoint`, preserving any path it carries, so

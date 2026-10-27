@@ -51,7 +51,7 @@ of those is expanded, with the reproduction, under [Limitations](#limitations).
 |---|---|
 | Swift | 6.2 or newer |
 | OS | macOS 14+. Everything on this page was run on macOS 26.2 (arm64), Swift 6.2.3, Google Chrome 152.0.7977.77. |
-| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS, except the Linux notes under [Limitations](#limitations). The release tarball needs `libcurl.so.4` — present wherever `curl` is, and `apt-get install -y libcurl4` on a minimal image. Building from source also needs zlib's headers, `apt-get install -y zlib1g-dev`, which the `swift` Docker images already carry. |
+| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS, except the Linux notes under [Limitations](#limitations). The release tarball needs `libcurl.so.4` and `libz.so.1` — present wherever `curl` is, and `apt-get install -y libcurl4` on a minimal image installs both. Building from source also needs zlib's headers, `apt-get install -y zlib1g-dev`, which the `swift` Docker images already carry. `-p` and `mcp-stdio` need `alohajet-agent` ([On Linux](#on-linux--p-and-mcp-stdio-are-alohajet-agent)). |
 | Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 191 MB Chrome for Testing is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
 | Python 3 | only to serve the fixture pages in [The proof](#the-proof). |
 | Dependencies | none in the four library products (`BrowserTools`, `AgentDriver`, `CDP`, `ToolABI`) — Foundation and the system zlib only, no vendored tree. zlib is the SDK's module on Apple platforms and, on Linux, a system-library module over the distribution's libz: neither is a package anything resolves or fetches. One in the `alohajet` executable: the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) (`from: "0.12.1"`), which `mcp --endpoint` relays over and nothing else uses. A consumer linking the libraries resolves it and compiles none of it. |
@@ -200,6 +200,9 @@ $ alohajet -p "book me a table" --headless
 alohajet: app already running with a visible window — quit it, or drop --headless
 ```
 
+On Linux there is no app to launch, and without `--endpoint` the turn runs in
+`alohajet-agent` instead ([below](#on-linux--p-and-mcp-stdio-are-alohajet-agent)).
+
 ### MCP
 
 `alohajet mcp` speaks Model Context Protocol over stdio: newline-delimited JSON-RPC 2.0,
@@ -286,14 +289,61 @@ relay as `mcp --endpoint`, defaulting to `http://127.0.0.1:8765`. An explicit
 It always relays to the app's MCP server and serves no standalone tools, even if the
 endpoint is unavailable or authentication fails. Keep Aloha running: the relay launches
 neither the app nor Chromium. Use the explicit `mcp --endpoint <url>` form above for new
-configurations, with the running app's automation endpoint.
+configurations, with the running app's automation endpoint. On Linux, without `--endpoint`,
+it is not a relay ([below](#on-linux--p-and-mcp-stdio-are-alohajet-agent)).
+
+### On Linux, `-p` and `mcp-stdio` are `alohajet-agent`
+
+There is no Aloha app on Linux: nothing serves `127.0.0.1:8765`, and there is nothing to
+launch. The agent there is `alohajet-agent`, the AlohaJet agent's own command line:
+it runs a turn in-process against a headless Chromium, and `alohajet-agent mcp` serves on
+stdio the MCP server the macOS app mounts at `/mcp`. Without `--endpoint`, `alohajet -p`
+and `alohajet mcp-stdio` become it — an exec, not a child process, so its stdin, stdout,
+stderr, exit status and signals are the command's own:
+
+| `alohajet` | becomes |
+|---|---|
+| `-p <prompt>` | `alohajet-agent -p <prompt>` |
+| `--json` | `--json` |
+| `--no-headless` | `--no-headless`, a window, which needs a display |
+| `--accept-terms` | `--accept-terms` |
+| `--headless`, `--grant-permissions none` | nothing: both are the agent's default |
+| `--resume`, `--continue`, any other `--grant-permissions` | refused, exit 2: conversations and page permissions are the macOS app's |
+| `mcp-stdio [--no-headless] [--accept-terms]` | `alohajet-agent mcp [--no-headless] [--accept-terms]` |
+
+The agent is the `alohajet-agent` in the directory `alohajet` resolves to, so a symlink on
+`PATH` finds the one unpacked beside the real file. The AlohaJet Linux package ships the
+two together as `bin/alohajet` and `bin/alohajet-agent`; this repository's own Linux
+tarball carries `alohajet` alone. `ALOHAJET_AGENT_BIN` names another agent, as an absolute
+path. With neither, the command exits 3 and says where it looked:
+
+```console
+$ /tmp/aloha/bin/alohajet -p "book me a table"
+alohajet: no alohajet-agent at /tmp/aloha/bin/alohajet-agent — it ships beside alohajet; install it there, or set ALOHAJET_AGENT_BIN to its absolute path
+```
+
+The Terms of Service and the Privacy Policy are the agent's to ask for: on a terminal it
+asks once, and a run with no terminal to ask on — a server, CI, an MCP host — passes
+`--accept-terms`. With neither, the turn fails with `terms_not_accepted` and the model is
+not asked. Where no agent runs the flag would be dropped, so it is refused (exit 2): on
+macOS, where the app asks, and with `--endpoint`, where the host at that URL does.
+
+A Claude Desktop entry saved as `"args": ["mcp-stdio"]`, the one macOS uses, works
+unchanged; add `"--accept-terms"` to `args` on a machine where the Terms were never
+accepted on a terminal.
+
+`--endpoint` still names an agent server, as on macOS — a port forward to a Mac running
+the app, say: `-p --endpoint <url>` speaks [docs/agent-endpoint.md](docs/agent-endpoint.md)
+and `mcp-stdio --endpoint <url>` relays, and neither launches anything. `/usr/bin/open` is
+`xdg-open` there, and nothing runs it.
 
 ## The two browser lanes
 
 `--browser chromium` (the default) drives a Chromium. `--browser aloha` attaches to the
 Aloha browser's own CDP listener on `127.0.0.1:9222` (or `ALOHA_CDP_PORT`), starting the
 app if it is not running. It is the user's browser: never terminated, and its pre-existing
-tabs are theirs.
+tabs are theirs. It is macOS only: on Linux it is refused, exit 2, before any port is
+probed.
 
 ```console
 $ alohajet --browser aloha tabs
@@ -530,9 +580,10 @@ Every variable the sources actually read, checked with
 | `ALOHAJET_COMPACT_TOOLS` | off | tighter default caps, for a small model |
 | `ALOHAJET_CHROME_USER_AGENT` | Chrome's own | override the user agent of a browser alohajet launches. See the HeadlessChrome limitation below. |
 | `ALOHAJET_DEBUG` | off | protocol chatter to stderr |
-| `ALOHA_CDP_PORT` | `9222` | where `--browser aloha` looks for the Aloha browser's CDP listener |
-| `ALOHA_BROWSER_APP` | the `.app` this binary ships inside | path to the Aloha `.app` that `--browser aloha` launches. Unset, the lane launches the bundle this executable sits in — never another registered copy, which would be a second instance on one profile. |
+| `ALOHA_CDP_PORT` | `9222` | macOS: where `--browser aloha` looks for the Aloha browser's CDP listener |
+| `ALOHA_BROWSER_APP` | the `.app` this binary ships inside | macOS: path to the Aloha `.app` that `--browser aloha` launches. Unset, the lane launches the bundle this executable sits in — never another registered copy, which would be a second instance on one profile. |
 | `ALOHAJET_AGENT_TOKEN` | read from disk | the bearer token `-p` sends to `--endpoint`. Unset, it is read from `~/Library/Application Support/Aloha/automation-token` on macOS, `~/.local/share/Aloha/automation-token` on Linux (`$XDG_DATA_HOME/Aloha/automation-token` when that is set) — but that ambient file is sent to a loopback endpoint ONLY, so a remote `https` endpoint is reachable and gets a token only from this variable. Absent entirely, no `Authorization` header is sent and the endpoint answers 401 — never a silent unauthenticated retry. |
+| `ALOHAJET_AGENT_BIN` | the `alohajet-agent` beside `alohajet` | Linux: the agent `-p` and `mcp-stdio` become without `--endpoint`. An absolute path; a relative one, or one that is not an executable file, is an error (exit 3), never a fall-through to the sibling. Unset or empty, it is the `alohajet-agent` in the directory `alohajet` resolves to. |
 
 ## Limitations
 
@@ -563,6 +614,9 @@ Google Chrome 156):
 - Per-user files follow the XDG data directory, not `~/Library/Application Support`: the
   Chrome for Testing cache is `~/.local/share/AlohaJet/chrome-for-testing` and the agent
   token `~/.local/share/Aloha/automation-token`, under `$XDG_DATA_HOME` when it is set.
+- There is no Aloha app. `-p` and `mcp-stdio` become `alohajet-agent`
+  ([above](#on-linux--p-and-mcp-stdio-are-alohajet-agent)), `--browser aloha` is
+  refused, and nothing runs `/usr/bin/open`, which is `xdg-open` there.
 
 **`close` refuses tabs it did not open.** A tab that was already there when alohajet
 attached is the user's; `close` says so and exits non-zero. Tabs alohajet opened close
