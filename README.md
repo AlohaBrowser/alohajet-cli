@@ -307,18 +307,31 @@ stderr, exit status and signals are the command's own:
 | `--json` | `--json` |
 | `--no-headless` | `--no-headless`, a window, which needs a display |
 | `--accept-terms` | `--accept-terms` |
+| `--outcome <success\|failure\|skip>` | `--outcome`, lowercased: the verdict the agent reports to llmdex. Any other value, or `--outcome` with `--json`, is refused, exit 2, as the agent would refuse it |
 | `--headless`, `--grant-permissions none` | nothing: both are the agent's default |
 | `--resume`, `--continue`, any other `--grant-permissions` | refused, exit 2: conversations and page permissions are the macOS app's |
+| any other flag, or a second argument | refused, exit 2, before anything runs |
 | `mcp-stdio [--no-headless]` | `alohajet-agent mcp [--no-headless]` |
 | `mcp-stdio --accept-terms` | refused, exit 2: an MCP session runs no turn and asks for no Terms |
+
+Nothing `-p` does not read is dropped. `-p hi --bogus-flag`, a browser option such as
+`--cdp 9222`, and the `a table` of an unquoted `-p book a table` are refused before the agent
+is run, on macOS and with `--endpoint` as well:
+
+```console
+$ alohajet -p hi --bogus-flag ; echo $?
+alohajet: -p does not read --bogus-flag: alohajet --help lists the agent options
+2
+```
 
 The agent is the `alohajet-agent` in the directory `alohajet` resolves to, so a symlink on
 `PATH` finds the one unpacked beside the real file. The AlohaJet Linux package ships the
 two together as `bin/alohajet` and `bin/alohajet-agent`; this repository's own Linux
 tarball carries `alohajet` alone. `ALOHAJET_AGENT_BIN` names another agent, as an absolute
-path. An agent that is `alohajet` itself, by symlink, hard link or override, would only run
-`alohajet` again, and is refused with exit 3. With neither, the command exits 3 and says
-where it looked:
+path: a build of your own, or a stand-in script that records its argv, to see what `-p`
+hands over. An agent that is `alohajet` itself, by symlink, hard link or override, would
+only run `alohajet` again, and is refused with exit 3. With neither, the command exits 3
+and says where it looked:
 
 ```console
 $ /tmp/aloha/bin/alohajet -p "book me a table"
@@ -341,8 +354,8 @@ the app, say: `-p --endpoint <url>` speaks [docs/agent-endpoint.md](docs/agent-e
 and `mcp-stdio --endpoint <url>` relays, and neither launches anything. `/usr/bin/open` is
 `xdg-open` there, and nothing runs it. The flags only `alohajet-agent` reads are refused
 with `-p --endpoint` (exit 2) rather than dropped: `--no-headless`, because that server
-keeps its own window, and a `--grant-permissions` other than `none`, because the client
-sends it no page permissions.
+keeps its own window, a `--grant-permissions` other than `none`, because the client
+sends it no page permissions, and `--outcome`, because it reports no verdict.
 
 ## The two browser lanes
 
@@ -605,6 +618,11 @@ Google Chrome 156):
 - A launched Chromium is headless unless `--no-headless` says otherwise, and headless
   needs no display. `--no-headless` does: with no X server or Wayland session to reach it
   exits 3, quoting the browser's `Missing X server or $DISPLAY`.
+- A headless Chromium's window is 1440x900 on a 1440x900 screen, the size the macOS app
+  gives its own headless window (`--window-size=1440,900 --screen-info={1440x900}`); a page
+  in it measures `innerWidth` 1440 and `innerHeight` 813. Chrome's headless default is an
+  800x600 screen and a 780x493 viewport, which sites answer with their narrow layout:
+  ru.wikipedia folds its search box into a link. A `--no-headless` window sizes itself.
 - A run that must not reach the desktop needs more than an unset `DISPLAY` and
   `WAYLAND_DISPLAY`: a `--no-headless` Chrome still finds the Wayland socket under
   `$XDG_RUNTIME_DIR` and opens its window on the user's screen. Cut every route:
@@ -617,7 +635,9 @@ Google Chrome 156):
 - Chrome binds its process-singleton socket under `$TMPDIR`, and a socket path past
   `sun_path` kills it before it serves CDP. When the inherited TMPDIR is longer than 62
   bytes, the launched browser is given `/tmp/alohajet-<uid>` (created 0700) as its TMPDIR
-  instead; alohajet's own state and the throwaway profile stay in yours.
+  instead; alohajet's own state and the throwaway profile stay in yours. Chrome removes the
+  `com.google.Chrome.XXXXXX` directory it binds that socket in only when it exits on its own;
+  for a browser alohajet stops with a signal, alohajet removes it, in either TMPDIR.
 - Per-user files follow the XDG data directory, not `~/Library/Application Support`: the
   Chrome for Testing cache is `~/.local/share/AlohaJet/chrome-for-testing` and the agent
   token `~/.local/share/Aloha/automation-token`, under `$XDG_DATA_HOME` when it is set.
