@@ -998,6 +998,9 @@ public struct ChromeLauncher: Sendable {
     /// refused to start is dead, not slow, so this returns as soon as the process is
     /// gone, quoting its exit status and stderr instead of polling out the full timeout.
     /// Omit it when connecting to a browser this process does not own.
+    ///
+    /// Cancellation throws `CancellationError` at the next poll and terminates `handle`: a
+    /// browser still starting when its caller is stopped is one nothing will connect to.
     public func discoverWebSocketURL(
         host: String = "127.0.0.1",
         port: Int,
@@ -1020,8 +1023,12 @@ public struct ChromeLauncher: Sendable {
                 if let handle, !handle.process.isRunning {
                     throw CDPError.discoveryFailed(browserExitedMessage(handle, host: host, port: port))
                 }
-                let nanos = UInt64(pollInterval * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: nanos)
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+                } catch {
+                    handle?.terminate()
+                    throw error
+                }
             }
         }
         if let handle, !handle.process.isRunning {
