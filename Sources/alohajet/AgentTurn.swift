@@ -72,7 +72,8 @@ enum AgentTurn {
         // would otherwise drive a visible browser while claiming not to. A failure here
         // exits 3, the browser-unreachable code, because that is exactly what it is; an
         // endpoint that is NOT this machine's app launches nothing and waits on nothing,
-        // so `-p` against one still never touches a browser.
+        // so `-p` against one still never touches a browser. Off macOS no endpoint is.
+        #if os(macOS)
         do {
             try await AlohaAppLauncher().ensureRunning(
                 endpoint: endpointURL, headless: args.has("--headless"),
@@ -83,6 +84,7 @@ enum AgentTurn {
             writeToStandardError("alohajet: \((error as? AlohaAppLaunchError)?.description ?? "\(error)")\n")
             return exitUnreachable
         }
+        #endif
 
         // Every failure the driver can meet — no socket, a 409 busy, a rejected task,
         // an unreadable envelope — comes back INSIDE the result as `.failed`, so this

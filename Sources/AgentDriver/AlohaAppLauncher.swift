@@ -44,6 +44,8 @@ public enum AlohaAppLaunchError: Error, Equatable, CustomStringConvertible {
     /// The app is up but its automation server is not answering, and no launch can
     /// change that.
     case automationOff
+    /// There is no app to launch: it runs on macOS only.
+    case macOSOnly
 
     public var description: String {
         switch self {
@@ -70,6 +72,12 @@ public enum AlohaAppLaunchError: Error, Equatable, CustomStringConvertible {
             return """
                 the browser is running but its automation server is off: turn it on in \
                 Settings → AlohaJet ("Allow CLI and MCP clients").
+                """
+        case .macOSOnly:
+            return """
+                the Aloha app runs on macOS only, so there is nothing to launch: alohajet -p \
+                hands the turn to alohajet-agent, which ships beside alohajet, and --endpoint \
+                <url> reaches an agent host that is already running
                 """
         }
     }
@@ -125,11 +133,13 @@ public struct AlohaAppLauncher: Sendable {
     /// (`BrowserTools.AlohaBrowser.appPathEnvKey`), so one export moves both lanes.
     public nonisolated static let appPathEnvKey = "ALOHA_BROWSER_APP"
 
+    #if os(macOS)
     /// Tried in order when this executable does not ship inside an `.app`: a machine has
     /// either product installed, not both. Same list, same order as the CDP lane's.
     nonisolated static let bundleIdentifiers = [
         "com.alohabrowser.alohabrowser", "com.alohabrowser.alohajet",
     ]
+    #endif
 
     private let probe: Probe
     private let open: Opener
@@ -356,6 +366,7 @@ public struct AlohaAppLauncher: Sendable {
         return bundle
     }
 
+    #if os(macOS)
     /// `open(1)`'s argument list. `app` names WHICH copy — `["-a", <path>]` when we know
     /// our own bundle (the CLI must drive the app it shipped inside, not whichever
     /// registered copy LaunchServices would pick for the scheme), `["-b", <id>]` when it
@@ -404,20 +415,31 @@ public struct AlohaAppLauncher: Sendable {
         }
         throw AlohaAppLaunchError.launchFailed("tried " + failures.joined(separator: "; "))
     }
+    #else
+    /// Off macOS there is no app, and `/usr/bin/open` is not `open(1)`: on Linux it is
+    /// `xdg-open`, which refuses every option above and would hand the deep link to
+    /// whatever the desktop registered for it.
+    public static let liveOpen: Opener = { _, _ in throw AlohaAppLaunchError.macOSOnly }
+    #endif
 
     // MARK: - The instance this run is allowed to stop
 
     /// The pids of the `.app` this run drives — empty when there is none to name (a
-    /// `swift build` product), which leaves the launcher as it was.
+    /// `swift build` product, or no macOS), which leaves the launcher as it was.
     public static let liveInstances: Instances = {
+        #if os(macOS)
         guard let bundle = appBundlePath() else { return [] }
         return pids(matching: bundle + "/Contents/MacOS/")
+        #else
+        return []
+        #endif
     }
 
     public static let liveTerminate: Terminator = { pids in
         for pid in pids { _ = kill(pid, SIGTERM) }
     }
 
+    #if os(macOS)
     /// A pgrep that cannot run reports nothing, which the caller reads as "no instance"
     /// — falling through to the launch-and-wait it would have done anyway.
     nonisolated static func pids(matching pattern: String) -> Set<Int32> {
@@ -460,4 +482,5 @@ public struct AlohaAppLauncher: Sendable {
                 "\(executable) exited \(process.terminationStatus): \(detail)")
         }
     }
+    #endif
 }

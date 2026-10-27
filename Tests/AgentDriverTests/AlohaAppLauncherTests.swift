@@ -149,6 +149,7 @@ struct AlohaAppLauncherTests {
         try await launcher(open: OpenSpy(), probe: plain).ensureRunning(endpoint: endpoint) { _ in }
     }
 
+    #if os(macOS)
     @Test("a refused launch names every bundle identifier it tried, with its reason")
     func launchFailureNamesTheBundleIdentifiers() throws {
         var attempted: [[String]] = []
@@ -184,6 +185,33 @@ struct AlohaAppLauncherTests {
         }
         #expect(single == [["-a", "/Volumes/dev/Aloha.app", AlohaAppLauncher.attachURL]])
     }
+    #else
+    // `/usr/bin/open` is `xdg-open` on Linux, which would refuse `-a`/`-b`/`-g` and hand
+    // the deep link to whatever the desktop registered for it.
+    @Test("off macOS the production opener runs nothing and names what to use instead")
+    func noAppOffMacOS() async throws {
+        #expect(throws: AlohaAppLaunchError.macOSOnly) {
+            try AlohaAppLauncher.liveOpen(AlohaAppLauncher.attachURL, true)
+        }
+        #expect(AlohaAppLauncher.liveInstances().isEmpty)
+        #expect(AlohaAppLaunchError.macOSOnly.description == """
+            the Aloha app runs on macOS only, so there is nothing to launch: alohajet -p hands \
+            the turn to alohajet-agent, which ships beside alohajet, and --endpoint <url> \
+            reaches an agent host that is already running
+            """)
+
+        let path = Self.scratchTokenPath()
+        let probe = ProbeSpy()
+        probe.alwaysNil = true
+        await #expect(throws: AlohaAppLaunchError.macOSOnly) {
+            try await AlohaAppLauncher(probe: { await probe.probe($0) }, pollInterval: .zero,
+                                       attempts: 3, launchTokenPath: path)
+                .ensureRunning(endpoint: endpoint, headless: true) { _ in }
+        }
+        #expect(probe.calls == 1, "a launch that cannot happen is not waited on")
+        #expect(!FileManager.default.fileExists(atPath: path))
+    }
+    #endif
 
     // MARK: - The happy path
 
@@ -408,6 +436,7 @@ struct AlohaAppLauncherTests {
 
     // MARK: - How the app is opened
 
+    #if os(macOS)
     // `open(1)`: options precede the URL operand and `--args` is last, so everything
     // after it lands in the launched app's argv.
     @Test("the open arguments carry the deep link, and --headless only through --args")
@@ -421,6 +450,7 @@ struct AlohaAppLauncherTests {
         #expect(AlohaAppLauncher.openArguments(url: AlohaAppLauncher.attachURL, app: [], headless: false)
             == ["alohajet://attach"])
     }
+    #endif
 
     @Test("the CLI drives the app bundle it ships inside, not whatever claims the scheme")
     func resolvesItsOwnBundle() {

@@ -274,6 +274,30 @@ struct AgentSessionTests {
         #expect(!run.stderr.contains("must be http to a loopback address"))
     }
 
+#if !os(macOS)
+    /// The app's own port on loopback is only an endpoint off macOS: something may answer
+    /// it (a port forward to a Mac running the app), and nothing is launched to make it.
+    /// `/usr/bin/open` there is `xdg-open`, which failed every such turn with exit 3.
+    @Test("off macOS a turn to the app's own port launches nothing and runs")
+    func theAppPortIsOnlyAnEndpointOffMacOS() throws {
+        let stub = AgentStubServer(protocolVersion: 2, port: 8765)
+        try stub.start() // If 8765 is busy, fail before contacting its existing owner.
+        defer { stub.stop() }
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alohajet-app-port-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let run = try runCLI(["-p", "two plus two", "--endpoint", stub.url, "--headless"],
+                             environment: ["ALOHAJET_AGENT_TOKEN": "test-token", "HOME": home.path],
+                             timeout: 60)
+        #expect(run.status == 0, "exited \(run.status): \(run.combined)")
+        #expect(run.stdout == "Four.\n")
+        #expect(stub.paths == ["/agent/lane", "/agent/run", "/agent/result"])
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent(".alohajet").path),
+                "a headless launch token was written for a launch that cannot happen")
+    }
+#endif
+
     static let declined = "The Terms of Service and the Privacy Policy were not accepted; the model was not asked.\n"
     static let inTheApp = "Accept the Terms of Service and the Privacy Policy in the app window to continue.\n"
     static let prompt = "To continue, accept the Terms of Service (\(AgentStubServer.termsUrl))"

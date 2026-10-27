@@ -232,6 +232,19 @@ struct MCPProtocolTests {
         #expect(text.contains("two different browsers"), "\(text)")
     }
 
+#if !os(macOS)
+    @Test func mcpOnTheAlohaLaneSaysItIsMacOSOnly() throws {
+        let run = try mcp([
+            #"{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"manage_tabs","arguments":{"action":"list"}}}"#
+        ], extraArguments: ["--browser", "aloha"])
+        let result = try #require(run.result(id: 15))
+        #expect(result["isError"] as? Bool == true)
+        let text = try #require((result["content"] as? [[String: Any]])?.first?["text"] as? String)
+        #expect(text.contains("the Aloha browser runs on macOS only"), "\(text)")
+        #expect(!text.contains("xdg-open"), "\(text)")
+    }
+#endif
+
     @Test func mcpLaunchesTheBrowserTheEnvironmentNames() throws {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("alohajet-mcp-browser-env-\(UUID().uuidString)")

@@ -128,6 +128,7 @@ struct AlohaBrowserTests {
 
     // MARK: - How the app is opened
 
+    #if os(macOS)
     @Test("an explicit app path is the only thing tried; otherwise both bundle ids are")
     func openArguments() {
         #expect(AlohaBrowser.openArguments(appPath: "/Volumes/dev/Aloha.app")
@@ -196,4 +197,22 @@ struct AlohaBrowserTests {
             try AlohaBrowser.run("/usr/bin/true", [])
         }
     }
+    #else
+    @Test("off macOS the production opener runs nothing and names the lanes that work")
+    func noAppOffMacOS() async {
+        #expect(throws: AlohaBrowserError.macOSOnly) { try AlohaBrowser.liveOpen() }
+        #expect(AlohaBrowserError.macOSOnly.description == """
+            the Aloha browser runs on macOS only, so there is nothing to launch: drop \
+            --browser aloha for the default headless Chromium, or pass --cdp <endpoint> \
+            to attach to a browser that is already running
+            """)
+
+        let seams = Seams(readyAfter: .max)
+        await #expect(throws: AlohaBrowserError.macOSOnly) {
+            _ = try await AlohaBrowser(probe: seams.probe(), pollInterval: .milliseconds(1), attempts: 4)
+                .endpoint(port: 9222)
+        }
+        #expect(seams.probes == 1, "a launch that cannot happen is not waited on")
+    }
+    #endif
 }

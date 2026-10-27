@@ -425,12 +425,16 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
                 message: "--browser aloha and --cdp name two different browsers; pass one",
                 code: exitUsage)
         }
+        #if os(macOS)
         do {
             let url = try await AlohaBrowser().endpoint()
             return adopt(try await attach(url.absoluteString))
         } catch let error as AlohaBrowserError {
             throw CLIError(message: error.description, code: exitUnreachable)
         }
+        #else
+        throw CLIError(message: AlohaBrowserError.macOSOnly.description, code: exitUsage)
+        #endif
     case let other?:
         throw CLIError(
             message: "--browser expects chromium or aloha, got \"\(other)\"", code: exitUsage)

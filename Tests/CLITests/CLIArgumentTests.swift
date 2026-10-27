@@ -167,6 +167,22 @@ struct CLIArgumentTests {
         #expect(run.stderr.contains("two different browsers"))
     }
 
+#if !os(macOS)
+    /// Off macOS there is no app, so the lane is refused before anything is probed — which
+    /// is what makes it safe to run here: `/usr/bin/open` is `xdg-open`, and a Chromium of
+    /// the developer's own may well be listening on 9222.
+    @Test("--browser aloha is refused: the Aloha browser runs on macOS only", arguments: [
+        ["--browser", "aloha", "tabs"], ["--browser=aloha", "open", "https://example.com"],
+    ])
+    func alohaBrowserLaneIsRefusedOffMacOS(_ arguments: [String]) throws {
+        let run = try runCLI(arguments)
+        #expect(run.status == 2, "exited \(run.status): \(run.combined)")
+        #expect(run.stderr.contains("the Aloha browser runs on macOS only"), "\(run.stderr)")
+        #expect(run.stderr.contains("--cdp"), "\(run.stderr)")
+        #expect(!run.stderr.contains("xdg-open") && !run.stderr.contains("could not launch"), "\(run.stderr)")
+    }
+#endif
+
     /// `--browser chromium` is the default spelled out: it must behave exactly like no
     /// flag at all, which here means falling through to `--cdp` and its dead endpoint (3),
     /// not tripping the selector's own usage error (2).

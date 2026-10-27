@@ -30,6 +30,8 @@ public enum AlohaBrowserError: Error, Equatable, CustomStringConvertible {
     case launchFailed(String)
     /// Nothing answered `/json/version` at the port, launch or no launch.
     case notReachable(port: Int, seconds: Int)
+    /// There is no app to launch: it runs on macOS only.
+    case macOSOnly
 
     public var description: String {
         switch self {
@@ -41,6 +43,12 @@ public enum AlohaBrowserError: Error, Equatable, CustomStringConvertible {
                 browser is running, its CDP listener is off: it is disabled by \
                 ALOHA_CDP_DISABLED=1, or it relocated off a taken \(port) \
                 (pass --cdp <port> to name the port yourself)
+                """
+        case .macOSOnly:
+            """
+                the Aloha browser runs on macOS only, so there is nothing to launch: drop \
+                --browser aloha for the default headless Chromium, or pass --cdp <endpoint> \
+                to attach to a browser that is already running
                 """
         }
     }
@@ -138,6 +146,7 @@ public struct AlohaBrowser: Sendable {
         try? await CDPClient.discoverWebSocketURL(host: "127.0.0.1", port: port)
     }
 
+    #if os(macOS)
     /// `open(1)` — not NSWorkspace — so this stays a plain Foundation CLI with no AppKit
     /// link. `-g` keeps the launch out of the foreground.
     ///
@@ -219,4 +228,9 @@ public struct AlohaBrowser: Sendable {
                 "\(executable) exited \(process.terminationStatus): \(detail)")
         }
     }
+    #else
+    /// Off macOS there is no app, and `/usr/bin/open` is not `open(1)`: on Linux it is
+    /// `xdg-open`, which refuses every option `open(1)` takes.
+    public static let liveOpen: Opener = { throw AlohaBrowserError.macOSOnly }
+    #endif
 }
