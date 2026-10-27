@@ -934,6 +934,13 @@ public struct ChromeLauncher: Sendable {
                 "--password-store=basic",
                 "--use-mock-keychain",
             ])
+            // Chrome keeps its crash database under its DEFAULT user-data dir whatever
+            // `--user-data-dir` says, so a throwaway run wrote into the user's own Chrome
+            // tree. `--crash-dumps-dir` does not move it (measured, Chrome 156 on Linux);
+            // this variable is what Chrome's crash reporter client reads.
+            var environment = process.environment ?? ProcessInfo.processInfo.environment
+            environment["BREAKPAD_DUMP_LOCATION"] = userDataDir.appendingPathComponent("Crash Reports").path
+            process.environment = environment
         }
         if !ownsUserDataDir, let profileDirectory {
             arguments.append("--profile-directory=\(profileDirectory)")
