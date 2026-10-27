@@ -188,6 +188,33 @@ final class AlohaJetAgentTests {
         }
     }
 
+    @Test("an agent that is this alohajet is refused: it would hand off to itself forever")
+    func thisExecutableIsNotTheAgent() throws {
+        let install = try directory("install")
+        let cli = try executable(install.appendingPathComponent("alohajet"))
+        let sibling = install.appendingPathComponent("alohajet-agent").path
+        try FileManager.default.createSymbolicLink(atPath: sibling, withDestinationPath: "alohajet")
+        #expect(AlohaJetAgent.path(environment: [:], executable: cli) == .failure(.init(message:
+            "\(sibling) is alohajet itself, not alohajet-agent — install alohajet-agent there,"
+                + " or set ALOHAJET_AGENT_BIN to its absolute path")))
+
+        let hardLink = try directory("opt").appendingPathComponent("alohajet-agent").path
+        try FileManager.default.linkItem(atPath: cli, toPath: hardLink)
+        let onPath = try directory("bin").appendingPathComponent("alohajet").path
+        try FileManager.default.createSymbolicLink(atPath: onPath, withDestinationPath: cli)
+        for override in [cli, hardLink] {
+            #expect(AlohaJetAgent.path(environment: ["ALOHAJET_AGENT_BIN": override], executable: onPath)
+                == .failure(.init(message:
+                    "ALOHAJET_AGENT_BIN names \(override), which is alohajet itself, not alohajet-agent")))
+        }
+
+        let spy = ExecSpy(failure: 0)
+        #expect(throws: AlohaJetAgent.HostError.self) {
+            try AlohaJetAgent.handOff(["-p", "hi"], environment: [:], executable: cli, exec: { spy.exec($0, $1) })
+        }
+        #expect(spy.calls.isEmpty)
+    }
+
     // MARK: - The handoff
 
     nonisolated final class ExecSpy: @unchecked Sendable {

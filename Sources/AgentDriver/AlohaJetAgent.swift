@@ -85,6 +85,10 @@ public enum AlohaJetAgent {
             guard isExecutableFile(override) else {
                 return .failure(HostError(message: "\(pathEnvKey) names \(override), which is not an executable file"))
             }
+            guard !isSameFile(override, executable) else {
+                return .failure(HostError(
+                    message: "\(pathEnvKey) names \(override), which is alohajet itself, not \(executableName)"))
+            }
             return .success(override)
         }
         guard let resolved = realpath(executable, nil) else {
@@ -100,6 +104,12 @@ public enum AlohaJetAgent {
         guard isExecutableFile(sibling) else {
             return .failure(HostError(message: """
                 no \(executableName) at \(sibling) — it ships beside alohajet; install it there, \
+                or set \(pathEnvKey) to its absolute path
+                """))
+        }
+        guard !isSameFile(sibling, executable) else {
+            return .failure(HostError(message: """
+                \(sibling) is alohajet itself, not \(executableName) — install \(executableName) there, \
                 or set \(pathEnvKey) to its absolute path
                 """))
         }
@@ -138,6 +148,13 @@ public enum AlohaJetAgent {
         pthread_sigmask(SIG_SETMASK, &mask, nil)
         pointers.forEach { free($0) }
         return failure
+    }
+
+    private nonisolated static func isSameFile(_ first: String, _ second: String) -> Bool {
+        var one = stat()
+        var other = stat()
+        return stat(first, &one) == 0 && stat(second, &other) == 0
+            && one.st_dev == other.st_dev && one.st_ino == other.st_ino
     }
 
     private nonisolated static func isExecutableFile(_ path: String) -> Bool {

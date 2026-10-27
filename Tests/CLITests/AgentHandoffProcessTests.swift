@@ -146,6 +146,24 @@ struct AgentHandoffProcessTests {
         #expect(!run.stderr.contains("xdg-open") && !run.stderr.contains("could not launch"), "\(run.stderr)")
     }
 
+    @Test("an alohajet-agent that is alohajet itself exits 3 rather than re-running itself forever")
+    func thisCLIIsNotTheAgent() throws {
+        let sandbox = try Sandbox()
+        defer { sandbox.remove() }
+        let install = try sandbox.directory("install")
+        let cli = try sandbox.copyOfTheCLI(into: install)
+        let sibling = install.appendingPathComponent("alohajet-agent").path
+        try FileManager.default.createSymbolicLink(atPath: sibling, withDestinationPath: "alohajet")
+
+        for (arguments, override, named) in [
+            (["-p", "hi"], "", sibling), (["mcp-stdio"], "", sibling), (["-p", "hi"], cli, cli),
+        ] {
+            let run = try runCLI(arguments, environment: ["ALOHAJET_AGENT_BIN": override], timeout: 10, binary: cli)
+            #expect(run.status == 3, "\(arguments) \(override): \(run.combined)")
+            #expect(run.stderr.contains("\(named)") && run.stderr.contains("alohajet itself"), "\(run.stderr)")
+        }
+    }
+
     @Test("an ALOHAJET_AGENT_BIN that names no executable is refused by name", arguments: [
         "alohajet-agent", "./bin/alohajet-agent", "/nonexistent/alohajet-agent", "/tmp",
     ])

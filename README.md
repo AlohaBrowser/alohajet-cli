@@ -316,7 +316,9 @@ The agent is the `alohajet-agent` in the directory `alohajet` resolves to, so a 
 `PATH` finds the one unpacked beside the real file. The AlohaJet Linux package ships the
 two together as `bin/alohajet` and `bin/alohajet-agent`; this repository's own Linux
 tarball carries `alohajet` alone. `ALOHAJET_AGENT_BIN` names another agent, as an absolute
-path. With neither, the command exits 3 and says where it looked:
+path. An agent that is `alohajet` itself, by symlink, hard link or override, would only run
+`alohajet` again, and is refused with exit 3. With neither, the command exits 3 and says
+where it looked:
 
 ```console
 $ /tmp/aloha/bin/alohajet -p "book me a table"
@@ -585,7 +587,7 @@ Every variable the sources actually read, checked with
 | `ALOHA_CDP_PORT` | `9222` | macOS: where `--browser aloha` looks for the Aloha browser's CDP listener |
 | `ALOHA_BROWSER_APP` | the `.app` this binary ships inside | macOS: path to the Aloha `.app` that `--browser aloha` launches. Unset, the lane launches the bundle this executable sits in — never another registered copy, which would be a second instance on one profile. |
 | `ALOHAJET_AGENT_TOKEN` | read from disk | the bearer token `-p` sends to `--endpoint`. Unset, it is read from `~/Library/Application Support/Aloha/automation-token` on macOS, `~/.local/share/Aloha/automation-token` on Linux (`$XDG_DATA_HOME/Aloha/automation-token` when that is set) — but that ambient file is sent to a loopback endpoint ONLY, so a remote `https` endpoint is reachable and gets a token only from this variable. Absent entirely, no `Authorization` header is sent and the endpoint answers 401 — never a silent unauthenticated retry. |
-| `ALOHAJET_AGENT_BIN` | the `alohajet-agent` beside `alohajet` | Linux: the agent `-p` and `mcp-stdio` become without `--endpoint`. An absolute path; a relative one, or one that is not an executable file, is an error (exit 3), never a fall-through to the sibling. Unset or empty, it is the `alohajet-agent` in the directory `alohajet` resolves to. |
+| `ALOHAJET_AGENT_BIN` | the `alohajet-agent` beside `alohajet` | Linux: the agent `-p` and `mcp-stdio` become without `--endpoint`. An absolute path; a relative one, one that is not an executable file, or `alohajet` itself is an error (exit 3), never a fall-through to the sibling. Unset or empty, it is the `alohajet-agent` in the directory `alohajet` resolves to. |
 
 ## Limitations
 
