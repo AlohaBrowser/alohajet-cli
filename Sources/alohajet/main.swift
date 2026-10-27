@@ -32,10 +32,13 @@ struct CLIError: Error {
 
 /// Flags that consume the following token. Everything else beginning with `-` is a
 /// boolean; `--flag=value` works for any of them.
-let valueFlags: Set<String> = [
+let valueFlags = Set([
     "--cdp", "--port", "--tab", "--text", "--index", "--timeout-ms", "--max-chars", "--browser",
     "-p", "--endpoint", "--resume"
-]
+])
+#if !os(macOS)
+.union(agentHostValueFlags)
+#endif
 
 struct Args {
     var positional: [String] = []
@@ -94,6 +97,68 @@ func parseArgs(_ argv: [String]) throws -> Args {
 }
 
 // MARK: - Help
+
+#if os(macOS)
+let mcpStdioHelp = """
+    alohajet mcp-stdio [--endpoint <url>]
+      Compatibility command for saved desktop MCP entries. Relay stdio to the
+      running Aloha browser's MCP server; no tools are served by this process.
+      Default endpoint: http://127.0.0.1:8765. An explicit --endpoint follows
+      the same validation and token rules as mcp --endpoint <url>.
+      Keep Aloha running; this command launches no app or Chromium.
+      Use mcp --endpoint <url> for new configurations.
+    """
+
+let agentOptionsUsage = """
+  -p <prompt>             ask the AlohaJet agent in the Aloha browser
+  --resume <chat-id>      continue that chat (-p prints its id on stderr)
+  --continue              continue the last -p chat (default: a new one)
+  --headless              run the app with no window (refused if it has one)
+  --endpoint <url>        agent server (default http://127.0.0.1:8765, the
+                          local app, launched if needed); http to this machine,
+                          https anywhere, and no token leaves this machine
+                          unless ALOHAJET_AGENT_TOKEN names one
+  --json                  print the whole result as one JSON object
+"""
+
+let mcpStdioUsage = "  mcp-stdio               compatibility relay for saved desktop MCP entries"
+let alohaBrowserUsage = "  --browser aloha         attach to the Aloha browser, starting it if needed"
+let hostEnvironmentUsage = """
+  ALOHA_BROWSER_APP       the Aloha .app to launch
+  ALOHA_CDP_PORT          the Aloha browser's CDP port (default 9222)
+"""
+#else
+let mcpStdioHelp = """
+    alohajet mcp-stdio [--accept-terms] [--no-headless] [--endpoint <url>]
+      Serve the MCP server of alohajet-agent, which ships beside alohajet: this
+      process becomes alohajet-agent mcp, so a Claude Desktop entry saved with
+      "args": ["mcp-stdio"] works as it does on macOS. --accept-terms accepts
+      the Terms of Service and Privacy Policy for a host with no terminal.
+      With --endpoint, relay stdio to the MCP server at <url>/mcp instead,
+      under the same validation and token rules as mcp --endpoint <url>.
+    """
+
+let agentOptionsUsage = """
+  -p <prompt>             run one turn in alohajet-agent, which ships beside
+                          alohajet, against a headless Chromium
+  --accept-terms          accept the Terms of Service and Privacy Policy, for
+                          a run with no terminal to ask on
+  --no-headless           show the agent's Chromium window (needs a display)
+  --endpoint <url>        send the turn to that agent server instead; http to
+                          this machine, https anywhere, and no token leaves
+                          this machine unless ALOHAJET_AGENT_TOKEN names one
+  --resume <chat-id>      continue that chat on the --endpoint server
+  --continue              continue that server's last -p chat
+  --json                  print the whole result as one JSON object
+"""
+
+let mcpStdioUsage = "  mcp-stdio               serve alohajet-agent's MCP server on stdio"
+let alohaBrowserUsage = "  --browser aloha         attach to the Aloha browser, on macOS only"
+let hostEnvironmentUsage = """
+  ALOHAJET_AGENT_BIN      the alohajet-agent -p and mcp-stdio run (default:
+                          the one beside alohajet)
+"""
+#endif
 
 let commandHelp: [String: String] = [
     "open": """
@@ -172,15 +237,7 @@ let commandHelp: [String: String] = [
           anywhere — a port forward, a second machine. A non-loopback endpoint
           is sent no token unless ALOHAJET_AGENT_TOKEN names one.
         """,
-    "mcp-stdio": """
-        alohajet mcp-stdio [--endpoint <url>]
-          Compatibility command for saved desktop MCP entries. Relay stdio to the
-          running Aloha browser's MCP server; no tools are served by this process.
-          Default endpoint: http://127.0.0.1:8765. An explicit --endpoint follows
-          the same validation and token rules as mcp --endpoint <url>.
-          Keep Aloha running; this command launches no app or Chromium.
-          Use mcp --endpoint <url> for new configurations.
-        """
+    "mcp-stdio": mcpStdioHelp
 ]
 
 let usage = """
@@ -191,15 +248,7 @@ USAGE
   alohajet [browser options] <command> [args]
 
 AGENT
-  -p <prompt>             ask the AlohaJet agent in the Aloha browser
-  --resume <chat-id>      continue that chat (-p prints its id on stderr)
-  --continue              continue the last -p chat (default: a new one)
-  --headless              run the app with no window (refused if it has one)
-  --endpoint <url>        agent server (default http://127.0.0.1:8765, the
-                          local app, launched if needed); http to this machine,
-                          https anywhere, and no token leaves this machine
-                          unless ALOHAJET_AGENT_TOKEN names one
-  --json                  print the whole result as one JSON object
+\(agentOptionsUsage)
   Until the Terms of Service and Privacy Policy are accepted, -p asks first.
 
 COMMANDS
@@ -218,14 +267,14 @@ COMMANDS
   quit                    close the shared browser
   mcp                     serve these tools over MCP on stdio
   mcp --endpoint <url>    relay MCP on stdio to the Aloha browser's server
-  mcp-stdio               compatibility relay for saved desktop MCP entries
+\(mcpStdioUsage)
 
 BROWSER OPTIONS (default: one shared Chromium, kept until `alohajet quit`)
   --launch                a throwaway Chromium for this command only
   --no-headless           show the window of a Chromium alohajet launches
   --port <n>              debug port to launch on (default: a free one)
   --cdp <endpoint>        attach to a browser: ws:// URL, port or host:port
-  --browser aloha         attach to the Aloha browser, starting it if needed
+\(alohaBrowserUsage)
   --tab <id>              the tab to act on (default: the tab in use)
   --json                  print the raw tool result as JSON
 
@@ -233,8 +282,7 @@ ENVIRONMENT
   ALOHAJET_AGENT_TOKEN    token for -p and MCP relays (default: the app's
                           token file, sent to loopback endpoints only)
   ALOHAJET_BROWSER        Chromium to launch (default: Chrome, else a download)
-  ALOHA_BROWSER_APP       the Aloha .app to launch
-  ALOHA_CDP_PORT          the Aloha browser's CDP port (default 9222)
+\(hostEnvironmentUsage)
   ALOHAJET_NETWORK_LOG    log tabs' requests to this dir; responses unmasked
   ALOHAJET_DEBUG          log protocol chatter to stderr
 
@@ -748,9 +796,13 @@ func main() async -> Int32 {
     }
     let json = args.has("--json")
 
-    // Older desktop configs saved this verb. It is always the HTTP relay, including
-    // without --endpoint: never enter ordinary Chromium connection or our MCP server.
+    // Older desktop configs saved this verb. It is never ordinary Chromium connection or
+    // our MCP server: with --endpoint, and on macOS always, it is the HTTP relay; off
+    // macOS without one it is alohajet-agent's MCP server, the one the app serves.
     if command == "mcp-stdio" {
+        #if !os(macOS)
+        if !args.has("--endpoint") { return AgentHost.mcp(args) }
+        #endif
         return await MCPRelay.main(args)
     }
 

@@ -15,7 +15,8 @@ import ToolABI
 // click …` needs a browser and nothing else, `alohajet -p …` needs an agent. The
 // agent it reaches for by default is the one in the Aloha browser on this machine
 // (`--endpoint` names another), and since this binary ships INSIDE that app, a turn
-// that finds it not running launches it and waits — see `AlohaAppLauncher`.
+// that finds it not running launches it and waits — see `AlohaAppLauncher`. Off macOS
+// there is no app, and the default agent is `alohajet-agent` — see `AgentHost`.
 
 /// Say, once, that an endpoint somewhere else is getting no credential.
 ///
@@ -46,6 +47,10 @@ enum AgentTurn {
             writeToStandardError("alohajet: -p needs a prompt, e.g. alohajet -p \"book me a table\"\n")
             return exitUsage
         }
+
+        #if !os(macOS)
+        if !args.has("--endpoint") { return AgentHost.turn(args, prompt: prompt) }
+        #endif
 
         let endpointURL: URL
         switch resolveEndpoint(args) {
@@ -202,9 +207,14 @@ enum AgentTurn {
     /// from the typo that caused it.
     private static func resolveEndpoint(_ args: Args) -> Result<URL, CLIError> {
         if args.has("--endpoint"), args.value("--endpoint") == nil {
+            #if os(macOS)
+            let withoutTheFlag = AlohaAppLauncher.defaultEndpoint
+            #else
+            let withoutTheFlag = AlohaJetAgent.executableName
+            #endif
             return .failure(CLIError(
                 message: "--endpoint expects an http(s) URL — got an empty one"
-                    + " (drop the flag to use \(AlohaAppLauncher.defaultEndpoint))",
+                    + " (drop the flag to use \(withoutTheFlag))",
                 code: exitUsage))
         }
         let raw = args.value("--endpoint") ?? AlohaAppLauncher.defaultEndpoint

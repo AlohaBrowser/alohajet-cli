@@ -29,10 +29,15 @@ struct MCPRelayLaneTests {
 
     /// The default case executes EXACTLY the already-saved args, with a listener we
     /// own on the legacy port. The other cases pin endpoint override and modern relay
-    /// parity. A marker executable catches even an attempted Chromium launch.
-    @Test("authenticated MCP frames relay without launching Chromium", arguments: [
-        "legacy-default", "legacy-explicit", "modern",
-    ])
+    /// parity. A marker executable catches even an attempted Chromium launch. Off macOS
+    /// the saved args are alohajet-agent's (AgentHandoffProcessTests), not a relay.
+    #if os(macOS)
+    static let savedEntries = ["legacy-default", "legacy-explicit", "modern"]
+    #else
+    static let savedEntries = ["legacy-explicit", "modern"]
+    #endif
+
+    @Test("authenticated MCP frames relay without launching Chromium", arguments: savedEntries)
     func savedEntriesRelayFramesWithoutLaunchingChromium(_ mode: String) throws {
         let sandbox = try RelaySandbox()
         defer { sandbox.remove() }
@@ -107,6 +112,7 @@ struct MCPRelayLaneTests {
         #expect(!chromiumWasLaunched)
     }
 
+    #if os(macOS)
     @Test func legacyHelpDocumentsTheDefaultAndCompatibilityScope() throws {
         for flag in ["--help", "-h"] {
             let run = try runCLI(["mcp-stdio", flag])
@@ -119,6 +125,7 @@ struct MCPRelayLaneTests {
         let usage = try runCLI(["--help"])
         #expect(usage.stdout.contains("mcp-stdio"))
     }
+    #endif
 
     // MARK: - The flag picks the lane
 

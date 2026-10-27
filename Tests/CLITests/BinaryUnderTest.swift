@@ -83,9 +83,10 @@ struct RunOutput {
 @discardableResult
 func runCLI(
     _ arguments: [String], stdin: String? = nil, terminal: String? = nil,
-    environment overlay: [String: String] = [:], timeout: TimeInterval = 30
+    environment overlay: [String: String] = [:], timeout: TimeInterval = 30,
+    binary: String? = alohajetBinary
 ) throws -> RunOutput {
-    let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
+    let binary = try #require(binary, "alohajet binary not found next to the test runner")
     let sandbox = FileManager.default.temporaryDirectory
         .appendingPathComponent("alohajet-cli-test-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
