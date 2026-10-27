@@ -14,11 +14,14 @@ import Darwin
 
 /// The `alohajet` binary this test run built.
 ///
-/// Found from `#filePath` — `<package>/Tests/CLITests/BinaryUnderTest.swift` — because
-/// `CommandLine.arguments[0]` inside a test bundle is the `xctest` host, not anything
-/// next to the product. `ALOHAJET_BIN` overrides it so a packaged binary can be smoke
-/// tested with the same suite. `nil` is the signal to skip: the binary is a product of
-/// the same build, so its absence means the harness changed shape, not that the CLI broke.
+/// SwiftPM writes every product of one build into one directory, wherever `--scratch-path`
+/// put it, so the binary is looked for beside the running test product first. Then at
+/// `<package>/.build/{debug,release}/alohajet`, from `#filePath`. `ALOHAJET_BIN`
+/// overrides both so a packaged binary can be smoke tested with the same suite.
+///
+/// `nil` FAILS every case that needs the binary rather than skipping it: the binary is a
+/// product of the same build, so its absence means the harness lost track of it, and a
+/// skip would report the whole CLI suite green without running any of it.
 let alohajetBinary: String? = {
     if let override = ProcessInfo.processInfo.environment["ALOHAJET_BIN"], !override.isEmpty {
         return isExecutableFile(override) ? override : nil
@@ -27,13 +30,27 @@ let alohajetBinary: String? = {
         .deletingLastPathComponent()   // Tests/CLITests
         .deletingLastPathComponent()   // Tests
         .deletingLastPathComponent()   // <package>
-    for configuration in ["debug", "release"] {
-        let candidate = packageRoot
-            .appendingPathComponent(".build/\(configuration)/alohajet").path
-        if isExecutableFile(candidate) { return candidate }
-    }
-    return nil
+    let candidates = [testProductsDirectory?.appendingPathComponent("alohajet")]
+        + ["debug", "release"].map { packageRoot.appendingPathComponent(".build/\($0)/alohajet") }
+    return candidates.compactMap { $0?.path }.first(where: isExecutableFile)
 }()
+
+/// The directory the running test product sits in.
+let testProductsDirectory: URL? = {
+    #if os(Linux)
+    guard let path = try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe")
+    else { return nil }
+    return URL(fileURLWithPath: path).deletingLastPathComponent()
+    #else
+    // The test product is a bundle loaded into an `xctest` host, so neither
+    // `CommandLine.arguments[0]` nor `Bundle.main` is anywhere near it.
+    return Bundle(for: TestProductMarker.self).bundleURL.deletingLastPathComponent()
+    #endif
+}()
+
+#if !os(Linux)
+private final class TestProductMarker {}
+#endif
 
 private func isExecutableFile(_ path: String) -> Bool {
     var isDirectory: ObjCBool = false
