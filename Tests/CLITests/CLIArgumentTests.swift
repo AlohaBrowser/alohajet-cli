@@ -235,7 +235,28 @@ struct CLIArgumentTests {
         #expect(run.stderr.contains("could not launch the Aloha browser"))
         #expect(run.stderr.contains("/nonexistent/NoSuch.app"))
     }
+
+    /// The app answers the Terms itself, so the flag would be dropped — refused before the
+    /// app is reached, which is why this is safe to run.
+    @Test func acceptTermsIsRefusedBeforeTheAppIsLaunched() throws {
+        let run = try runCLI(
+            ["-p", "hi", "--accept-terms"],
+            environment: ["ALOHA_BROWSER_APP": "/nonexistent/NoSuch.app"])
+        #expect(run.status == 2, "exited \(run.status): \(run.combined)")
+        #expect(run.stderr.contains("the agent at http://127.0.0.1:8765 asks for them itself"), "\(run.stderr)")
+        #expect(!run.stderr.contains("could not launch"), "\(run.stderr)")
+    }
 #endif
+
+    /// `--accept-terms` is forwarded to alohajet-agent and to nothing else; a turn sent to
+    /// an endpoint is answered by that host, so the flag is refused rather than dropped.
+    @Test func acceptTermsIsRefusedWithAnEndpoint() throws {
+        let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--accept-terms", "--json"])
+        #expect(run.status == 2, "exited \(run.status): \(run.combined)")
+        #expect(run.stdout.isEmpty)
+        #expect(run.stderr.contains("--accept-terms accepts the Terms of Service for alohajet-agent"), "\(run.stderr)")
+        #expect(run.stderr.contains("the agent at http://127.0.0.1:1 asks for them itself"), "\(run.stderr)")
+    }
 
     /// `--endpoint "$VAR"` with the variable unset has still NAMED a host; answering it
     /// with the local default would run the prompt against a browser nobody asked for.

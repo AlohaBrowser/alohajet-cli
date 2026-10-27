@@ -49,6 +49,11 @@ enum MCPRelay {
             return error.code
         }
 
+        if let refusal = refuseAcceptTerms(args, endpoint: endpoint) {
+            writeToStandardError("alohajet: \(refusal.message)\n")
+            return refusal.code
+        }
+
         noteEndpointWithoutToken(endpoint)
 
         // The server lane's rule holds here too: a host that closes the pipe must end

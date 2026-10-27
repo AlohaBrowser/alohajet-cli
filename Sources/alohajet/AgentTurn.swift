@@ -35,6 +35,17 @@ func noteEndpointWithoutToken(_ endpoint: URL) {
         """)
 }
 
+/// `--accept-terms` is forwarded to `alohajet-agent` and read by nothing else, so where
+/// nothing is handed to it the flag would be dropped — and an unattended run would then
+/// wait on, or decline, a question its caller believes was answered.
+func refuseAcceptTerms(_ args: Args, endpoint: URL) -> CLIError? {
+    guard args.has("--accept-terms") else { return nil }
+    return CLIError(message: """
+        --accept-terms accepts the Terms of Service for alohajet-agent, which this command \
+        does not run: the agent at \(endpoint.absoluteString) asks for them itself
+        """, code: exitUsage)
+}
+
 enum AgentTurn {
 
     /// Run one turn and return the process exit code. Mirrors the exit contract every
@@ -58,6 +69,11 @@ enum AgentTurn {
         case let .failure(error):
             writeToStandardError("alohajet: \(error.message)\n")
             return error.code
+        }
+
+        if let refusal = refuseAcceptTerms(args, endpoint: endpointURL) {
+            writeToStandardError("alohajet: \(refusal.message)\n")
+            return refusal.code
         }
 
         noteEndpointWithoutToken(endpointURL)
