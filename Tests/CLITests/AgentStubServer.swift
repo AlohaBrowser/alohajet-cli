@@ -102,7 +102,11 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     func stop() {
         let fd = listenFD
         listenFD = -1
-        if fd >= 0 { close(fd) }
+        guard fd >= 0 else { return }
+        // On Linux `close` does not wake the thread blocked in `accept`, and the socket
+        // stays listening behind it — holding a fixed port for the rest of the run.
+        shutdown(fd, Int32(SHUT_RDWR))
+        close(fd)
     }
 
     private func serve() {
