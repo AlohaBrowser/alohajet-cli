@@ -2,40 +2,24 @@
 import Foundation
 import Glibc
 
-// MARK: - On Linux, the agent host is `alohajet-agent`
-//
-// There is no Aloha app to launch and nothing serves its automation port, so `-p` and
-// `mcp-stdio` cannot reach an agent the way they do on macOS. The alohajet package's own
-// CLI, `alohajet-agent`, ships beside this binary and is that agent: `-p` runs the turn
-// in-process against a headless Chromium, and `mcp` serves the app's MCP server on stdio.
-// This process BECOMES it — exec, not spawn — so the agent's stdio, its exit status and
-// every signal sent to the pid the caller holds reach it with nothing in between.
+// This process BECOMES `alohajet-agent` — exec, not spawn — so the agent's stdio, its exit
+// status and every signal sent to the pid the caller holds reach it with nothing in between.
 
-/// The sibling `alohajet-agent`: what it is handed, where it is, and the handoff itself.
 public enum AlohaJetAgent {
-    /// Why the flags cannot be handed to the agent. The message is the whole of it, and
-    /// the caller owns the exit code.
     public struct FlagError: Error, Equatable {
         public let message: String
     }
 
-    /// Why there is no agent to hand off to.
     public struct HostError: Error, Equatable {
         public let message: String
     }
 
-    /// Replaces this process image with `path`, `argv[0]` included. Returns only when it
-    /// could not, with the `errno` that says why. Production is ``liveExec``.
+    /// Returns only when the exec failed, with its `errno`.
     public typealias Exec = @Sendable (_ path: String, _ argv: [String]) -> Int32
 
     public nonisolated static let executableName = "alohajet-agent"
     public nonisolated static let pathEnvKey = "ALOHAJET_AGENT_BIN"
 
-    /// `alohajet -p <prompt>` as `alohajet-agent -p <prompt>`.
-    ///
-    /// `headless` is the agent's default and is not forwarded. A conversation and a page
-    /// permission are the app's: the agent keeps neither, so a flag asking for one is
-    /// refused rather than dropped.
     public static func turnArguments(
         prompt: String, json: Bool = false, headless: Bool = false, noHeadless: Bool = false,
         acceptTerms: Bool = false, resume: Bool = false, continueLast: Bool = false,
@@ -55,7 +39,6 @@ public enum AlohaJetAgent {
             + (acceptTerms ? ["--accept-terms"] : []))
     }
 
-    /// `alohajet mcp-stdio` as `alohajet-agent mcp`.
     public static func mcpArguments(headless: Bool = false, noHeadless: Bool = false) -> Result<[String], FlagError> {
         if headless, noHeadless { return .failure(bothWindowModes) }
         return .success(["mcp"] + (noHeadless ? ["--no-headless"] : []))
@@ -70,9 +53,8 @@ public enum AlohaJetAgent {
             """)
     }
 
-    /// `ALOHAJET_AGENT_BIN` when it names one, else the `alohajet-agent` beside the file
-    /// `executable` resolves to — an install that links `alohajet` onto PATH keeps the
-    /// pair together somewhere else, and the agent beside the link is not this one's.
+    /// Beside the file `executable` resolves to, not beside a link to it: an install that
+    /// links `alohajet` onto PATH keeps the pair together somewhere else.
     public static func path(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         executable: String = "/proc/self/exe"
@@ -116,8 +98,6 @@ public enum AlohaJetAgent {
         return .success(sibling)
     }
 
-    /// Become the agent, handed `arguments`. On success this process image is gone, so the
-    /// only way out of this function is the error saying why it is still here.
     public static func handOff(
         _ arguments: [String],
         environment: [String: String] = ProcessInfo.processInfo.environment,

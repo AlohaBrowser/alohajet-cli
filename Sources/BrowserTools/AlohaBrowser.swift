@@ -30,7 +30,6 @@ public enum AlohaBrowserError: Error, Equatable, CustomStringConvertible {
     case launchFailed(String)
     /// Nothing answered `/json/version` at the port, launch or no launch.
     case notReachable(port: Int, seconds: Int)
-    /// There is no app to launch: it runs on macOS only.
     case macOSOnly
 
     public var description: String {

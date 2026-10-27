@@ -44,7 +44,6 @@ public enum AlohaAppLaunchError: Error, Equatable, CustomStringConvertible {
     /// The app is up but its automation server is not answering, and no launch can
     /// change that.
     case automationOff
-    /// There is no app to launch: it runs on macOS only.
     case macOSOnly
 
     public var description: String {

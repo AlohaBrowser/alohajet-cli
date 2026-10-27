@@ -3,14 +3,7 @@ import AgentDriver
 import Foundation
 import ToolABI
 
-// MARK: - `alohajet -p` / `mcp-stdio` with no `--endpoint`, on Linux
-//
-// The rules — what the agent is handed, which flags it cannot honour, where it is — are
-// `AlohaJetAgent`'s, in the library, where a test can reach them. This reads argv and
-// maps a refusal onto the usage exit code and a missing agent onto the unreachable one.
-
-/// The flags only the agent handoff reads: `--grant-permissions` takes a value, and the
-/// parser must know that before a stray `camera` becomes a command.
+/// Unlisted, `camera` in `--grant-permissions camera` would parse as the command.
 let agentHostValueFlags: Set<String> = ["--grant-permissions"]
 
 enum AgentHost {
@@ -32,9 +25,6 @@ enum AgentHost {
             headless: args.has("--headless"), noHeadless: args.has("--no-headless")))
     }
 
-    /// What `--endpoint` cannot carry. The agent there keeps its own window, and the
-    /// protocol-2 client sends no page permissions, so a flag asking for either would be
-    /// dropped and the turn would run as though it had been honoured.
     static func refuseOverEndpoint(_ args: Args, endpoint: URL) -> CLIError? {
         if args.has("--no-headless") {
             return CLIError(

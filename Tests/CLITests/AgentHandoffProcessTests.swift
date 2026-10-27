@@ -2,11 +2,9 @@
 import Foundation
 import Testing
 
-// On Linux there is no Aloha app: the agent host is `alohajet-agent`, and `-p` and
-// `mcp-stdio` without `--endpoint` replace this process with it. Every case runs the real
-// binary against a stand-in agent that records what it was handed, so what is pinned is
-// what a user's shell and a user's MCP host actually see: argv, stdin, the streams, the
-// exit status and the signal state the agent starts with.
+// Every case runs the real binary against a stand-in agent that records what it was handed,
+// so what is pinned is what a user's shell and a user's MCP host actually see: argv, stdin,
+// the streams, the exit status and the signal state the agent starts with.
 
 @Suite("handing -p and mcp-stdio to alohajet-agent", .serialized)
 struct AgentHandoffProcessTests {
@@ -108,9 +106,6 @@ struct AgentHandoffProcessTests {
 
     // MARK: - Which alohajet-agent
 
-    /// An install puts a symlink on PATH and the two binaries side by side somewhere
-    /// else. The sibling is looked for beside the binary the link resolves to, never
-    /// beside the link.
     @Test("without ALOHAJET_AGENT_BIN the agent is the one beside the CLI's resolved path")
     func siblingOfTheResolvedExecutable() throws {
         let sandbox = try Sandbox()
@@ -275,10 +270,8 @@ struct AgentHandoffProcessTests {
     }
 }
 
-/// A stand-in `alohajet-agent`: records its argv (NUL-separated), stdin, signal state and
-/// one environment variable into the directory it lives in, prints one line on each
-/// stream and exits `$FAKE_AGENT_EXIT`. The record is read through builtins only, so no
-/// child's wait can change the mask being read.
+/// The signal state is read through builtins only: a child's wait would change the mask
+/// being read.
 private struct FakeAgent {
     let directory: URL
     private let ownsDirectory: Bool
@@ -336,8 +329,6 @@ private struct FakeAgent {
     }
 }
 
-/// A scratch tree for the cases that need the CLI somewhere other than the build: a copy
-/// of the binary under test, alone or with a stand-in agent beside it.
 private struct Sandbox {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("alohajet-handoff-\(UUID().uuidString)")

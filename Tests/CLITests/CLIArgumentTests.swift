@@ -248,8 +248,6 @@ struct CLIArgumentTests {
     }
 #endif
 
-    /// `--accept-terms` is forwarded to alohajet-agent and to nothing else; a turn sent to
-    /// an endpoint is answered by that host, so the flag is refused rather than dropped.
     @Test func acceptTermsIsRefusedWithAnEndpoint() throws {
         let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--accept-terms", "--json"])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")

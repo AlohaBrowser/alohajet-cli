@@ -139,8 +139,6 @@ struct MCPRelayLaneTests {
     private static let acceptTermsRefusal =
         "alohajet: an MCP session runs no turn and asks for no Terms of Service: drop --accept-terms\n"
 
-    /// The app's MCP server gates no Terms, and a relay hands nothing to alohajet-agent:
-    /// dropping the flag would leave a host believing the Terms were accepted for it.
     @Test("--accept-terms on a relay is refused rather than dropped", arguments: ["mcp", "mcp-stdio"])
     func acceptTermsIsRefusedOnARelay(_ command: String) throws {
         let run = try runCLI([command, "--endpoint", "http://127.0.0.1:1", "--accept-terms"],
