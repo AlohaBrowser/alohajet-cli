@@ -15,9 +15,11 @@ is refused at argument-parse time with exit 2, before the prompt leaves the mach
 
 **Auth.** Every route is expected to be bearer-token gated. The token is read *per request*
 (so rotation needs no restart): `ALOHAJET_AGENT_TOKEN` if set, otherwise
-`~/Library/Application Support/Aloha/automation-token` — and that ambient file is sent to a
-**loopback endpoint only**. A non-loopback endpoint gets a credential from the environment
-variable or not at all, and `alohajet` says so on stderr. With no token there is no
+`~/Library/Application Support/Aloha/automation-token` on macOS and
+`~/.local/share/Aloha/automation-token` on Linux (`$XDG_DATA_HOME/Aloha/automation-token`
+when that is set) — and that ambient file is sent to a **loopback endpoint only**. A
+non-loopback endpoint gets a credential from the environment variable or not at all, and
+`alohajet` says so on stderr. With no token there is no
 `Authorization` header and no unauthenticated retry: answer `401` and the user sees it.
 
 **Content-Type.** `application/json` is sent on `POST /agent/run` and `POST /agent/terms`

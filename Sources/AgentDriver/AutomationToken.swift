@@ -35,8 +35,9 @@ public nonisolated enum AutomationToken {
     /// else is still reachable.
     public static let environmentVariable = "ALOHAJET_AGENT_TOKEN"
 
-    /// `~/Library/Application Support/Aloha/automation-token` — where the Aloha
-    /// browser's automation server provisions the shared secret.
+    /// `<Application Support>/Aloha/automation-token` — where the Aloha browser's
+    /// automation server provisions the shared secret. `~/Library/Application Support` on
+    /// macOS; on Linux corelibs answers `$XDG_DATA_HOME`, else `~/.local/share`.
     public static var defaultURL: URL {
         let base =
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first

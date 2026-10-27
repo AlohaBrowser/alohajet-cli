@@ -51,7 +51,7 @@ of those is expanded, with the reproduction, under [Limitations](#limitations).
 |---|---|
 | Swift | 6.2 or newer |
 | OS | macOS 14+. Everything on this page was run on macOS 26.2 (arm64), Swift 6.2.3, Google Chrome 152.0.7977.77. |
-| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. The release tarball needs `libcurl.so.4` — present wherever `curl` is, and `apt-get install -y libcurl4` on a minimal image. Building from source also needs zlib's headers, `apt-get install -y zlib1g-dev`, which the `swift` Docker images already carry. |
+| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS, except the Linux notes under [Limitations](#limitations). The release tarball needs `libcurl.so.4` — present wherever `curl` is, and `apt-get install -y libcurl4` on a minimal image. Building from source also needs zlib's headers, `apt-get install -y zlib1g-dev`, which the `swift` Docker images already carry. |
 | Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 191 MB Chrome for Testing is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
 | Python 3 | only to serve the fixture pages in [The proof](#the-proof). |
 | Dependencies | none in the four library products (`BrowserTools`, `AgentDriver`, `CDP`, `ToolABI`) — Foundation and the system zlib only, no vendored tree. zlib is the SDK's module on Apple platforms and, on Linux, a system-library module over the distribution's libz: neither is a package anything resolves or fetches. One in the `alohajet` executable: the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) (`from: "0.12.1"`), which `mcp --endpoint` relays over and nothing else uses. A consumer linking the libraries resolves it and compiles none of it. |
@@ -93,10 +93,13 @@ gh attestation verify alohajet-macos-universal.tar.gz --repo AlohaBrowser/alohaj
 The attestation is a Sigstore build-provenance statement binding each asset — and
 `SHA256SUMS` itself — to the workflow, repository and commit that produced it.
 
-To remove it: `rm ~/.local/bin/alohajet`, then `rm -rf "$TMPDIR/alohajet-$(id -u)"` and
-`rm -rf ~/Library/Application Support/AlohaJet` — the latter only exists if it downloaded a
-Chrome, and it is the 191 MB one. The throwaway `$TMPDIR/alohajet-cdp-<uuid>` profiles and
-`alohajet-chrome-stderr-*.log` files reap themselves (`reapStaleProfiles` in
+To remove it: `rm ~/.local/bin/alohajet`, then `rm -rf "${TMPDIR:-/tmp}/alohajet-$(id -u)"`
+and the downloaded Chrome — `rm -rf ~/"Library/Application Support/AlohaJet"` on macOS,
+`rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/AlohaJet"` on Linux. That one only exists if
+it downloaded a Chrome, and it is the 191 MB one. On Linux a run under a TMPDIR too long for
+Chrome's socket also leaves `/tmp/alohajet-$(id -u)` ([Limitations](#limitations)). The
+throwaway `$TMPDIR/alohajet-cdp-<uuid>` profiles and `alohajet-chrome-stderr-*.log` files
+reap themselves (`reapStaleProfiles` in
 `Sources/CDP/CDP.swift`): a profile once the owning pid is provably gone, a log once it is
 a day old.
 
@@ -518,7 +521,7 @@ Every variable the sources actually read, checked with
 
 | variable | default | effect |
 |---|---|---|
-| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. A path that is not an executable file is an error (exit 3), never a quiet fall-through to another browser. Unset and with no system Chrome, **Chrome for Testing 153.0.8010.52 is downloaded on first use** — a 191 MB zip on mac-arm64, 196 MB on linux64, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing`. There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
+| `ALOHAJET_BROWSER` | a system Chrome | path to the Chromium executable the default and `--launch` lanes run. A path that is not an executable file is an error (exit 3), never a quiet fall-through to another browser. Unset and with no system Chrome, **Chrome for Testing 153.0.8010.52 is downloaded on first use** — a 191 MB zip on mac-arm64, 196 MB on linux64, unpacked into `~/Library/Application Support/AlohaJet/chrome-for-testing` on macOS and `~/.local/share/AlohaJet/chrome-for-testing` on Linux (`$XDG_DATA_HOME/AlohaJet/chrome-for-testing` when that is set). There is no pre-warm command and nothing cleans it up; `rm -rf` that directory. |
 | `ALOHAJET_NETWORK_LOG` | off | a directory (or `1` for a temp dir) to record each agent-opened tab's requests as JSONL, `0600` in a `0700` directory. Read the limitation below before trusting it. |
 | `ALOHAJET_CREDENTIAL_GUARD` | off | `1` makes `page_type` refuse to type into a field it classifies as a credential field. Password-field *masking on read* is always on and is not controlled by this. |
 | `ALOHAJET_MARKDOWN_URLS` | off | `1` includes each link's `href`: `[Learn more](https://iana.org/domains/example) {aloha-id="719a97a0" a}` |
@@ -529,16 +532,37 @@ Every variable the sources actually read, checked with
 | `ALOHAJET_DEBUG` | off | protocol chatter to stderr |
 | `ALOHA_CDP_PORT` | `9222` | where `--browser aloha` looks for the Aloha browser's CDP listener |
 | `ALOHA_BROWSER_APP` | the `.app` this binary ships inside | path to the Aloha `.app` that `--browser aloha` launches. Unset, the lane launches the bundle this executable sits in — never another registered copy, which would be a second instance on one profile. |
-| `ALOHAJET_AGENT_TOKEN` | read from disk | the bearer token `-p` sends to `--endpoint`. Unset, it is read from `~/Library/Application Support/Aloha/automation-token` — but that ambient file is sent to a loopback endpoint ONLY, so a remote `https` endpoint is reachable and gets a token only from this variable. Absent entirely, no `Authorization` header is sent and the endpoint answers 401 — never a silent unauthenticated retry. |
+| `ALOHAJET_AGENT_TOKEN` | read from disk | the bearer token `-p` sends to `--endpoint`. Unset, it is read from `~/Library/Application Support/Aloha/automation-token` on macOS, `~/.local/share/Aloha/automation-token` on Linux (`$XDG_DATA_HOME/Aloha/automation-token` when that is set) — but that ambient file is sent to a loopback endpoint ONLY, so a remote `https` endpoint is reachable and gets a token only from this variable. Absent entirely, no `Authorization` header is sent and the endpoint answers 401 — never a silent unauthenticated retry. |
 
 ## Limitations
 
 Not a disclaimer. These are the things that will cost you a round trip, and each one was
 reproduced on this machine before it was written down.
 
-**Linux is built and tested, but nothing on this page was measured there.** Every number,
+**Linux is built and tested, but little on this page was measured there.** Every number,
 every transcript and the ref-stability proof were produced on macOS. The Linux job builds
-and runs the suite; it does not re-run the proof.
+and runs the suite; it does not re-run the proof. What was measured on Linux (Ubuntu 26.04,
+Google Chrome 156):
+
+- A launched Chromium is headless unless `--no-headless` says otherwise, and headless
+  needs no display. `--no-headless` does: with no X server or Wayland session to reach it
+  exits 3, quoting the browser's `Missing X server or $DISPLAY`.
+- A run that must not reach the desktop needs more than an unset `DISPLAY` and
+  `WAYLAND_DISPLAY`: a `--no-headless` Chrome still finds the Wayland socket under
+  `$XDG_RUNTIME_DIR` and opens its window on the user's screen. Cut every route:
+
+  ```sh
+  env -u DISPLAY -u WAYLAND_DISPLAY -u XDG_SESSION_TYPE -u XAUTHORITY \
+      XDG_RUNTIME_DIR="$(mktemp -d)" alohajet open https://example.com
+  ```
+
+- Chrome binds its process-singleton socket under `$TMPDIR`, and a socket path past
+  `sun_path` kills it before it serves CDP. When the inherited TMPDIR is longer than 62
+  bytes, the launched browser is given `/tmp/alohajet-<uid>` (created 0700) as its TMPDIR
+  instead; alohajet's own state and the throwaway profile stay in yours.
+- Per-user files follow the XDG data directory, not `~/Library/Application Support`: the
+  Chrome for Testing cache is `~/.local/share/AlohaJet/chrome-for-testing` and the agent
+  token `~/.local/share/Aloha/automation-token`, under `$XDG_DATA_HOME` when it is set.
 
 **`close` refuses tabs it did not open.** A tab that was already there when alohajet
 attached is the user's; `close` says so and exits non-zero. Tabs alohajet opened close
