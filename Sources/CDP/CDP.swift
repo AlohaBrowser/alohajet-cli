@@ -607,6 +607,11 @@ public struct ChromeLauncher: Sendable {
         #endif
     }()
 
+    /// The macOS app's own headless window. Chrome's headless default is an 800x600 screen,
+    /// which sites answer with their narrow layout. `--window-size` alone leaves the screen at
+    /// 800x600, smaller than the window on it, so `--screen-info` sizes the screen to match.
+    static let headlessWindowSize = (width: 1440, height: 900)
+
     public let executablePath: String
 
     public init(executablePath: String = ChromeLauncher.defaultExecutablePath) {
@@ -914,7 +919,12 @@ public struct ChromeLauncher: Sendable {
         process.executableURL = URL(fileURLWithPath: executablePath)
         var arguments: [String] = []
         if headless {
-            arguments.append("--headless=new")
+            let (width, height) = Self.headlessWindowSize
+            arguments.append(contentsOf: [
+                "--headless=new",
+                "--window-size=\(width),\(height)",
+                "--screen-info={\(width)x\(height)}",
+            ])
         }
         arguments.append(contentsOf: [
             "--remote-debugging-port=\(port)",
