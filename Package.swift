@@ -105,3 +105,25 @@ for target in package.targets where !nonMainActorTargets.contains(target.name) {
     settings.append(.defaultIsolation(MainActor.self))
     target.swiftSettings = settings
 }
+
+// MARK: - zlib on Linux
+//
+// Apple SDKs ship a `zlib` module and Linux has none, so `NetworkRecorder`'s gunzip, behind
+// `canImport(zlib)`, was compiled out there: every gzip body `ALOHAJET_NETWORK_LOG` recorded
+// stayed an opaque `base64:` blob. This vends the system libz under the SDK's module name,
+// on Linux only, so the same `import zlib` resolves and Apple builds keep the SDK module.
+// A system library is not a package dependency — nothing is resolved or fetched. Building
+// needs zlib's headers (`zlib1g-dev`, already in the `swift` images CI and release build
+// in); the binary needs libz.so.1, which FoundationNetworking's libcurl loads anyway.
+// Appended after the isolation loop, which must not give a C module Swift settings.
+#if os(Linux)
+package.targets.append(
+    .systemLibrary(
+        name: "zlib",
+        path: "Sources/CZlib",
+        pkgConfig: "zlib",
+        providers: [.apt(["zlib1g-dev"])]))
+for target in package.targets where ["BrowserTools", "BrowserToolsTests"].contains(target.name) {
+    target.dependencies.append("zlib")
+}
+#endif

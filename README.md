@@ -51,10 +51,10 @@ of those is expanded, with the reproduction, under [Limitations](#limitations).
 |---|---|
 | Swift | 6.2 or newer |
 | OS | macOS 14+. Everything on this page was run on macOS 26.2 (arm64), Swift 6.2.3, Google Chrome 152.0.7977.77. |
-| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. The release tarball needs `libcurl.so.4` — present wherever `curl` is, and `apt-get install -y libcurl4` on a minimal image. |
+| Linux | builds and tests in CI (Ubuntu 24.04, Swift 6.2.3); every measurement on this page is from macOS. The release tarball needs `libcurl.so.4` — present wherever `curl` is, and `apt-get install -y libcurl4` on a minimal image. Building from source also needs zlib's headers, `apt-get install -y zlib1g-dev`, which the `swift` Docker images already carry. |
 | Browser | Google Chrome or Chromium — no minimum version is checked or established; everything here was run against 152.0.7977.77. With none installed, a 191 MB Chrome for Testing is downloaded on first use ([Configuration](#configuration)). `--cdp` takes any CDP endpoint; `--browser aloha` takes the Aloha browser. |
 | Python 3 | only to serve the fixture pages in [The proof](#the-proof). |
-| Dependencies | none in the four library products (`BrowserTools`, `AgentDriver`, `CDP`, `ToolABI`) — Foundation only, no vendored tree. One in the `alohajet` executable: the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) (`from: "0.12.1"`), which `mcp --endpoint` relays over and nothing else uses. A consumer linking the libraries resolves it and compiles none of it. |
+| Dependencies | none in the four library products (`BrowserTools`, `AgentDriver`, `CDP`, `ToolABI`) — Foundation and the system zlib only, no vendored tree. zlib is the SDK's module on Apple platforms and, on Linux, a system-library module over the distribution's libz: neither is a package anything resolves or fetches. One in the `alohajet` executable: the official [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) (`from: "0.12.1"`), which `mcp --endpoint` relays over and nothing else uses. A consumer linking the libraries resolves it and compiles none of it. |
 
 ## Install
 

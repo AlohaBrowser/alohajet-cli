@@ -80,6 +80,19 @@ private func waitFor(attempts: Int = 400, _ condition: @escaping () async -> Boo
     }
 }
 
+// MARK: - decodeBase64Body (a gzip body as the wire delivers it)
+
+// Deliberately outside `canImport(zlib)`: a build without it records every compressed
+// response as an opaque `base64:` blob, and that is the failure this pins.
+@Suite("decodeBase64Body gzip off the wire")
+struct DecodeBase64BodyWireGzipTests {
+    @Test func aGzippedBodyIsRecordedAsItsText() {
+        // Python's `gzip.compress(b'{"status":"ok","items":[1,2,3]}', mtime=0)`, in base64.
+        let wire = "H4sIAAAAAAAC/6tWKi5JLCktVrJSys9W0lHKLEnNBXKiDXWMdIxjawEvkFKAHwAAAA=="
+        #expect(decodeBase64Body(wire) == #"{"status":"ok","items":[1,2,3]}"#)
+    }
+}
+
 // MARK: - decodeBase64Body (successful gunzip round trip)
 
 #if canImport(zlib)
