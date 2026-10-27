@@ -881,6 +881,13 @@ public struct ChromeLauncher: Sendable {
             throw CDPError.discoveryFailed("remote-debugging port \(port) is out of range (1-65535)")
         }
 
+        let process = Process()
+        #if os(Linux)
+        if let environment = try Self.browserEnvironment(inheriting: ProcessInfo.processInfo.environment) {
+            process.environment = environment
+        }
+        #endif
+
         let ownsUserDataDir = providedDir == nil
         let userDataDir: URL
         if let providedDir {
@@ -904,7 +911,6 @@ public struct ChromeLauncher: Sendable {
                 .write(to: userDataDir.appendingPathComponent(Self.ownerPidFileName))
         }
 
-        let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         var arguments: [String] = []
         if headless {
