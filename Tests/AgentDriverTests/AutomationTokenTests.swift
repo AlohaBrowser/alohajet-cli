@@ -12,15 +12,21 @@ import Foundation
 // `ALOHAJET_AGENT_TOKEN`, which someone had to set on purpose.
 
 @Suite("AutomationToken confinement")
-struct AutomationTokenTests {
+final class AutomationTokenTests {
+
+    /// Swift Testing makes one instance per test (and per argument), so this directory is
+    /// one test's alone, and `deinit` is that test's teardown.
+    private let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("alohajet-token-\(UUID().uuidString)")
+
+    deinit { try? FileManager.default.removeItem(at: directory) }
 
     /// A token file no test may share, written 0600 like the real one.
     private func tokenFile(_ contents: String) throws -> URL {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alohajet-token-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appendingPathComponent("automation-token")
-        try Data(contents.utf8).write(to: url)
+        try #require(FileManager.default.createFile(
+            atPath: url.path, contents: Data(contents.utf8), attributes: [.posixPermissions: 0o600]))
         return url
     }
 
