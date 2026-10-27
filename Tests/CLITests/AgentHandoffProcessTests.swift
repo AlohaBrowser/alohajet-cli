@@ -206,17 +206,39 @@ struct AgentHandoffProcessTests {
 
     // MARK: - An explicit --endpoint is a host somewhere else
 
-    @Test("-p with --endpoint drives that host, and hands nothing off")
-    func promptWithAnEndpointIsDriven() throws {
+    @Test("-p with --endpoint drives that host, and hands nothing off", arguments: [
+        [], ["--headless"], ["--grant-permissions", "none"],
+    ])
+    func promptWithAnEndpointIsDriven(_ extra: [String]) throws {
         let agent = try FakeAgent()
         defer { agent.remove() }
         var environment = agent.environment
         environment["ALOHAJET_AGENT_TOKEN"] = "test-token"
-        let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--json"],
+        let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--json"] + extra,
                              environment: environment, timeout: 60)
         #expect(run.status == 1, "\(run.combined)")
         #expect(run.stdout.contains("transport error"), "\(run.stdout)")
         #expect(agent.argv == nil, "the turn was handed to alohajet-agent")
+    }
+
+    @Test("-p with --endpoint refuses the flags only alohajet-agent reads", arguments: [
+        (["--no-headless"], "the agent at http://127.0.0.1:1 decides its own window: drop --no-headless"),
+        (["--grant-permissions", "camera"],
+         "-p sends no page permissions to the agent at http://127.0.0.1:1: drop --grant-permissions camera"),
+        (["--grant-permissions="],
+         "-p sends no page permissions to the agent at http://127.0.0.1:1: drop --grant-permissions \"\""),
+    ])
+    func agentOnlyFlagsAreRefusedWithAnEndpoint(_ extra: [String], _ message: String) throws {
+        let agent = try FakeAgent()
+        defer { agent.remove() }
+        var environment = agent.environment
+        environment["ALOHAJET_AGENT_TOKEN"] = "test-token"
+        let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--json"] + extra,
+                             environment: environment)
+        #expect(run.status == 2, "\(run.combined)")
+        #expect(run.stdout.isEmpty)
+        #expect(run.stderr == "alohajet: \(message)\n", "\(run.stderr)")
+        #expect(agent.argv == nil)
     }
 
     @Test("mcp-stdio with --endpoint relays, and hands nothing off")

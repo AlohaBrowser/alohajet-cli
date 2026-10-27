@@ -1,5 +1,6 @@
 #if os(Linux)
 import AgentDriver
+import Foundation
 import ToolABI
 
 // MARK: - `alohajet -p` / `mcp-stdio` with no `--endpoint`, on Linux
@@ -29,6 +30,25 @@ enum AgentHost {
         }
         return handOff(AlohaJetAgent.mcpArguments(
             headless: args.has("--headless"), noHeadless: args.has("--no-headless")))
+    }
+
+    /// What `--endpoint` cannot carry. The agent there keeps its own window, and the
+    /// protocol-2 client sends no page permissions, so a flag asking for either would be
+    /// dropped and the turn would run as though it had been honoured.
+    static func refuseOverEndpoint(_ args: Args, endpoint: URL) -> CLIError? {
+        if args.has("--no-headless") {
+            return CLIError(
+                message: "the agent at \(endpoint.absoluteString) decides its own window: drop --no-headless",
+                code: exitUsage)
+        }
+        if let permissions = args.flags["--grant-permissions"], permissions != "none" {
+            let shown = permissions.isEmpty ? "\"\"" : permissions
+            return CLIError(message: """
+                -p sends no page permissions to the agent at \(endpoint.absoluteString): \
+                drop --grant-permissions \(shown)
+                """, code: exitUsage)
+        }
+        return nil
     }
 
     private static func handOff(_ arguments: Result<[String], AlohaJetAgent.FlagError>) -> Int32 {

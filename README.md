@@ -339,7 +339,10 @@ unchanged.
 `--endpoint` still names an agent server, as on macOS — a port forward to a Mac running
 the app, say: `-p --endpoint <url>` speaks [docs/agent-endpoint.md](docs/agent-endpoint.md)
 and `mcp-stdio --endpoint <url>` relays, and neither launches anything. `/usr/bin/open` is
-`xdg-open` there, and nothing runs it.
+`xdg-open` there, and nothing runs it. The flags only `alohajet-agent` reads are refused
+with `-p --endpoint` (exit 2) rather than dropped: `--no-headless`, because that server
+keeps its own window, and a `--grant-permissions` other than `none`, because the client
+sends it no page permissions.
 
 ## The two browser lanes
 

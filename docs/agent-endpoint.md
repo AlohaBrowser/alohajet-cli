@@ -7,7 +7,9 @@ automation server; `--endpoint <url>` names any other.
 **On Linux** there is no Aloha app, and so no default server. Without `--endpoint`, `-p`
 speaks none of what follows: it becomes `alohajet-agent`, which runs the turn itself
 ([README](../README.md#on-linux--p-and-mcp-stdio-are-alohajet-agent)). With `--endpoint`
-everything below holds unchanged, and nothing is launched for it.
+everything below holds unchanged, and nothing is launched for it. The flags that only
+`alohajet-agent` reads are refused (exit 2) rather than dropped: `--accept-terms`,
+`--no-headless`, and a `--grant-permissions` other than `none`.
 
 ## Ground rules
 

@@ -75,6 +75,12 @@ enum AgentTurn {
             writeToStandardError("alohajet: \(refusal.message)\n")
             return refusal.code
         }
+        #if os(Linux)
+        if let refusal = AgentHost.refuseOverEndpoint(args, endpoint: endpointURL) {
+            writeToStandardError("alohajet: \(refusal.message)\n")
+            return refusal.code
+        }
+        #endif
 
         noteEndpointWithoutToken(endpointURL)
 
