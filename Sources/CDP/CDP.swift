@@ -680,7 +680,8 @@ public struct ChromeLauncher: Sendable {
             return text.isEmpty ? nil : text
         }
 
-        /// Terminate the process and clean up the temporary profile. The exit is
+        /// Terminate the process and clean up the temporary profile, and the singleton socket
+        /// directory a browser stopped by a signal leaves in its TMPDIR. The exit is
         /// reaped with a bounded escalation (SIGTERM, then SIGINT, then — for our
         /// own launched child only — SIGKILL) so a browser that ignores the gentler
         /// signals cannot wedge the caller on an unbounded `waitUntilExit()`; that
@@ -718,6 +719,12 @@ public struct ChromeLauncher: Sendable {
             // from the signal reaper without risk: that handler runs on a Dispatch queue
             // while the process is leaving, and a teardown path that can block forever is
             // the defect, not the safety net.
+            #if os(macOS) || os(Linux)
+            if !process.isRunning {
+                ChromeLauncher.removeSingletonSocketDirectory(
+                    ofProfile: userDataDir, lockedBy: process.processIdentifier)
+            }
+            #endif
             // Only remove a throwaway temp profile we created — never a user's real
             // Chrome profile, which we merely borrowed.
             if ownsUserDataDir {
@@ -811,7 +818,11 @@ public struct ChromeLauncher: Sendable {
                   let owner = Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
                   kill(owner, 0) != 0, errno == ESRCH
             else { continue }
-            for pid in pidsHolding(profile: dir.path) { _ = kill(pid, SIGKILL) }
+            let holders = pidsHolding(profile: dir.path)
+            for pid in holders { _ = kill(pid, SIGKILL) }
+            #if os(macOS) || os(Linux)
+            for pid in holders { removeSingletonSocketDirectory(ofProfile: dir, lockedBy: pid) }
+            #endif
             try? manager.removeItem(at: dir)
         }
         // The stderr log is a SIBLING of the profile, not a file inside it, and its

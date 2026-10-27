@@ -48,6 +48,44 @@ private func deadPid() -> Int32 {
     #expect(!FileManager.default.fileExists(atPath: dir.path))
 }
 
+/// The browser a dead run left holding its profile is SIGKILLed, so it never removes the
+/// `<product>.XXXXXX` directory its singleton socket is in. The stand-in names the profile on its
+/// command line, which is how the reaper finds a browser, and blocks on a pipe nobody writes.
+@Test @MainActor func reapsTheSingletonDirectoryOfTheBrowserItKills() throws {
+    let root = try makeReaperRoot()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let dir = try makeProfile(in: root, owner: "\(deadPid())\n")
+    let holder = Process()
+    holder.executableURL = URL(fileURLWithPath: "/bin/sh")
+    holder.arguments = ["-c", "read line", "browser", "--user-data-dir=\(dir.path)"]
+    let stdin = Pipe()
+    holder.standardInput = stdin
+    try holder.run()
+    defer {
+        if holder.isRunning { kill(holder.processIdentifier, SIGKILL) }
+        try? stdin.fileHandleForWriting.close()
+    }
+
+    let singleton = root.appendingPathComponent("com.google.Chrome.AbC123", isDirectory: true)
+    let manager = FileManager.default
+    try manager.createDirectory(at: singleton, withIntermediateDirectories: true)
+    try Data().write(to: singleton.appendingPathComponent("SingletonSocket"))
+    try manager.createSymbolicLink(
+        atPath: dir.appendingPathComponent("SingletonLock").path,
+        withDestinationPath: "host-\(holder.processIdentifier)")
+    try manager.createSymbolicLink(
+        atPath: dir.appendingPathComponent("SingletonSocket").path,
+        withDestinationPath: singleton.appendingPathComponent("SingletonSocket").path)
+
+    ChromeLauncher.reapStaleProfiles(in: root)
+
+    #expect(!manager.fileExists(atPath: dir.path))
+    #expect(!manager.fileExists(atPath: singleton.path))
+    let deadline = Date().addingTimeInterval(5)
+    while holder.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+    #expect(!holder.isRunning, "control: the reaper killed the stand-in")
+}
+
 @Test @MainActor func keepsAProfileWhoseOwningRunIsStillAlive() throws {
     let root = try makeReaperRoot()
     defer { try? FileManager.default.removeItem(at: root) }

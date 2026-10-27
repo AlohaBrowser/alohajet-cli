@@ -26,9 +26,18 @@ struct LongTemporaryDirectoryTests {
         defer { try? FileManager.default.removeItem(at: long) }
         #expect(long.path.utf8.count > 80)
 
+        let fallback = "/tmp/alohajet-\(getuid())"
+        let before = singletonDirectories(in: fallback)
         let run = try runCLI(["--launch", "tabs"], environment: ["TMPDIR": long.path], timeout: 60)
         #expect(run.status == 0, "exited \(run.status): \(run.combined)")
         #expect(run.stdout.contains("tab(s) open"), "\(run.combined)")
+        #expect(singletonDirectories(in: fallback).subtracting(before).isEmpty,
+                "the browser left its singleton socket directory in \(fallback)")
+    }
+
+    private func singletonDirectories(in path: String) -> Set<String> {
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+        return Set(entries.filter { $0.hasPrefix("com.google.Chrome.") || $0.hasPrefix("org.chromium.Chromium.") })
     }
 }
 #endif
