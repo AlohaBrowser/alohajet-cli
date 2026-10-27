@@ -1,8 +1,8 @@
-#if !os(macOS)
+#if os(Linux)
 import Foundation
 import Glibc
 
-// MARK: - Off macOS, the agent host is `alohajet-agent`
+// MARK: - On Linux, the agent host is `alohajet-agent`
 //
 // There is no Aloha app to launch and nothing serves its automation port, so `-p` and
 // `mcp-stdio` cannot reach an agent the way they do on macOS. The alohajet package's own

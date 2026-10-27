@@ -29,12 +29,12 @@ struct MCPRelayLaneTests {
 
     /// The default case executes EXACTLY the already-saved args, with a listener we
     /// own on the legacy port. The other cases pin endpoint override and modern relay
-    /// parity. A marker executable catches even an attempted Chromium launch. Off macOS
+    /// parity. A marker executable catches even an attempted Chromium launch. On Linux
     /// the saved args are alohajet-agent's (AgentHandoffProcessTests), not a relay.
-    #if os(macOS)
-    static let savedEntries = ["legacy-default", "legacy-explicit", "modern"]
-    #else
+    #if os(Linux)
     static let savedEntries = ["legacy-explicit", "modern"]
+    #else
+    static let savedEntries = ["legacy-default", "legacy-explicit", "modern"]
     #endif
 
     @Test("authenticated MCP frames relay without launching Chromium", arguments: savedEntries)
@@ -125,8 +125,9 @@ struct MCPRelayLaneTests {
         let usage = try runCLI(["--help"])
         #expect(usage.stdout.contains("mcp-stdio"))
     }
+    #endif
 
-    @Test("mcp-stdio --accept-terms is refused: no alohajet-agent runs on macOS")
+    @Test("mcp-stdio --accept-terms is refused without an --endpoint too")
     func acceptTermsIsRefusedWithoutAnEndpoint() throws {
         let run = try runCLI(["mcp-stdio", "--accept-terms"], stdin: Self.toolsCall,
                              environment: Self.pinnedToken)
@@ -134,7 +135,6 @@ struct MCPRelayLaneTests {
         #expect(run.stdout.isEmpty)
         #expect(run.stderr == Self.acceptTermsRefusal, "\(run.stderr)")
     }
-    #endif
 
     private static let acceptTermsRefusal =
         "alohajet: an MCP session runs no turn and asks for no Terms of Service: drop --accept-terms\n"

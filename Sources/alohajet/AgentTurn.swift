@@ -16,7 +16,7 @@ import ToolABI
 // agent it reaches for by default is the one in the Aloha browser on this machine
 // (`--endpoint` names another), and since this binary ships INSIDE that app, a turn
 // that finds it not running launches it and waits — see `AlohaAppLauncher`. Off macOS
-// there is no app, and the default agent is `alohajet-agent` — see `AgentHost`.
+// there is no app, and on Linux the default agent is `alohajet-agent` — see `AgentHost`.
 
 /// Say, once, that an endpoint somewhere else is getting no credential.
 ///
@@ -59,7 +59,7 @@ enum AgentTurn {
             return exitUsage
         }
 
-        #if !os(macOS)
+        #if os(Linux)
         if !args.has("--endpoint") { return AgentHost.turn(args, prompt: prompt) }
         #endif
 
@@ -223,10 +223,10 @@ enum AgentTurn {
     /// from the typo that caused it.
     private static func resolveEndpoint(_ args: Args) -> Result<URL, CLIError> {
         if args.has("--endpoint"), args.value("--endpoint") == nil {
-            #if os(macOS)
-            let withoutTheFlag = AlohaAppLauncher.defaultEndpoint
-            #else
+            #if os(Linux)
             let withoutTheFlag = AlohaJetAgent.executableName
+            #else
+            let withoutTheFlag = AlohaAppLauncher.defaultEndpoint
             #endif
             return .failure(CLIError(
                 message: "--endpoint expects an http(s) URL — got an empty one"

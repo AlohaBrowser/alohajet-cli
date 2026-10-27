@@ -1,8 +1,8 @@
-#if !os(macOS)
+#if os(Linux)
 import AgentDriver
 import ToolABI
 
-// MARK: - `alohajet -p` / `mcp-stdio` with no `--endpoint`, off macOS
+// MARK: - `alohajet -p` / `mcp-stdio` with no `--endpoint`, on Linux
 //
 // The rules — what the agent is handed, which flags it cannot honour, where it is — are
 // `AlohaJetAgent`'s, in the library, where a test can reach them. This reads argv and

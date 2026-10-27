@@ -36,7 +36,7 @@ let valueFlags = Set([
     "--cdp", "--port", "--tab", "--text", "--index", "--timeout-ms", "--max-chars", "--browser",
     "-p", "--endpoint", "--resume"
 ])
-#if !os(macOS)
+#if os(Linux)
 .union(agentHostValueFlags)
 #endif
 
@@ -797,10 +797,10 @@ func main() async -> Int32 {
     let json = args.has("--json")
 
     // Older desktop configs saved this verb. It is never ordinary Chromium connection or
-    // our MCP server: with --endpoint, and on macOS always, it is the HTTP relay; off
-    // macOS without one it is alohajet-agent's MCP server, the one the app serves.
+    // our MCP server: with --endpoint, and on macOS always, it is the HTTP relay; on
+    // Linux without one it is alohajet-agent's MCP server, the one the app serves.
     if command == "mcp-stdio" {
-        #if !os(macOS)
+        #if os(Linux)
         if !args.has("--endpoint") { return AgentHost.mcp(args) }
         #endif
         return await MCPRelay.main(args)

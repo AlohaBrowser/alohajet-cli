@@ -1,4 +1,4 @@
-#if !os(macOS)
+#if os(Linux)
 import Testing
 import Foundation
 @testable import AgentDriver

@@ -1,8 +1,8 @@
-#if !os(macOS)
+#if os(Linux)
 import Foundation
 import Testing
 
-// Off macOS there is no Aloha app: the agent host is `alohajet-agent`, and `-p` and
+// On Linux there is no Aloha app: the agent host is `alohajet-agent`, and `-p` and
 // `mcp-stdio` without `--endpoint` replace this process with it. Every case runs the real
 // binary against a stand-in agent that records what it was handed, so what is pinned is
 // what a user's shell and a user's MCP host actually see: argv, stdin, the streams, the
