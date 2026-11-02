@@ -343,7 +343,9 @@ public actor CDPClient: CDPTransport {
         // The response BODY is deliberately summarized (ok/timing only): CDP results
         // can be multi-MB (screenshots, DOM snapshots) and logging them verbatim
         // renders the log unusable. Tool-level results get sizes from the registry.
-        await agentLogger.debug("[CDP] → \(method) id=\(id) \(truncateString(payload, limit: 800))")
+        // The outbound copy goes through `payloadForWireLog`, which keeps typed text
+        // out of the log; `payload` itself still reaches the browser unchanged.
+        await agentLogger.debug("[CDP] → \(method) id=\(id) \(Self.payloadForWireLog(method: method, payload: payload))")
         let cdpStartedAt = Date()
 
         do {
