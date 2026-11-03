@@ -28,4 +28,14 @@ struct ChromeLauncherArgumentsTests {
         #expect(!arguments.contains { $0.hasPrefix("--window-size") })
         #expect(!arguments.contains { $0.hasPrefix("--screen-info") })
     }
+
+    @Test("a browser nobody is looking at keeps running at full speed, headless or windowed",
+          arguments: [true, false])
+    func backgroundIsNotThrottled(headless: Bool) throws {
+        let arguments = try arguments(headless: headless)
+        #expect(arguments.contains("--disable-background-timer-throttling"))
+        #expect(arguments.contains("--disable-backgrounding-occluded-windows"))
+        #expect(arguments.contains("--disable-renderer-backgrounding"))
+        #expect(arguments.last == "about:blank")
+    }
 }

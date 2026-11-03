@@ -954,7 +954,13 @@ public struct ChromeLauncher: Sendable {
             "--remote-debugging-port=\(port)",
             "--user-data-dir=\(userDataDir.path)",
             "--no-first-run",
-            "--no-default-browser-check"
+            "--no-default-browser-check",
+            // macOS can count a headless window, or a windowed one behind others, as hidden,
+            // and Chrome then runs its pages at about one frame a second: every input event
+            // is acknowledged a second late and hit-tested against a stale layout.
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
         ])
         if ownsUserDataDir {
             // THROWAWAY profile only: use the plaintext password store instead of the macOS
