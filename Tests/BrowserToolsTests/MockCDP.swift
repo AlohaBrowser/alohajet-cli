@@ -129,6 +129,22 @@ final class MockCDP {
     /// to the plain `bodyText` catch-all below.
     var alohaRawCallReplies: [(match: String, reply: JSValue)] = []
 
+    /// Out-of-process frames the browser lists as `iframe` targets, browser-wide, and the ids
+    /// among them that belong to the page: `DOM.getFrameOwner` answers those and refuses the
+    /// rest, the way Chrome refuses a frame of another tab.
+    var frameTargets: [(targetId: String, url: String)] = []
+    var ownedFrameIds: Set<String> = []
+
+    /// Frames in the page's own process, below its main frame, as `Page.getFrameTree`
+    /// reports them: the address without its fragment, and the fragment apart. Empty keeps
+    /// the bare `{}` reply every other test gets.
+    var inProcessFrames: [(url: String, fragment: String?)] = []
+
+    /// What the page answers to the verification-check state script, one reply per
+    /// evaluation; the last one repeats. Empty answers it like any other script, with the
+    /// page body.
+    var verificationPageStates: [JSValue] = []
+
     private struct FakeTarget {
         var targetId: String
         var url: String
@@ -304,6 +320,18 @@ final class MockCDP {
             return [response.stringify()]
         }
 
+        if method == "DOM.getFrameOwner",
+           let frameId = params["frameId"]?.stringValue, !ownedFrameIds.contains(frameId) {
+            let response = JSValue.object([
+                ("id", .number(Double(id))),
+                ("error", .object([
+                    ("code", .number(-32000)),
+                    ("message", .string("Frame with the given id was not found."))
+                ]))
+            ])
+            return [response.stringify()]
+        }
+
         if method == "Page.captureScreenshot", screenshotFailRemaining > 0 {
             screenshotFailRemaining -= 1
             let response = JSValue.object([
@@ -358,7 +386,29 @@ final class MockCDP {
                     ("title", .string(target.title))
                 ])
             }
-            return .object([("targetInfos", .array(infos))])
+            let frames: [JSValue] = frameTargets.map { frame in
+                .object([
+                    ("targetId", .string(frame.targetId)),
+                    ("type", .string("iframe")),
+                    ("url", .string(frame.url)),
+                    ("title", .string(""))
+                ])
+            }
+            return .object([("targetInfos", .array(infos + frames))])
+
+        case "DOM.getFrameOwner":
+            return .object([("backendNodeId", .number(7))])
+
+        case "Page.getFrameTree" where !inProcessFrames.isEmpty:
+            let children: [JSValue] = inProcessFrames.enumerated().map { index, frame in
+                var members: [(String, JSValue)] = [("id", .string("mock-child-\(index)")), ("url", .string(frame.url))]
+                if let fragment = frame.fragment { members.append(("urlFragment", .string(fragment))) }
+                return .object([("frame", .object(members))])
+            }
+            return .object([("frameTree", .object([
+                ("frame", .object([("id", .string("mock-main-frame")), ("url", .string(pageUrl))])),
+                ("childFrames", .array(children))
+            ]))])
 
         case "Target.closeTarget":
             let targetId = params["targetId"]?.stringValue ?? ""
@@ -411,6 +461,10 @@ final class MockCDP {
 
         case "Runtime.evaluate":
             let expression = params["expression"]?.stringValue ?? ""
+            if expression.contains("_cf_chl_opt"), let state = verificationPageStates.first {
+                if verificationPageStates.count > 1 { verificationPageStates.removeFirst() }
+                return .object([("result", .object([("type", .string("object")), ("value", state)]))])
+            }
             if expression == "document.readyState" {
                 return .object([("result", .object([
                     ("type", .string("string")),

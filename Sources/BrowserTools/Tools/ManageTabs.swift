@@ -326,6 +326,7 @@ private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: Man
                 if !headingLine.isEmpty { sections.append(headingLine) }
             }
             sections.append("Interactive view: the page rendered as structural markdown — # headings, - list items, [text](href) links, | a | b | table rows, and plain paragraphs. Content is clean and id-free; every actionable element (link, button, input, select, landmark) carries a trailing {aloha-id=\"ID\" tag} marker. Use that id with page_click, page_type, page_select and get_text; to act on a row or a card, use the id on its own link or button trailer. The page tools address the tab currently in use — manage_tabs open and manage_tabs use both set it. Cross-origin iframe internals (payment widgets, embedded auth) cannot be inspected and carry no inner ids; do not read payment values back out.")
+            if let checkLine = await pendingVerificationCheckLine(tab, ctx.abortSignal) { sections.append(checkLine) }
 
             if !interactResult.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 sections.append(wrapInteractivePageMarkdown(interactResult.markdown))
@@ -379,6 +380,14 @@ private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: Man
     } catch {
         return TabToolResult(output: "Failed to read tab content: \(tab.id) - \(error)", isError: true)
     }
+}
+
+/// Said only where no host completes checks: a host whose tabs remediate after the read
+/// has already had its turn at this page, and words its own outcome.
+private func pendingVerificationCheckLine(_ tab: TabHandle, _ signal: AbortSignal?) async -> String? {
+    guard !(tab is PageReadRemediating), let reporting = tab as? VerificationCheckReporting,
+          let checks = await reporting.pendingVerificationChecks(signal), !checks.vendors.isEmpty else { return nil }
+    return verificationCheckLine(checks)
 }
 
 private func viewportLine(_ tab: TabHandle) -> String? {
