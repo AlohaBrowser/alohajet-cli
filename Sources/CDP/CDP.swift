@@ -156,6 +156,8 @@ public actor CDPClient: CDPTransport {
     /// The per-call backstop deadline (seconds). `<= 0` disables the backstop.
     private let callTimeout: TimeInterval
 
+    private let wireLog: @Sendable (String) async -> Void
+
     private var channel: CDPMessageChannel?
     private var nextID: Int = 0
     private var pending: [Int: CheckedContinuation<JSValue, Error>] = [:]
@@ -178,6 +180,7 @@ public actor CDPClient: CDPTransport {
         self.openChannel = { URLSessionWebSocketChannel(url: webSocketURL, session: session) }
         #endif
         self.callTimeout = callTimeout
+        self.wireLog = CDPClient.agentWireLog
     }
 
     public init(
@@ -193,12 +196,20 @@ public actor CDPClient: CDPTransport {
 
     /// Create a client over an injected message channel: the seam a fake browser
     /// is driven through, exercising the real correlation and routing paths.
+    /// `wireLog` receives each line the client writes about a command it sends.
     public init(
         channel: @autoclosure @escaping @Sendable () -> CDPMessageChannel,
-        callTimeout: TimeInterval = CDPClient.defaultCallTimeout
+        callTimeout: TimeInterval = CDPClient.defaultCallTimeout,
+        wireLog: @escaping @Sendable (String) async -> Void = CDPClient.agentWireLog
     ) {
         self.openChannel = channel
         self.callTimeout = callTimeout
+        self.wireLog = wireLog
+    }
+
+    /// The default wire log: the agent's debug log.
+    public static let agentWireLog: @Sendable (String) async -> Void = { line in
+        await agentLogger.debug(line)
     }
 
     /// Discover the browser-level WebSocket endpoint from `GET
@@ -343,7 +354,9 @@ public actor CDPClient: CDPTransport {
         // The response BODY is deliberately summarized (ok/timing only): CDP results
         // can be multi-MB (screenshots, DOM snapshots) and logging them verbatim
         // renders the log unusable. Tool-level results get sizes from the registry.
-        await agentLogger.debug("[CDP] → \(method) id=\(id) \(truncateString(payload, limit: 800))")
+        // The outbound copy goes through `payloadForWireLog`, which keeps typed text
+        // out of the log; `payload` itself still reaches the browser unchanged.
+        await wireLog("[CDP] → \(method) id=\(id) \(Self.payloadForWireLog(method: method, payload: payload))")
         let cdpStartedAt = Date()
 
         do {
@@ -381,10 +394,10 @@ public actor CDPClient: CDPTransport {
             } onCancel: {
                 Task { await self.failPendingWithCancellation(id: id) }
             }
-            await agentLogger.debug("[CDP] ← \(method) id=\(id) ok ms=\(Int(Date().timeIntervalSince(cdpStartedAt) * 1000))")
+            await wireLog("[CDP] ← \(method) id=\(id) ok ms=\(Int(Date().timeIntervalSince(cdpStartedAt) * 1000))")
             return value
         } catch {
-            await agentLogger.debug("[CDP] ✗ \(method) id=\(id) ms=\(Int(Date().timeIntervalSince(cdpStartedAt) * 1000)) error=\(error)")
+            await wireLog("[CDP] ✗ \(method) id=\(id) ms=\(Int(Date().timeIntervalSince(cdpStartedAt) * 1000)) error=\(error)")
             throw error
         }
     }
