@@ -1,6 +1,9 @@
-#if os(Linux)
+#if os(Linux) || os(macOS)
 import Testing
 import Foundation
+#if os(macOS)
+import Darwin
+#endif
 @testable import AgentDriver
 
 @Suite("AlohaJetAgent")
@@ -9,9 +12,14 @@ final class AlohaJetAgentTests {
     private let scratch: URL
 
     init() throws {
-        scratch = FileManager.default.temporaryDirectory
+        let created = FileManager.default.temporaryDirectory
             .appendingPathComponent("alohajet-agent-lookup-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: created, withIntermediateDirectories: true)
+        // The lookup reports the path it RESOLVED, and macOS keeps TMPDIR under /var, a link
+        // to /private/var: every expected path is built from the resolved directory.
+        let resolved = try #require(realpath(created.path, nil))
+        defer { free(resolved) }
+        scratch = URL(fileURLWithPath: String(cString: resolved))
     }
 
     deinit { try? FileManager.default.removeItem(at: scratch) }
@@ -141,9 +149,22 @@ final class AlohaJetAgentTests {
         #expect(AlohaJetAgent.path(environment: [:], executable: link) == .success(agent))
     }
 
-    @Test("this process's own path comes from /proc/self/exe")
+    /// Asked of the kernel by another route than the one under test: `/proc/self/exe` read as
+    /// a link on Linux, `proc_pidpath` on macOS.
+    private func runningExecutableAsTheKernelKnowsIt() throws -> String {
+        #if os(Linux)
+        return try FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe")
+        #else
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX) * 4)
+        let length = proc_pidpath(getpid(), &buffer, UInt32(buffer.count))
+        try #require(length > 0)
+        return String(cString: buffer)
+        #endif
+    }
+
+    @Test("this process's own path is the one the agent is looked for beside")
     func defaultExecutableIsThisProcess() throws {
-        let running = try FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe")
+        let running = try runningExecutableAsTheKernelKnowsIt()
         let beside = (running as NSString).deletingLastPathComponent + "/alohajet-agent"
         try #require(!FileManager.default.fileExists(atPath: beside), "\(beside) exists")
         guard case let .failure(error) = AlohaJetAgent.path(environment: [:]) else {
@@ -151,6 +172,72 @@ final class AlohaJetAgentTests {
             return
         }
         #expect(error.message.contains(beside), "\(error.message)")
+        #expect(AlohaJetAgent.installation(environment: [:]) == .success(.notInstalled(expectedAt: beside)))
+    }
+
+    // MARK: - Installed or not
+
+    @Test("an empty place beside alohajet is not installed, and says where the agent would be")
+    func nothingBesideIsNotInstalled() throws {
+        let lonely = try directory("lonely")
+        let cli = try executable(lonely.appendingPathComponent("alohajet"))
+        let expected = lonely.appendingPathComponent("alohajet-agent").path
+        #expect(AlohaJetAgent.installation(environment: [:], executable: cli)
+            == .success(.notInstalled(expectedAt: expected)))
+        #expect(AlohaJetAgent.installation(environment: ["ALOHAJET_AGENT_BIN": ""], executable: cli)
+            == .success(.notInstalled(expectedAt: expected)))
+    }
+
+    @Test("an agent beside alohajet, or named by ALOHAJET_AGENT_BIN, is installed")
+    func agentIsInstalled() throws {
+        let install = try directory("install")
+        let cli = try executable(install.appendingPathComponent("alohajet"))
+        let elsewhere = try executable(try directory("opt").appendingPathComponent("agent-build"))
+        #expect(AlohaJetAgent.installation(environment: ["ALOHAJET_AGENT_BIN": elsewhere], executable: cli)
+            == .success(.installed(elsewhere)), "an override needs nothing beside alohajet")
+        let sibling = try executable(install.appendingPathComponent("alohajet-agent"))
+        #expect(AlohaJetAgent.installation(environment: [:], executable: cli) == .success(.installed(sibling)))
+    }
+
+    @Test("something at the agent's place that cannot run is a failure, not an absence")
+    func somethingUnusableBesideIsAFailure() throws {
+        let install = try directory("install")
+        let cli = try executable(install.appendingPathComponent("alohajet"))
+        let sibling = install.appendingPathComponent("alohajet-agent").path
+        let missing = AlohaJetAgent.HostError(message:
+            "no alohajet-agent at \(sibling) — it ships beside alohajet; install it there,"
+                + " or set ALOHAJET_AGENT_BIN to its absolute path")
+
+        try FileManager.default.createSymbolicLink(atPath: sibling, withDestinationPath: "nowhere/alohajet-agent")
+        #expect(AlohaJetAgent.installation(environment: [:], executable: cli) == .failure(missing),
+                "a dangling link")
+        try FileManager.default.removeItem(atPath: sibling)
+
+        try executable(URL(fileURLWithPath: sibling), mode: 0o644)
+        #expect(AlohaJetAgent.installation(environment: [:], executable: cli) == .failure(missing),
+                "a file that is not executable")
+        try FileManager.default.removeItem(atPath: sibling)
+
+        try FileManager.default.createDirectory(atPath: sibling, withIntermediateDirectories: true)
+        #expect(AlohaJetAgent.installation(environment: [:], executable: cli) == .failure(missing),
+                "a directory")
+    }
+
+    @Test("an override that names no agent, or alohajet itself, is a failure, not an absence")
+    func unusableOverrideIsAFailure() throws {
+        let install = try directory("install")
+        let cli = try executable(install.appendingPathComponent("alohajet"))
+        #expect(AlohaJetAgent.installation(environment: ["ALOHAJET_AGENT_BIN": "bin/alohajet-agent"], executable: cli)
+            == .failure(.init(message:
+                "ALOHAJET_AGENT_BIN must be an absolute path to alohajet-agent — got \"bin/alohajet-agent\"")))
+        #expect(AlohaJetAgent.installation(environment: ["ALOHAJET_AGENT_BIN": cli], executable: cli)
+            == .failure(.init(message: "ALOHAJET_AGENT_BIN names \(cli), which is alohajet itself, not alohajet-agent")))
+
+        let sibling = install.appendingPathComponent("alohajet-agent").path
+        try FileManager.default.createSymbolicLink(atPath: sibling, withDestinationPath: "alohajet")
+        #expect(AlohaJetAgent.installation(environment: [:], executable: cli) == .failure(.init(message:
+            "\(sibling) is alohajet itself, not alohajet-agent — install alohajet-agent there,"
+                + " or set ALOHAJET_AGENT_BIN to its absolute path")))
     }
 
     @Test("a missing agent is named, with where it ships and the variable that overrides it")
@@ -260,6 +347,19 @@ final class AlohaJetAgentTests {
         #expect(spy.calls.first?.path == agent)
         #expect(spy.calls.first?.argv == [agent, "-p", "hi", "--json"])
         #expect(error?.message == "could not run \(agent): \(String(cString: strerror(ENOEXEC)))")
+    }
+
+    @Test("the handoff to a known agent execs exactly that agent")
+    func handOffToAKnownAgent() throws {
+        let spy = ExecSpy(failure: ENOENT)
+        let error = #expect(throws: AlohaJetAgent.HostError.self) {
+            try AlohaJetAgent.handOff(to: "/opt/aloha/bin/alohajet-agent", ["mcp", "--no-headless"],
+                                      exec: { spy.exec($0, $1) })
+        }
+        #expect(spy.calls.count == 1)
+        #expect(spy.calls.first?.path == "/opt/aloha/bin/alohajet-agent")
+        #expect(spy.calls.first?.argv == ["/opt/aloha/bin/alohajet-agent", "mcp", "--no-headless"])
+        #expect(error?.message == "could not run /opt/aloha/bin/alohajet-agent: \(String(cString: strerror(ENOENT)))")
     }
 
     @Test("no agent, no exec")

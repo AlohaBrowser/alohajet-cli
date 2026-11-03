@@ -1,6 +1,10 @@
-#if os(Linux)
+#if os(Linux) || os(macOS)
 import Foundation
+#if os(Linux)
 import Glibc
+#else
+import Darwin
+#endif
 
 // This process BECOMES `alohajet-agent` — exec, not spawn — so the agent's stdio, its exit
 // status and every signal sent to the pid the caller holds reach it with nothing in between.
@@ -60,12 +64,36 @@ public enum AlohaJetAgent {
             """)
     }
 
+    /// Where this process was started from: `/proc/self/exe` on Linux, the path dyld
+    /// records for the main executable on macOS.
+    public nonisolated static var runningExecutable: String {
+        #if os(Linux)
+        return "/proc/self/exe"
+        #else
+        var size: UInt32 = 0
+        _ = _NSGetExecutablePath(nil, &size)
+        var buffer = [CChar](repeating: 0, count: Int(size) + 1)
+        guard _NSGetExecutablePath(&buffer, &size) == 0 else { return CommandLine.arguments[0] }
+        return String(cString: buffer)
+        #endif
+    }
+
+    public enum Installation: Equatable, Sendable {
+        case installed(String)
+        /// Nothing is at the path the agent ships at, and no override names one.
+        case notInstalled(expectedAt: String)
+    }
+
     /// Beside the file `executable` resolves to, not beside a link to it: an install that
     /// links `alohajet` onto PATH keeps the pair together somewhere else.
-    public static func path(
+    ///
+    /// Only an EMPTY place is `.notInstalled`. An override that names no agent, a file
+    /// there that cannot run, and an agent that is `alohajet` itself are failures: someone
+    /// meant an agent to be there.
+    public static func installation(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        executable: String = "/proc/self/exe"
-    ) -> Result<String, HostError> {
+        executable: String = runningExecutable
+    ) -> Result<Installation, HostError> {
         if let override = environment[pathEnvKey], !override.isEmpty {
             guard override.hasPrefix("/") else {
                 return .failure(HostError(
@@ -78,7 +106,7 @@ public enum AlohaJetAgent {
                 return .failure(HostError(
                     message: "\(pathEnvKey) names \(override), which is alohajet itself, not \(executableName)"))
             }
-            return .success(override)
+            return .success(.installed(override))
         }
         guard let resolved = realpath(executable, nil) else {
             let reason = String(cString: strerror(errno))
@@ -90,28 +118,47 @@ public enum AlohaJetAgent {
         defer { free(resolved) }
         let sibling = ((String(cString: resolved) as NSString).deletingLastPathComponent as NSString)
             .appendingPathComponent(executableName)
-        guard isExecutableFile(sibling) else {
-            return .failure(HostError(message: """
-                no \(executableName) at \(sibling) — it ships beside alohajet; install it there, \
-                or set \(pathEnvKey) to its absolute path
-                """))
-        }
+        var entry = stat()
+        guard lstat(sibling, &entry) == 0 else { return .success(.notInstalled(expectedAt: sibling)) }
+        guard isExecutableFile(sibling) else { return .failure(missing(sibling)) }
         guard !isSameFile(sibling, executable) else {
             return .failure(HostError(message: """
                 \(sibling) is alohajet itself, not \(executableName) — install \(executableName) there, \
                 or set \(pathEnvKey) to its absolute path
                 """))
         }
-        return .success(sibling)
+        return .success(.installed(sibling))
+    }
+
+    public static func path(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executable: String = runningExecutable
+    ) -> Result<String, HostError> {
+        installation(environment: environment, executable: executable).flatMap {
+            switch $0 {
+            case let .installed(agent): .success(agent)
+            case let .notInstalled(sibling): .failure(missing(sibling))
+            }
+        }
+    }
+
+    private static func missing(_ sibling: String) -> HostError {
+        HostError(message: """
+            no \(executableName) at \(sibling) — it ships beside alohajet; install it there, \
+            or set \(pathEnvKey) to its absolute path
+            """)
     }
 
     public static func handOff(
         _ arguments: [String],
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        executable: String = "/proc/self/exe",
+        executable: String = runningExecutable,
         exec: Exec = liveExec
     ) throws(HostError) -> Never {
-        let agent = try path(environment: environment, executable: executable).get()
+        try handOff(to: try path(environment: environment, executable: executable).get(), arguments, exec: exec)
+    }
+
+    public static func handOff(to agent: String, _ arguments: [String], exec: Exec = liveExec) throws(HostError) -> Never {
         let failure = exec(agent, [agent] + arguments)
         throw HostError(message: "could not run \(agent): \(String(cString: strerror(failure)))")
     }
