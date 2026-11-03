@@ -82,7 +82,7 @@ struct AgentHandoffProcessTests {
     /// SIGPIPE itself. Both survive an exec, and an agent started that way could not be
     /// stopped by its host.
     @Test("the agent starts with no signal blocked and SIGPIPE at its default", arguments: [
-        ["-p", "hi"], ["mcp-stdio"],
+        ["-p", "hi"], ["mcp-stdio"], ["mcp"],
     ])
     func signalStateIsTheAgentsOwn(_ arguments: [String]) throws {
         let agent = try FakeAgent()

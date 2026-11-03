@@ -126,6 +126,8 @@ let alohaBrowserUsage = "  --browser aloha         attach to the Aloha browser, 
 let hostEnvironmentUsage = """
   ALOHA_BROWSER_APP       the Aloha .app to launch
   ALOHA_CDP_PORT          the Aloha browser's CDP port (default 9222)
+  ALOHAJET_AGENT_BIN      the alohajet-agent mcp runs (default: the one beside
+                          alohajet, if any)
 """
 #else
 let mcpStdioHelp = """
@@ -157,8 +159,8 @@ let agentOptionsUsage = """
 let mcpStdioUsage = "  mcp-stdio               serve alohajet-agent's MCP server on stdio"
 let alohaBrowserUsage = "  --browser aloha         attach to the Aloha browser, on macOS only"
 let hostEnvironmentUsage = """
-  ALOHAJET_AGENT_BIN      the alohajet-agent -p and mcp-stdio run (default:
-                          the one beside alohajet)
+  ALOHAJET_AGENT_BIN      the alohajet-agent -p, mcp and mcp-stdio run
+                          (default: the one beside alohajet)
 """
 #endif
 
@@ -230,9 +232,16 @@ let commandHelp: [String: String] = [
           machine. click refuses file inputs: their native dialog cannot be driven.
         """,
     "mcp": """
-        alohajet mcp [--endpoint <url>]
-          Serve the nine browser tools as an MCP server on stdio. The browser
-          options pick the browser, which starts on the first tool call.
+        alohajet mcp [--no-headless] [--browser-only]
+        alohajet mcp --endpoint <url>
+          Serve MCP on stdio. With alohajet-agent beside alohajet, or named by
+          ALOHAJET_AGENT_BIN, this process becomes alohajet-agent mcp: the AlohaJet
+          agent's tools on a Chromium of its own, which complete supported
+          verification checks (CAPTCHAs).
+          Without one, with --browser-only, or with a browser option, serve the nine
+          browser tools; the browser options pick the browser, which starts on the
+          first tool call. They complete no verification check, and a page read
+          that meets one says so.
           With --endpoint, serve nothing: relay stdio to the MCP server of a running
           Aloha browser at <url>/mcp, for clients that can only run a command, such
           as Claude Desktop. <url> is http to this machine, or https to
@@ -267,7 +276,8 @@ COMMANDS
   wait <css>              wait for a CSS selector (--timeout-ms <n>)
   upload <ref> <path>...  attach files to a file input
   quit                    close the shared browser
-  mcp                     serve these tools over MCP on stdio
+  mcp                     serve MCP on stdio: alohajet-agent's when installed,
+                          else these tools
   mcp --endpoint <url>    relay MCP on stdio to the Aloha browser's server
 \(mcpStdioUsage)
 
@@ -820,7 +830,11 @@ func main() async -> Int32 {
         if args.has("--endpoint") {
             return await MCPRelay.main(args)
         }
+        #if os(Linux) || os(macOS)
+        return await AgentHost.serveMCP(args)
+        #else
         return await MCPServer.main(args)
+        #endif
     }
 
     // `quit` connects to the recorded browser, not to a new one: it is the command that
