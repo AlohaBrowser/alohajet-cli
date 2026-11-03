@@ -304,6 +304,22 @@ EXIT CODES
 `alohajet <command> --help` explains one command; --version prints the version.
 """
 
+// MARK: - Verification checks
+
+/// Where a verification check these tools cannot complete is completed: the sentence a page
+/// read that meets one ends with, and the MCP server's instructions.
+#if os(macOS)
+let verificationChecksElsewhere = """
+    AlohaJet completes supported checks itself when it drives the browser: alohajet -p, or \
+    alohajet mcp --endpoint <url> to the Aloha browser for an MCP client.
+    """
+#else
+let verificationChecksElsewhere = """
+    AlohaJet completes supported checks itself when it drives the browser: alohajet -p, or \
+    alohajet mcp with alohajet-agent installed beside alohajet.
+    """
+#endif
+
 // MARK: - Output
 
 func resultJSON(_ result: RawToolResult) -> String {
@@ -768,6 +784,7 @@ func main() async -> Int32 {
     // kills the process mid-print — before `shutdown()`, which is what terminates a
     // browser we launched. Ignoring it turns that into a failed write we survive.
     signal(SIGPIPE, SIG_IGN)
+    VerificationCheckNote.elsewhere = verificationChecksElsewhere
 
     let args: Args
     do {

@@ -62,6 +62,11 @@ struct MCPProtocolTests {
         let serverInfo = try #require(result["serverInfo"] as? [String: Any])
         #expect(serverInfo["name"] as? String == "alohajet")
         #expect((serverInfo["version"] as? String)?.isEmpty == false)
+        // A model shown a CAPTCHA these tools cannot complete refused without a reason, nine
+        // times in ten: the server says up front what they cannot do, and where it is done.
+        let instructions = try #require(result["instructions"] as? String)
+        #expect(instructions.contains("complete no verification check"), "\(instructions)")
+        #expect(instructions.contains("alohajet -p"), "\(instructions)")
         // `tools` must be present (even empty) or a host will not call tools/list.
         let capabilities = try #require(result["capabilities"] as? [String: Any])
         #expect(capabilities["tools"] != nil)

@@ -23,6 +23,12 @@ enum MCPServer {
     static let supportedProtocolVersions: Set<String> = ["2024-11-05", "2025-03-26", "2025-06-18"]
     static let latestProtocolVersion = "2025-06-18"
 
+    static let instructions = """
+        These tools complete no verification check (CAPTCHA). A manage_tabs read that meets one \
+        names it and says who can complete it; do not try to click or type into it. \
+        \(verificationChecksElsewhere)
+        """
+
     /// Serve MCP over stdin/stdout until EOF. Returns the process exit code.
     ///
     /// `args` is the CLI's own parse of argv, and the browser comes from the CLI's own
@@ -74,7 +80,8 @@ enum MCPServer {
                     ("serverInfo", .object([
                         ("name", .string(serverName)),
                         ("version", .string(serverVersion))
-                    ]))
+                    ])),
+                    ("instructions", .string(instructions))
                 ]))
 
             case "notifications/initialized", "notifications/cancelled":
