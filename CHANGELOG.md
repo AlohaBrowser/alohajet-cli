@@ -5,6 +5,26 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `alohajet mcp` becomes `alohajet-agent mcp` whenever an `alohajet-agent` is installed
+  beside `alohajet` or `ALOHAJET_AGENT_BIN` names one, on Linux and macOS: the AlohaJet
+  agent's server, which completes the verification checks (CAPTCHAs) it supports.
+  `--browser-only`, or any browser option, keeps the CLI's own nine tools. With no agent
+  installed, `mcp` serves those and says so once on stderr.
+- A `manage_tabs` read of a page that shows a verification check these tools cannot
+  complete — Cloudflare Turnstile or challenge page, reCAPTCHA, hCaptcha, MTCaptcha — names
+  it, says it is not completed, and says who can complete it: nobody in a headless browser,
+  a person at the window otherwise. A host sets the closing sentence through
+  `VerificationCheckNote.elsewhere`; the CLI's points at `alohajet -p` and the lane that
+  completes checks. Tabs that conform to `PageReadRemediating` never carry the line.
+- The MCP server's `initialize` result carries `instructions` saying the same.
+- `AlohaJetAgent` builds on macOS too, finds this executable through `_NSGetExecutablePath`
+  there, and `installation()` tells an empty place beside `alohajet` from an agent that
+  is there but cannot run.
+
 ## [0.4.4] - 2026-09-20
 
 ### Added

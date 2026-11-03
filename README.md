@@ -171,7 +171,7 @@ and the one thing this page shortens. Every cut is marked `...`; nothing else is
 | `wait <css> [--timeout-ms <n>]` | `page_wait_for` |
 | `upload <ref> <path>...` | `page_upload` |
 | `quit` | — closes the shared browser |
-| `mcp` | — serves all nine over stdio |
+| `mcp` | — serves all nine over stdio, or becomes `alohajet-agent mcp` ([MCP](#mcp)) |
 
 `--tab <id>` is global, not a flag on `read`: it goes before the verb on any command that
 touches a page — `alohajet --tab <id> click <ref>`. The table names it only where you are
@@ -244,12 +244,58 @@ that browser:
 }
 ```
 
-A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.4.4"}`, and
+A live `initialize` answers `serverInfo: {"name": "alohajet", "version": "0.4.4"}` and
+`instructions` saying the tools complete no verification check ([below](#verification-checks)), and
 `tools/list` returns the tools below with `readOnlyHint=true` on exactly two,
 `get_text` and `page_wait_for`. The hint is per tool, not per call, so `manage_tabs` is
 false even though its `list` and `read` actions only observe. `manage_tabs` with
 `include_screenshot: true` returns a second content block of type `image` next to the text;
 the CLI has no equivalent and drops the pixels.
+
+#### With `alohajet-agent` installed, `mcp` is its server
+
+When `alohajet-agent`, the AlohaJet agent's own command line, sits beside `alohajet` — the
+AlohaJet Linux package ships the two together — or `ALOHAJET_AGENT_BIN` names one,
+`alohajet mcp` becomes `alohajet-agent mcp`, and `alohajet mcp --no-headless` becomes
+`alohajet-agent mcp --no-headless`. It is an exec, as `-p` and `mcp-stdio` are on Linux
+([below](#on-linux--p-and-mcp-stdio-are-alohajet-agent)), on Linux and macOS alike. That
+server drives a Chromium of its own and completes the verification checks (CAPTCHAs) it
+supports, which the nine tools here do not.
+
+`--browser-only` keeps the nine tools, and so does any browser option — `--cdp`,
+`--launch`, `--port`, `--browser aloha` — since it names a browser for them. With no agent
+installed, `alohajet mcp` serves the nine tools and says so once on stderr. It does not fall
+back when an agent was meant to be there: an `ALOHAJET_AGENT_BIN` that names no executable,
+or something beside `alohajet` called `alohajet-agent` that cannot run or is `alohajet`
+itself, exits 3. `--accept-terms`, and `--headless` with `--no-headless`, are refused
+(exit 2) before the agent runs.
+
+#### Verification checks
+
+The nine tools complete no verification check. A Turnstile, reCAPTCHA, hCaptcha or
+MTCaptcha widget runs in a cross-origin frame — Turnstile's inside a closed shadow root —
+that carries no aloha-id, and a Cloudflare challenge page has nothing to click at all. So a
+`manage_tabs` read (and `alohajet open`, `alohajet read`) of a page that shows one names it,
+after watching it for up to three seconds in case it completes by itself:
+
+```text
+Verification check not completed on this page: Cloudflare. These tools cannot complete it, because
+it runs in a frame of its own that carries no aloha-id, so do not try to click or type into it. Some
+checks complete by themselves within seconds: read the tab again before you go on. If it is still
+here, no one can complete it in this browser: it is headless, and no person can see it. Tell your
+user that the check blocked the page. AlohaJet completes supported checks itself when it drives the
+browser: alohajet -p, or alohajet mcp --endpoint <url> to the Aloha browser for an MCP client.
+```
+
+A browser with a window (`--no-headless`, or `--cdp` to one on someone's screen) gets "a
+person at this browser's window can complete it: ask your user to, then read the tab again"
+instead. The last sentence is the CLI's; on Linux it points at `alohajet-agent`. A check is
+recognised by the public host its frame comes from — `challenges.cloudflare.com`,
+`/recaptcha/…/anchor` on Google or recaptcha.net (not an invisible one), the checkbox frame
+of `*.hcaptcha.com`, `*.mtcaptcha.com` — or by Cloudflare's challenge page, and is completed
+once the page holds the token the vendor writes into its documented form field. Nothing is
+clicked, typed or submitted to find out. A host that links `BrowserTools` and completes
+checks itself conforms its tabs to `PageReadRemediating`; their reads never carry the line.
 
 #### `mcp --endpoint <url>` — the other product behind the same verb
 
@@ -312,6 +358,7 @@ stderr, exit status and signals are the command's own:
 | `--resume`, `--continue`, any other `--grant-permissions` | refused, exit 2: conversations and page permissions are the macOS app's |
 | any other flag, or a second argument | refused, exit 2, before anything runs |
 | `mcp-stdio [--no-headless]` | `alohajet-agent mcp [--no-headless]` |
+| `mcp [--no-headless]` | `alohajet-agent mcp [--no-headless]` when one is installed, on macOS too; otherwise the nine tools ([MCP](#with-alohajet-agent-installed-mcp-is-its-server)) |
 | `mcp-stdio --accept-terms` | refused, exit 2: an MCP session runs no turn and asks for no Terms |
 
 Nothing `-p` does not read is dropped. `-p hi --bogus-flag`, a browser option such as
@@ -603,7 +650,7 @@ Every variable the sources actually read, checked with
 | `ALOHA_CDP_PORT` | `9222` | macOS: where `--browser aloha` looks for the Aloha browser's CDP listener |
 | `ALOHA_BROWSER_APP` | the `.app` this binary ships inside | macOS: path to the Aloha `.app` that `--browser aloha` launches. Unset, the lane launches the bundle this executable sits in — never another registered copy, which would be a second instance on one profile. |
 | `ALOHAJET_AGENT_TOKEN` | read from disk | the bearer token `-p` sends to `--endpoint`. Unset, it is read from `~/Library/Application Support/Aloha/automation-token` on macOS, `~/.local/share/Aloha/automation-token` on Linux (`$XDG_DATA_HOME/Aloha/automation-token` when that is set) — but that ambient file is sent to a loopback endpoint ONLY, so a remote `https` endpoint is reachable and gets a token only from this variable. Absent entirely, no `Authorization` header is sent and the endpoint answers 401 — never a silent unauthenticated retry. |
-| `ALOHAJET_AGENT_BIN` | the `alohajet-agent` beside `alohajet` | Linux: the agent `-p` and `mcp-stdio` become without `--endpoint`. An absolute path; a relative one, one that is not an executable file, or `alohajet` itself is an error (exit 3), never a fall-through to the sibling. Unset or empty, it is the `alohajet-agent` in the directory `alohajet` resolves to. |
+| `ALOHAJET_AGENT_BIN` | the `alohajet-agent` beside `alohajet` | Linux: the agent `-p` and `mcp-stdio` become without `--endpoint`. Linux and macOS: the agent a bare `mcp` becomes. An absolute path; a relative one, one that is not an executable file, or `alohajet` itself is an error (exit 3), never a fall-through to the sibling. Unset or empty, it is the `alohajet-agent` in the directory `alohajet` resolves to. |
 
 ## Limitations
 
@@ -680,7 +727,9 @@ nothing deletes these files.
 **The launched Chromium advertises itself as HeadlessChrome.** Its User-Agent is
 `...HeadlessChrome/152.0.0.0 Safari/537.36`, so a site that gates on it will refuse the
 default lane. `ALOHAJET_CHROME_USER_AGENT` is one workaround; `--cdp` against a normal
-browser is the other.
+browser is the other. The User-Agent is also how a read tells that nobody can see the
+browser: with the override set, a [verification check](#verification-checks) in a
+headless browser is reported as one a person at its window can complete.
 
 **Screenshots are MCP-only and opt-in.** `include_screenshot: true` costs a capture
 round-trip and image tokens on every read, so it is off by default. The CLI cannot show you
