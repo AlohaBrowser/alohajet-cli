@@ -175,6 +175,33 @@ import ToolABI
         }
     }
 
+    actor WireLogLines {
+        private(set) var lines: [String] = []
+        func append(_ line: String) { lines.append(line) }
+    }
+
+    @Test("the line the client writes for a typed command names the command and not the text")
+    func theWrittenWireLogLineCarriesNoTypedText() async throws {
+        let log = WireLogLines()
+        let client = CDPClient(
+            channel: RecordingChannel(), callTimeout: 10, wireLog: { await log.append($0) })
+        try await client.connect()
+
+        _ = try await client.send(
+            method: "Input.dispatchKeyEvent",
+            params: ["type": .string("keyDown"), "key": .string("Q"), "text": .string("Q")],
+            sessionId: "S1")
+        _ = try await client.send(method: "Input.insertText", params: ["text": .string("hunter2")])
+        await client.close()
+
+        let lines = await log.lines
+        let outbound = lines.filter { $0.hasPrefix("[CDP] → ") }
+        #expect(outbound.count == 2)
+        #expect(outbound.first?.hasPrefix("[CDP] → Input.dispatchKeyEvent id=") == true)
+        #expect(outbound.last?.hasPrefix("[CDP] → Input.insertText id=") == true)
+        #expect(!lines.contains { $0.contains("hunter2") || $0.contains("\"Q\"") })
+    }
+
     @Test("the browser still receives the typed text verbatim")
     func browserReceivesTheTypedText() async throws {
         let channel = RecordingChannel()
