@@ -34,11 +34,12 @@ struct ChromeLauncherDiscoveryCancellationTests {
         defer { try? FileManager.default.removeItem(at: scratch) }
         // A child spawned from a test worker thread inherits nearly every signal blocked, and
         // `sleep` would wait out terminate()'s escalation to SIGKILL. Chrome empties the mask it
-        // inherits at startup, so the stand-in does too.
+        // inherits at startup, so the stand-in does too. Like Chrome, it answers `--version` at once.
         let browser = scratch.appendingPathComponent("browser").path
         try """
             #!/usr/bin/perl
             use POSIX;
+            exit 0 if grep { $_ eq "--version" } @ARGV;
             sigprocmask(SIG_SETMASK, POSIX::SigSet->new);
             exec "sleep", "60";
 

@@ -625,6 +625,76 @@ public struct ChromeLauncher: Sendable {
     /// 800x600, smaller than the window on it, so `--screen-info` sizes the screen to match.
     static let headlessWindowSize = (width: 1440, height: 900)
 
+    /// The `--user-agent` a launch passes, or `nil` to keep the browser's own.
+    ///
+    /// `ALOHAJET_CHROME_USER_AGENT` names one for any launch. Otherwise a headless browser
+    /// gets the one it sends from a window: headless Chrome says HeadlessChrome there, and
+    /// Cloudflare's challenge page answers a click from it by coming back. Its client hints
+    /// name Chromium either way. A `--user-agent` leaves only their low-entropy part (brands,
+    /// mobile, platform), as Chrome does for any User-Agent set on its command line.
+    static func userAgentArgument(headless: Bool, override: String?, versionLine: () -> String?) -> String? {
+        if let override, !override.isEmpty { return "--user-agent=\(override)" }
+        guard headless, let line = versionLine(), let userAgent = windowedUserAgent(versionLine: line) else {
+            return nil
+        }
+        return "--user-agent=\(userAgent)"
+    }
+
+    /// The User-Agent Chrome sends from a window, for the version `<browser> --version`
+    /// printed. It is the reduced form Chrome has sent since 113: the major version, and a
+    /// platform fixed per operating system.
+    static func windowedUserAgent(versionLine: String) -> String? {
+        let version = versionLine.split(whereSeparator: \.isWhitespace).lazy
+            .map { $0.split(separator: ".", omittingEmptySubsequences: false) }
+            .first { fields in
+                fields.count == 4 && fields.allSatisfy { !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }
+            }
+        guard let major = version?.first else { return nil }
+        return "Mozilla/5.0 (\(reducedPlatform)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/\(major).0.0.0 Safari/537.36"
+    }
+
+    #if os(macOS)
+    static let reducedPlatform = "Macintosh; Intel Mac OS X 10_15_7"
+    #elseif os(Windows)
+    static let reducedPlatform = "Windows NT 10.0; Win64; x64"
+    #else
+    static let reducedPlatform = "X11; Linux x86_64"
+    #endif
+
+    /// What `<executable> --version` prints, or `nil` when it prints nothing within
+    /// `timeout`; one that has not exited by then is killed, since a child of a test worker
+    /// thread can start with SIGTERM blocked. Read through a file, not a `Pipe`: a pipe stays
+    /// open, and its read blocks, for as long as anything the executable started holds it.
+    static func versionLine(of executablePath: String, timeout: TimeInterval = 5) -> String? {
+        let output = temporaryDirectory
+            .appendingPathComponent("alohajet-chrome-version-\(UUID().uuidString).txt")
+        guard FileManager.default.createFile(
+                  atPath: output.path, contents: nil, attributes: [.posixPermissions: 0o600]),
+              let sink = try? FileHandle(forWritingTo: output) else { return nil }
+        defer {
+            try? sink.close()
+            try? FileManager.default.removeItem(at: output)
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = ["--version"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = sink
+        process.standardError = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
+        guard (try? process.run()) != nil else { return nil }
+        guard exited.wait(timeout: .now() + timeout) == .success else {
+            #if os(macOS) || os(Linux)
+            kill(process.processIdentifier, SIGKILL)
+            #else
+            process.terminate()
+            #endif
+            return nil
+        }
+        return try? String(contentsOf: output, encoding: .utf8)
+    }
+
     public let executablePath: String
 
     public init(executablePath: String = ChromeLauncher.defaultExecutablePath) {
@@ -985,13 +1055,11 @@ public struct ChromeLauncher: Sendable {
         if !ownsUserDataDir, let profileDirectory {
             arguments.append("--profile-directory=\(profileDirectory)")
         }
-        // GCE hunters: a Safari-like UA so Cloudflare does not treat Chromium as a
-        // bot. Unset or empty keeps Chrome's own default. This is the UA STRING
-        // only — Chromium still derives Sec-CH-UA client hints from its real
-        // build, so a site reading those is not fooled by this alone.
-        if let userAgent = ProcessInfo.processInfo.environment["ALOHAJET_CHROME_USER_AGENT"],
-           !userAgent.isEmpty {
-            arguments.append("--user-agent=\(userAgent)")
+        if let userAgent = Self.userAgentArgument(
+               headless: headless,
+               override: ProcessInfo.processInfo.environment["ALOHAJET_CHROME_USER_AGENT"],
+               versionLine: { Self.versionLine(of: executablePath) }) {
+            arguments.append(userAgent)
         }
         arguments.append("about:blank")
         process.arguments = arguments

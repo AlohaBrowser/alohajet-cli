@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there, and `installation()` tells an empty place beside `alohajet` from an agent that
   is there but cannot run.
 
+### Changed
+
+- A headless browser alohajet launches sends the User-Agent the same browser sends from a
+  window, `Chrome/<major>.0.0.0`, built from what `<browser> --version` prints. Its own
+  says `HeadlessChrome/<major>.0.0.0`, which Cloudflare's challenge page refuses. For a
+  User-Agent set on its command line, Chrome sends only the low-entropy client hints.
+  `ALOHAJET_CHROME_USER_AGENT` still names the User-Agent for any launch.
+
 ## [0.4.4] - 2026-09-20
 
 ### Added

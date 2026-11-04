@@ -646,7 +646,7 @@ Every variable the sources actually read, checked with
 | `ALOHAJET_HIGHLIGHTS` | on | `0` skips the in-page click flourish. Cosmetic; the synthetic input event is sent either way. |
 | `ALOHAJET_MAX_OBS_TOKENS` | off | cap one observation's estimated tokens, so a single huge page cannot blow the context |
 | `ALOHAJET_COMPACT_TOOLS` | off | tighter default caps, for a small model |
-| `ALOHAJET_CHROME_USER_AGENT` | Chrome's own | override the user agent of a browser alohajet launches. See the HeadlessChrome limitation below. |
+| `ALOHAJET_CHROME_USER_AGENT` | the one Chrome sends from a window | the User-Agent of a browser alohajet launches, headless or windowed. See the User-Agent limitation below. |
 | `ALOHAJET_DEBUG` | off | protocol chatter to stderr |
 | `ALOHA_CDP_PORT` | `9222` | macOS: where `--browser aloha` looks for the Aloha browser's CDP listener |
 | `ALOHA_BROWSER_APP` | the `.app` this binary ships inside | macOS: path to the Aloha `.app` that `--browser aloha` launches. Unset, the lane launches the bundle this executable sits in — never another registered copy, which would be a second instance on one profile. |
@@ -725,10 +725,16 @@ inside them masked against a fixed sixteen-name list (`access_token`, `client_se
 `refresh_token`, `password`, …); everything else in a body reaches disk verbatim, and
 nothing deletes these files.
 
-**The launched Chromium advertises itself as HeadlessChrome.** Its User-Agent is
-`...HeadlessChrome/152.0.0.0 Safari/537.36`, so a site that gates on it will refuse the
-default lane. `ALOHAJET_CHROME_USER_AGENT` is one workaround; `--cdp` against a normal
-browser is the other.
+**A launched headless Chromium sends a User-Agent set on its command line.** Its own says
+`HeadlessChrome/153.0.0.0`, and Cloudflare's challenge page answers a click from that
+browser by coming back. So a headless launch passes `--user-agent` with the one the same
+browser sends from a window, `...Chrome/153.0.0.0 Safari/537.36`, built from what
+`<browser> --version` prints; a browser that prints no version within five seconds keeps
+its own. The client hints name Chromium either way, but for any User-Agent set on its
+command line Chrome sends only their low-entropy part (brands, mobile, platform): a site
+that asks for the full version list or the platform version gets them empty.
+`ALOHAJET_CHROME_USER_AGENT` names the User-Agent for any launch, headless or not; `--cdp`
+against a normal browser avoids all of it.
 
 **Screenshots are MCP-only and opt-in.** `include_screenshot: true` costs a capture
 round-trip and image tokens on every read, so it is off by default. The CLI cannot show you
