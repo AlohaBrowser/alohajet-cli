@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#endif
 
 // MARK: - Which identity the app this CLI drives has
 //
@@ -30,11 +33,15 @@ public nonisolated enum HostAppIdentity {
     /// `swiftpm-testing-helper`. No shipped binary links either; the environment could be
     /// set on any launch, so it is no signal. Looked up by name: XCTest's `XCTestCase`
     /// class, Swift Testing's C entry point (`swt_abiv0_getEntryPoint`, the one SwiftPM's
-    /// runner resolves). Off-Apple there is no user's app to keep off: false.
+    /// runner resolves). On Linux, where corelibs has no `XCTestCase` by that name and
+    /// glibc's `RTLD_DEFAULT` is null, the entry point alone: `swift test` links Swift
+    /// Testing into the one test executable, so the Linux job's run is `test` too.
     public static let isTestProcess: Bool = {
         #if canImport(Darwin)
         NSClassFromString("XCTestCase") != nil
             || dlsym(UnsafeMutableRawPointer(bitPattern: -2), "swt_abiv0_getEntryPoint") != nil  // RTLD_DEFAULT
+        #elseif canImport(Glibc)
+        dlsym(nil, "swt_abiv0_getEntryPoint") != nil  // RTLD_DEFAULT
         #else
         false
         #endif
