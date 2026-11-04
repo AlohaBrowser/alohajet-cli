@@ -86,7 +86,10 @@ enum MCPRelay {
         // away work that had already happened. This process is a PIPE: the honest
         // deadline is the MCP host's own, and every host has one. A refused connection
         // is not a timeout, so "the browser is not running" still fails instantly.
-        let configuration = URLSessionConfiguration.default
+        // Ephemeral, as `RemoteAutomationDriver.session`: a default session keeps its cache
+        // and HTTP storage in the user's `Caches/alohajet` and `HTTPStorages/alohajet`,
+        // whichever app's copy of the CLI this is.
+        let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 600
         let upstream = HTTPClientTransport(
             endpoint: endpoint.appendingPathComponent("mcp"),

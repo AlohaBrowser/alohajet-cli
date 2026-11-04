@@ -145,6 +145,12 @@ final class URLSessionWebSocketChannel: CDPMessageChannel, Sendable {
 /// session model (`sessionId` on messages) used by `Target.attachToTarget`
 /// with `flatten: true`.
 public actor CDPClient: CDPTransport {
+    /// The session a client's WebSocket runs on unless one is given: ephemeral. `.shared`, in
+    /// a bare executable, keeps its HTTP storage under the process name
+    /// (`~/Library/HTTPStorages/alohajet`): the same directory for every app's copy of the CLI,
+    /// so a jet-e2e build's `--browser aloha` lane wrote the user's AlohaJet's.
+    public static let defaultSession = URLSession(configuration: .ephemeral)
+
     /// The default per-call backstop deadline applied to every `send(...)`.
     ///
     /// Deliberately generous (30s) — longer than the runtime's own 15s read race —
@@ -167,7 +173,7 @@ public actor CDPClient: CDPTransport {
 
     public init(
         webSocketURL: URL,
-        session: URLSession = .shared,
+        session: URLSession = CDPClient.defaultSession,
         callTimeout: TimeInterval = CDPClient.defaultCallTimeout
     ) {
         #if os(Linux)
@@ -182,7 +188,7 @@ public actor CDPClient: CDPTransport {
 
     public init(
         webSocketURLString: String,
-        session: URLSession = .shared,
+        session: URLSession = CDPClient.defaultSession,
         callTimeout: TimeInterval = CDPClient.defaultCallTimeout
     ) throws {
         guard let url = URL(string: webSocketURLString) else {
@@ -206,7 +212,7 @@ public actor CDPClient: CDPTransport {
     public static func connecting(
         host: String = "127.0.0.1",
         port: Int,
-        session: URLSession = .shared
+        session: URLSession = CDPClient.defaultSession
     ) async throws -> CDPClient {
         // `session` stays for the WEBSOCKET channel below; discovery reads the
         // `/json/version` endpoint over a socket instead (see CDPJSONEndpoint.swift).

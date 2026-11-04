@@ -561,6 +561,13 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
 
     // MARK: - Live transport
 
+    /// The live transport's session: ephemeral. The CLI is a bare executable, so
+    /// `URLSession.shared` keeps its cache and HTTP storage under the process name,
+    /// `~/Library/Caches/alohajet` and `HTTPStorages/alohajet`: the same two directories for
+    /// the copy every app ships, so a jet-e2e build's CLI wrote the user's AlohaJet's (every
+    /// `/agent/result` it polled, cached). Calls to the app need neither.
+    public nonisolated static let session = URLSession(configuration: .ephemeral)
+
     /// The production transport: a real `URLSession` request/response.
     public static let liveTransport: Transport = { method, url, body in
         var request = URLRequest(url: url)
@@ -583,7 +590,7 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         // minute of the user's turn for one blocked main thread. The turn-STARTING
         // requests keep the default, since retrying one of those would start two turns.
         if url.path.hasSuffix("/agent/result") { request.timeoutInterval = 10 }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         return RemoteAutomationHTTPResponse(statusCode: status, body: data)
     }
