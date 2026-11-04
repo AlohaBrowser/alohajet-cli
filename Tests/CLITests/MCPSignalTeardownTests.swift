@@ -112,6 +112,12 @@ struct MCPSignalTeardownTests {
             }
         }
         environment["TMPDIR"] = browserTemp.path
+        // A home of its own (see `runCLI`): with the real one the CLI kept its HTTP storage
+        // in the user's `~/Library/HTTPStorages/alohajet` (measured).
+        let home = sandbox.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        environment["HOME"] = home.path
+        environment["CFFIXED_USER_HOME"] = home.path
         for key in ["BASH_ENV", "ENV", "ZDOTDIR"] { environment.removeValue(forKey: key) }
         // exec preserves the actual browser PID/signals. Redirect at its owned launch
         // boundary so production cleanup cannot unlink the sole diagnostic copy.

@@ -57,6 +57,11 @@ struct RunOutput {
 /// developer happens to have open — and, worse, could leave one behind. With a private
 /// TMPDIR every case below is one that fails before any browser is reached.
 ///
+/// `HOME` / `CFFIXED_USER_HOME` too: the binary is no test process (``HostAppIdentity``
+/// cannot tell it apart from the user's `alohajet`), so with the real home it kept its URL
+/// cache and cookies in the user's `~/Library/Caches/alohajet` and `HTTPStorages/alohajet`
+/// (measured), and would read the user's `~/.alohajet` and `Application Support/Aloha`.
+///
 /// FILES, NOT PIPES, for all three streams. Pipes cost two things this suite cannot
 /// pay: a reader per stream (a child that fills one 64K pipe buffer while the test
 /// blocks on the other deadlocks), and `FileHandle.write` — which on Linux is a `try!`
@@ -86,6 +91,8 @@ func runCLI(
     process.arguments = arguments
     var environment = ProcessInfo.processInfo.environment
     environment["TMPDIR"] = sandbox.path
+    environment["HOME"] = sandbox.path
+    environment["CFFIXED_USER_HOME"] = sandbox.path
     // The overlay LAST, and it is how the agent cases pin `ALOHAJET_AGENT_TOKEN`: the
     // developer running this suite has a real one on disk, and a test must neither
     // depend on it nor hand it to a stub.
