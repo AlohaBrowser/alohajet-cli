@@ -319,6 +319,49 @@ struct AlohaAppLauncherTests {
             endpoint: endpoint, transport: transport(status: nil, into: Recorder())) == nil)
     }
 
+    // MARK: - The identity of the app the CLI ships in
+
+    /// A build with an identity of its own (desktop `jet-e2e`) is attached through its own
+    /// scheme and keeps its own home and token directory; a shipped one, or no app at all,
+    /// keeps `alohajet` and the shipped names.
+    @Test("the app's Info.plist names the attach scheme and the data suffix")
+    func hostAppIdentityFromInfoPlist() throws {
+        let app = FileManager.default.temporaryDirectory
+            .appendingPathComponent("HostAppIdentity-\(UUID().uuidString)/X.app")
+        try FileManager.default.createDirectory(
+            at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: app.deletingLastPathComponent()) }
+        func write(_ plist: [String: Any]) throws {
+            try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+                .write(to: app.appendingPathComponent("Contents/Info.plist"))
+        }
+        let urlTypes: (String) -> [[String: Any]] = { cli in [
+            ["CFBundleURLName": "com.alohabrowser.deeplink", "CFBundleURLSchemes": ["deeplink-first"]],
+            ["CFBundleURLName": "com.alohabrowser.cli", "CFBundleURLSchemes": [cli]],
+        ] }
+
+        try write(["CFBundleURLTypes": urlTypes("alohajet-e2e"), "AlohaDataSuffix": "e2e"])
+        var info = HostAppIdentity.appInfo(app: app.path)
+        #expect(HostAppIdentity.cliScheme(info: info) == "alohajet-e2e")
+        #expect(HostAppIdentity.dataSuffix(info: info) == "e2e")
+        #expect(HostAppIdentity.name(".alohajet", suffix: HostAppIdentity.dataSuffix(info: info)) == ".alohajet-e2e")
+
+        // The shipped jet: `alohajet`, and the empty suffix XcodeGen stamps is none.
+        try write(["CFBundleURLTypes": urlTypes("alohajet"), "AlohaDataSuffix": ""])
+        info = HostAppIdentity.appInfo(app: app.path)
+        #expect(HostAppIdentity.cliScheme(info: info) == "alohajet")
+        #expect(HostAppIdentity.dataSuffix(info: info) == nil)
+        #expect(HostAppIdentity.name("Aloha", suffix: nil) == "Aloha")
+
+        // An app from before the URL type was variant-driven, and no app at all.
+        try write([:])
+        #expect(HostAppIdentity.cliScheme(info: HostAppIdentity.appInfo(app: app.path)) == "alohajet")
+        #expect(HostAppIdentity.appInfo(app: nil) == nil)
+        #expect(HostAppIdentity.cliScheme(info: nil) == "alohajet")
+        // This test binary ships in no app.
+        #expect(AlohaAppLauncher.attachURL == "alohajet://attach")
+    }
+
     // MARK: - The one-shot launch token
 
     // What makes `--headless` govern exactly the launch that carried it: argv alone

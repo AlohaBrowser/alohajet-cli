@@ -110,8 +110,9 @@ public struct AlohaAppLauncher: Sendable {
     /// Production is ``liveTerminate``.
     public typealias Terminator = @Sendable (Set<Int32>) -> Void
 
-    /// The URL the app recognizes.
-    public nonisolated static let attachURL = "alohajet://attach"
+    /// The URL the app recognizes: `attach` under the CLI scheme of the app it is for
+    /// (``HostAppIdentity/cliScheme``), `alohajet://attach` for a shipped one.
+    public nonisolated static let attachURL = "\(HostAppIdentity.cliScheme)://attach"
 
     /// The one fixed port the app's `AutomationServer` binds; it is not configurable on
     /// either side, so a different port is a different server.
@@ -277,10 +278,12 @@ public struct AlohaAppLauncher: Sendable {
     /// saying why. This file exists only between `open` and the app reading it.
     ///
     /// It is the ONE thing this package writes into `~/.alohajet`, the app's own home:
-    /// the path is not a choice, it is the handshake the app defines.
+    /// the path is not a choice, it is the handshake the app defines. An app with an
+    /// identity of its own has its own home (``HostAppIdentity/name(_:suffix:)``).
     public nonisolated static var headlessLaunchTokenPath: String {
-        (FileManager.default.homeDirectoryForCurrentUser.path as NSString)
-            .appendingPathComponent(".alohajet/headless-launch")
+        ((FileManager.default.homeDirectoryForCurrentUser.path as NSString)
+            .appendingPathComponent(HostAppIdentity.name(".alohajet")) as NSString)
+            .appendingPathComponent("headless-launch")
     }
 
     private func writeLaunchToken() {

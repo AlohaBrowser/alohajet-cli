@@ -36,7 +36,8 @@ public nonisolated enum AutomationToken {
     public static let environmentVariable = "ALOHAJET_AGENT_TOKEN"
 
     /// `~/Library/Application Support/Aloha/automation-token` — where the Aloha
-    /// browser's automation server provisions the shared secret.
+    /// browser's automation server provisions the shared secret; `Aloha-<suffix>` for an
+    /// app with an identity of its own (``HostAppIdentity``), whose token is its alone.
     public static var defaultURL: URL {
         let base =
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -44,7 +45,7 @@ public nonisolated enum AutomationToken {
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
         return
             base
-            .appendingPathComponent("Aloha", isDirectory: true)
+            .appendingPathComponent(HostAppIdentity.name("Aloha"), isDirectory: true)
             .appendingPathComponent("automation-token")
     }
 
