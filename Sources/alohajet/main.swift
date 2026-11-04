@@ -1,4 +1,5 @@
 import Foundation
+import AgentDriver
 import BrowserTools
 import ToolABI
 
@@ -300,9 +301,11 @@ struct LaneState: Codable, Equatable {
 }
 
 /// `<tmp>/alohajet-<uid>/`: per-user (a shared `/tmp` must not hand one user's debug
-/// port to another) and cleared on reboot, like the browser it describes.
+/// port to another) and cleared on reboot, like the browser it describes. The CLI of an
+/// app with an identity of its own (``HostAppIdentity``, the desktop's jet-e2e) keeps
+/// `alohajet-<suffix>-<uid>/`: its lanes and browser are never the user's AlohaJet CLI's.
 let sharedStateDirectory = temporaryDirectory
-    .appendingPathComponent("alohajet-\(getuid())", isDirectory: true).path
+    .appendingPathComponent("\(HostAppIdentity.name("alohajet"))-\(getuid())", isDirectory: true).path
 let sharedStatePath = (sharedStateDirectory as NSString).appendingPathComponent("browser.json")
 
 var laneKey: String?
