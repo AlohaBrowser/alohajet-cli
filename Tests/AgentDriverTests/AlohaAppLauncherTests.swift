@@ -362,13 +362,29 @@ struct AlohaAppLauncherTests {
         #expect(AlohaAppLauncher.attachURL == "alohajet://attach")
     }
 
+    /// A test process keeps off every app's home, token and lane state, the user's
+    /// AlohaJet's included: `test`, over any app's own suffix; an app process is its own.
+    @Test("a test process is the test identity; an app process its Info.plist's")
+    func testProcessIsTheTestIdentity() {
+        #expect(HostAppIdentity.isTestProcess)
+        #expect(HostAppIdentity.dataSuffix == "test")
+        for info: [String: Any]? in [nil, [:], ["AlohaDataSuffix": "e2e"]] {
+            #expect(HostAppIdentity.dataSuffix(info: info, isTestProcess: true) == "test")
+        }
+        #expect(HostAppIdentity.dataSuffix(info: ["AlohaDataSuffix": "e2e"], isTestProcess: false) == "e2e")
+        #expect(HostAppIdentity.dataSuffix(info: ["AlohaDataSuffix": ""], isTestProcess: false) == nil)
+        #expect(HostAppIdentity.dataSuffix(info: nil, isTestProcess: false) == nil)
+        #expect(HostAppIdentity.name(".alohajet") == ".alohajet-test")
+        #expect(AutomationToken.defaultURL.deletingLastPathComponent().lastPathComponent == "Aloha-test")
+    }
+
     // MARK: - The one-shot launch token
 
     // What makes `--headless` govern exactly the launch that carried it: argv alone
     // outlives its launch, the token does not.
     @Test("the headless launch token exists for the launch and is gone after it")
     func launchTokenIsOneShot() async throws {
-        #expect(AlohaAppLauncher.headlessLaunchTokenPath.hasSuffix("/.alohajet/headless-launch"))
+        #expect(AlohaAppLauncher.headlessLaunchTokenPath.hasSuffix("/.alohajet-test/headless-launch"))  // a test process's own home
 
         nonisolated final class Observed: @unchecked Sendable { var presentAtOpen = false }
         let path = Self.scratchTokenPath()

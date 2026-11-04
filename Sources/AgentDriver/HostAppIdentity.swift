@@ -20,8 +20,25 @@ public nonisolated enum HostAppIdentity {
 
     /// The scheme of the app's ``cliURLTypeName`` URL type.
     public static let cliScheme = cliScheme(info: appInfo())
-    /// The app's ``dataSuffixKey``, nil for a shipped build.
-    public static let dataSuffix = dataSuffix(info: appInfo())
+    /// The suffix of a test process (`~/.alohajet-test`, `Aloha-test`, `alohajet-test-<uid>`).
+    public static let testSuffix = "test"
+
+    /// The app's ``dataSuffixKey``, nil for a shipped build; ``testSuffix`` in a test process.
+    public static let dataSuffix = dataSuffix(info: appInfo(), isTestProcess: isTestProcess)
+
+    /// XCTest or Swift Testing is loaded: `swift test`'s `xctest` and
+    /// `swiftpm-testing-helper`. No shipped binary links either; the environment could be
+    /// set on any launch, so it is no signal. Looked up by name: XCTest's `XCTestCase`
+    /// class, Swift Testing's C entry point (`swt_abiv0_getEntryPoint`, the one SwiftPM's
+    /// runner resolves). Off-Apple there is no user's app to keep off: false.
+    public static let isTestProcess: Bool = {
+        #if canImport(Darwin)
+        NSClassFromString("XCTestCase") != nil
+            || dlsym(UnsafeMutableRawPointer(bitPattern: -2), "swt_abiv0_getEntryPoint") != nil  // RTLD_DEFAULT
+        #else
+        false
+        #endif
+    }()
 
     /// `base`, or `base-<suffix>` for an app with a data suffix: `.alohajet-e2e`, `Aloha-e2e`.
     public static func name(_ base: String, suffix: String? = dataSuffix) -> String {
@@ -39,6 +56,11 @@ public nonisolated enum HostAppIdentity {
         let types = info?["CFBundleURLTypes"] as? [[String: Any]] ?? []
         let schemes = types.first { $0["CFBundleURLName"] as? String == cliURLTypeName }?["CFBundleURLSchemes"]
         return (schemes as? [String])?.first.flatMap { $0.isEmpty ? nil : $0 } ?? defaultCLIScheme
+    }
+
+    /// A test process is ``testSuffix`` whatever app it drives; else the app's own.
+    static func dataSuffix(info: [String: Any]?, isTestProcess: Bool) -> String? {
+        isTestProcess ? testSuffix : dataSuffix(info: info)
     }
 
     /// The empty string an XcodeGen substitution leaves for a shipped build is no suffix.
