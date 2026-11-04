@@ -132,6 +132,14 @@ private func withCheckBrowser<T>(_ body: (BrowserToolSession) async throws -> T)
         }
     }
 
+    @Test("a headless browser's command line says it is headless")
+    func headlessCommandLine() async throws {
+        try #require(checkBrowserIsAvailable, "no browser at \(checkBrowserPath)")
+        try await withCheckBrowser { session in
+            #expect(await browserStartedHeadless(session.client))
+        }
+    }
+
     @Test("the read of a Cloudflare challenge page names the check and who cannot complete it")
     func challengePageRead() async throws {
         try #require(checkBrowserIsAvailable, "no browser at \(checkBrowserPath)")

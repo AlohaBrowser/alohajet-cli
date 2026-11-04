@@ -201,6 +201,34 @@ private let turnstileFrame = "https://challenges.cloudflare.com/cdn-cgi/challeng
         #expect(await pending(tab, settle: 600) == PendingVerificationChecks(vendors: [.cloudflare], headless: true))
     }
 
+    @Test("a browser started headless is headless though its User-Agent does not say so")
+    func headlessByCommandLine() async throws {
+        let (cdp, tab) = try await checkedTab()
+        cdp.frameTargets = [("F-1", turnstileFrame)]
+        cdp.ownedFrameIds = ["F-1"]
+        cdp.verificationPageStates = [pageState(headless: false)]
+        cdp.browserCommandLine = "/opt/chrome/chrome --headless=new --remote-debugging-port=9222"
+            + " --user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko)"
+            + " Chrome/153.0.0.0 Safari/537.36 about:blank"
+
+        #expect(await pending(tab) == PendingVerificationChecks(vendors: [.cloudflare], headless: true))
+        let asked = cdp.commands(for: "SystemInfo.getInfo")
+        #expect(asked.count == 1)
+        #expect(asked.first?.sessionId == nil, "the command line was asked of the page, not of the browser")
+    }
+
+    @Test("a browser started with a window, or one that does not say, is not headless",
+          arguments: ["/opt/chrome/chrome --remote-debugging-port=9222 --user-data-dir=/tmp/not--headless about:blank", nil])
+    func windowedByCommandLine(_ commandLine: String?) async throws {
+        let (cdp, tab) = try await checkedTab()
+        cdp.frameTargets = [("F-1", turnstileFrame)]
+        cdp.ownedFrameIds = ["F-1"]
+        cdp.verificationPageStates = [pageState(headless: false)]
+        cdp.browserCommandLine = commandLine
+
+        #expect(await pending(tab) == PendingVerificationChecks(vendors: [.cloudflare], headless: false))
+    }
+
     @Test("a page that cannot be asked says nothing")
     func unaskablePage() async throws {
         let (cdp, tab) = try await checkedTab()

@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VerificationCheckNote.elsewhere`; the CLI's points at `alohajet -p` and the lane that
   completes checks. Tabs that conform to `PageReadRemediating` never carry the line.
 - The MCP server's `initialize` result carries `instructions` saying the same.
+- That read knows a headless browser by the `--headless` on the command line the browser
+  reports, so a User-Agent override no longer makes it say a person at the window can
+  complete the check.
 - `AlohaJetAgent` builds on macOS too, finds this executable through `_NSGetExecutablePath`
   there, and `installation()` tells an empty place beside `alohajet` from an agent that
   is there but cannot run.

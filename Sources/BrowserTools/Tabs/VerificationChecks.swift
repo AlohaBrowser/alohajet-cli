@@ -195,6 +195,24 @@ extension CDPTabHandle: VerificationCheckReporting {
             state = next
             vendors = pending(next)
         }
-        return PendingVerificationChecks(vendors: vendors, headless: state["headless"]?.boolValue == true)
+        var headless = state["headless"]?.boolValue == true
+        if !headless { headless = await browserStartedHeadless(client) }
+        return PendingVerificationChecks(vendors: vendors, headless: headless)
     }
+}
+
+/// Whether the browser behind `client` was started headless, by the command line
+/// `SystemInfo.getInfo` reports. A page sees it only in a User-Agent that still says
+/// HeadlessChrome, and a `--user-agent` on that command line takes it out.
+/// `false` when the browser does not say: one without the domain, or a page-level connection.
+@MainActor func browserStartedHeadless(_ client: CDPClient) async -> Bool {
+    let info = try? await withCDPDeadline(milliseconds: 1_000) {
+        try await client.send(method: "SystemInfo.getInfo", params: [:])
+    }
+    return info?["commandLine"]?.stringValue.map(commandLineStartsHeadless) ?? false
+}
+
+/// Whether a browser command line, as Chrome joins it with spaces, carries `--headless`.
+nonisolated func commandLineStartsHeadless(_ commandLine: String) -> Bool {
+    commandLine.split(whereSeparator: \.isWhitespace).contains { $0 == "--headless" || $0.hasPrefix("--headless=") }
 }

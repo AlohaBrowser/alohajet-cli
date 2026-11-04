@@ -289,7 +289,8 @@ browser: alohajet -p, or alohajet mcp --endpoint <url> to the Aloha browser for 
 
 A browser with a window (`--no-headless`, or `--cdp` to one on someone's screen) gets "a
 person at this browser's window can complete it: ask your user to, then read the tab again"
-instead. The last sentence is the CLI's; on Linux it points at `alohajet-agent`. A check is
+instead. A browser is headless when the command line it reports (`SystemInfo.getInfo`)
+carries `--headless`, or when its User-Agent says HeadlessChrome. The last sentence is the CLI's; on Linux it points at `alohajet-agent`. A check is
 recognised by the public host its frame comes from — `challenges.cloudflare.com`,
 `/recaptcha/…/anchor` on Google or recaptcha.net (not an invisible one), the checkbox frame
 of `*.hcaptcha.com`, `*.mtcaptcha.com` — or by Cloudflare's challenge page, and is completed
@@ -727,9 +728,7 @@ nothing deletes these files.
 **The launched Chromium advertises itself as HeadlessChrome.** Its User-Agent is
 `...HeadlessChrome/152.0.0.0 Safari/537.36`, so a site that gates on it will refuse the
 default lane. `ALOHAJET_CHROME_USER_AGENT` is one workaround; `--cdp` against a normal
-browser is the other. The User-Agent is also how a read tells that nobody can see the
-browser: with the override set, a [verification check](#verification-checks) in a
-headless browser is reported as one a person at its window can complete.
+browser is the other.
 
 **Screenshots are MCP-only and opt-in.** `include_screenshot: true` costs a capture
 round-trip and image tokens on every read, so it is off by default. The CLI cannot show you

@@ -145,6 +145,10 @@ final class MockCDP {
     /// page body.
     var verificationPageStates: [JSValue] = []
 
+    /// The command line `SystemInfo.getInfo` reports the browser was started with. `nil` keeps
+    /// the bare `{}` reply, as from a browser that does not say.
+    var browserCommandLine: String?
+
     private struct FakeTarget {
         var targetId: String
         var url: String
@@ -395,6 +399,9 @@ final class MockCDP {
                 ])
             }
             return .object([("targetInfos", .array(infos + frames))])
+
+        case "SystemInfo.getInfo":
+            return .object(browserCommandLine.map { [("commandLine", .string($0))] } ?? [])
 
         case "DOM.getFrameOwner":
             return .object([("backendNodeId", .number(7))])
