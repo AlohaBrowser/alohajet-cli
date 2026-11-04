@@ -19,13 +19,13 @@ public var urlFileProtocolReason: String {
     return base + " Use \(reader) with the absolute path instead."
 }
 
-public func urlBadProtocolReason(_ proto: String) -> String {
+nonisolated public func urlBadProtocolReason(_ proto: String) -> String {
     "URL not allowed: only http and https URLs can be opened via browser tools (got \(proto))."
 }
 
 public let urlCredentialsReason = "URL not allowed: URLs containing 'user:password@' are rejected."
 
-public let urlMalformedReason = "URL not allowed: malformed or oversized URL."
+nonisolated public let urlMalformedReason = "URL not allowed: malformed or oversized URL."
 
 /// The address of a blank tab: a new tab before its first page, and the desktop's start page.
 let blankTabUrl = "about:blank"
