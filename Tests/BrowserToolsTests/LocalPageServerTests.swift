@@ -15,4 +15,18 @@ import Testing
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
         #expect(String(decoding: data, as: UTF8.self).contains("SERVED-OK"))
     }
+
+    /// A form posted to the fixture is answered with the page, not a reset connection.
+    @Test func answersAPostAfterReadingItsWholeBody() async throws {
+        let server = LocalPageServer(html: "<html><body>SERVED-OK</body></html>")
+        try server.start()
+        defer { server.stop() }
+        var request = URLRequest(url: try #require(URL(string: server.url)))
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data(repeating: UInt8(ascii: "a"), count: 512 * 1024)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        #expect(String(decoding: data, as: UTF8.self).contains("SERVED-OK"))
+    }
 }

@@ -98,6 +98,20 @@ private let valueAttributeFixtureHTML = """
 </body></html>
 """
 
+/// A form that posts to its own address: submitting it loads a new document at the URL the
+/// page was already on.
+private let samePageFormFixtureHTML = """
+<!doctype html>
+<html><head><title>Same Page Form Fixture</title></head>
+<body>
+  <h1>Same Page Form Fixture</h1>
+  <form method="post" action="/">
+    <input name="note" value="kept" aria-label="Note">
+    <button id="go" type="submit">Create</button>
+  </form>
+</body></html>
+"""
+
 /// Runs `body` against a freshly launched headless browser and shuts that browser down
 /// before returning, on the throwing path too.
 ///
@@ -396,6 +410,28 @@ struct RealBrowserE2ETests {
             let all = receipts.joined(separator: "\n")
             #expect(all.contains("[text=\"Search the shop\"]"), "the search box is named by its placeholder:\n\(all)")
             #expect(all.contains("[text=\"Go\"]"), "a submit input is named by its value:\n\(all)")
+        }
+    }
+
+    /// The submit lands on a new document at the same address. A receipt that judged by the URL
+    /// alone said "The page did NOT navigate" about every such form.
+    @Test func aFormPostedToItsOwnAddressIsANewPageNotAStandstill() async throws {
+        try #require(browserIsAvailable)
+
+        let server = LocalPageServer(html: samePageFormFixtureHTML)
+        try server.start()
+        defer { server.stop() }
+
+        try await withHeadlessBrowser { session in
+            let opened = await session.run("manage_tabs", arguments: ["action": "open", "url": server.url])
+            #expect(opened.isError != true, "open failed: \(opened.output)")
+            let ref = try #require(alohaId(forLabel: "Create", in: opened.output),
+                                   "the submit button carried no aloha-id:\n\(opened.output)")
+
+            let clicked = await session.run("page_click", arguments: ["aloha_id": ref])
+            #expect(clicked.isError != true, "click failed: \(clicked.output)")
+            #expect(clicked.output.contains("A new page loaded at the same URL \(server.url)"), "\(clicked.output)")
+            #expect(!clicked.output.contains("did NOT navigate"), "\(clicked.output)")
         }
     }
 

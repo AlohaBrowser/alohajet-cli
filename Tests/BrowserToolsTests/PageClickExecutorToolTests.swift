@@ -237,6 +237,19 @@ struct PageClickExecutorToolTests {
         #expect(result.output.contains("did NOT navigate"))
     }
 
+    /// A submit to the form's own address: same URL, new document.
+    @Test func receiptSaysANewPageLoadedWhenTheDocumentChangedAtTheSameUrl() {
+        let route = PageClickExecutorTool.route(for: "single")!
+        let succeeded = AgentActionResult(
+            output: "Code executed successfully.", isError: false,
+            pendingResults: [PendingResult(type: "click", success: true, error: nil)])
+        let result = PageClickExecutorTool.interpret(
+            succeeded, route: route, alohaId: "2s", clickType: "single",
+            urlBefore: "http://host/a", urlAfter: "http://host/a", newDocument: true)
+        #expect(result.output.contains("A new page loaded at the same URL http://host/a"))
+        #expect(!result.output.contains("did NOT navigate"))
+    }
+
 }
 
 // MARK: - The runner script must not ask the page to compile a string

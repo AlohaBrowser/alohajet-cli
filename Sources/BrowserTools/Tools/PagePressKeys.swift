@@ -36,6 +36,7 @@ import ToolABI
             let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             // Two URL reads bracket the action so the receipt can say whether the page moved.
             let urlBefore = bridge.currentPageURL()
+            let generationBefore = await bridge.documentGeneration()
             // Which element the keys go into, in replayable terms, resolved BEFORE the keys: a
             // submit can replace the whole document, and the focused node with it.
             let focused = await bridge.focusedElementAlohaId()
@@ -47,20 +48,21 @@ import ToolABI
             if result.isError {
                 return resolved.tab.naming(RawToolResult(output: result.output, isError: true))
             }
-            let urlAfter = await bridge.settledPageURL(after: urlBefore)
+            let settled = await bridge.settledPage(after: urlBefore, generationBefore: generationBefore)
             return resolved.tab.naming(RawToolResult(
-                output: Self.receipt(keys: keys, focusedAlohaId: focused, urlBefore: urlBefore, urlAfter: urlAfter, selectorNote: selectorNote),
+                output: Self.receipt(keys: keys, focusedAlohaId: focused, urlBefore: urlBefore, urlAfter: settled.url,
+                                     newDocument: settled.newDocument, selectorNote: selectorNote),
                 isError: nil))
         }
     }
 
     /// The receipt line, from what was read around the key press. Pure, so a test can hold it
     /// to the shape without a browser.
-    static func receipt(keys: String, focusedAlohaId: String?, urlBefore: String, urlAfter: String, selectorNote: String) -> String {
+    static func receipt(keys: String, focusedAlohaId: String?, urlBefore: String, urlAfter: String, newDocument: Bool = false, selectorNote: String) -> String {
         let target = focusedAlohaId.map { " in element \"\($0)\"" } ?? " (nothing on the page had focus)"
         let submitted = focusedAlohaId != nil && submitsForm(keys) ? PageToolReceipt.submittedNote : ""
         return "Pressed \"\(keys)\"\(target)."
-            + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+            + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter, newDocument: newDocument)
             + (focusedAlohaId == nil ? "" : selectorNote)
             + submitted
     }

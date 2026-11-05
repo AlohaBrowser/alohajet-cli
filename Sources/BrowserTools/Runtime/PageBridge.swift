@@ -692,7 +692,7 @@ public final class AgentBrowserBridge {
     /// costs one `querySelectorAll` and a loop -- no DOM walk, no serialization. Shadow roots and
     /// same-origin frames are not pierced by `querySelectorAll`; ids stamped inside them are
     /// covered only by the count, which is the known limit of this probe. `__alohaDocGeneration`
-    /// is kept in the string for hosts whose page runtime seeds it; this package's does not.
+    /// is seeded by the DOM walk (``documentGeneration()``).
     ///
     /// Deliberately NOT a hash of the markdown: producing that is the DOM walk this exists to skip.
     /// Returns nil when the page cannot answer; `pageMoved` treats a nil on either side as
@@ -759,25 +759,66 @@ public final class AgentBrowserBridge {
     /// cached `session.url` it used to poll is never written by a click, so the exit could not fire
     /// and every receipt said "did NOT navigate". Costs one CDP evaluate per 50ms tick; a click that
     /// really did not move the page pays the 250ms window once, as before.
-    func settledPageURL(after urlBefore: String, graceMs: Double = 250,
-                        pollMs: UInt64 = 50) async -> String {
+    ///
+    /// A NEW DOCUMENT AT THE SAME URL MOVED TOO. A form posted to its own address commits a new
+    /// document whose href is the one it left, so a poll on the href alone ran out the window and
+    /// the receipt said "did NOT navigate" about every such submit (measured: every same-URL POST
+    /// form across a run's transcripts, 39 receipts). With `generationBefore` — the
+    /// ``documentGeneration()`` read before the action — each tick also asks for the generation:
+    /// a different one, or none (a new window that has not been walked), is a new document. An
+    /// empty `generationBefore` (a page never walked) is never judged, and a generation read
+    /// that fails is no answer either.
+    func settledPage(after urlBefore: String, generationBefore: String, graceMs: Double = 250,
+                     pollMs: UInt64 = 50) async -> SettledPage {
         let deadline = Date().addingTimeInterval(graceMs / 1000)
         while Date() < deadline {
             if backend.isAborted { break }
             guard let now = await liveURL() else {
                 // The context died under the read: a navigation is committing. Wait for the new
                 // document rather than reporting the page it is leaving.
-                if let settled = await settleAfterNavigationRace(), settled != urlBefore { return settled }
+                if let settled = await settleAfterNavigationRace() {
+                    let replaced = await documentReplaced(since: generationBefore)
+                    if settled != urlBefore || replaced { return SettledPage(url: settled, newDocument: replaced) }
+                }
                 continue
             }
             if now != urlBefore {
                 // It moved. Let the new document commit before naming it, so the receipt does not
                 // report a URL the page is still leaving.
-                return await settleAfterNavigationRace() ?? now
+                let settled = await settleAfterNavigationRace() ?? now
+                return SettledPage(url: settled, newDocument: await documentReplaced(since: generationBefore))
+            }
+            if await documentReplaced(since: generationBefore) {
+                return SettledPage(url: await settleAfterNavigationRace() ?? now, newDocument: true)
             }
             try? await Task.sleep(nanoseconds: pollMs * 1_000_000)
         }
-        return await liveURL() ?? backend.currentURL()
+        let url = await liveURL() ?? backend.currentURL()
+        return SettledPage(url: url, newDocument: await documentReplaced(since: generationBefore))
+    }
+
+    /// ``settledPage(after:generationBefore:graceMs:pollMs:)`` judged by the URL alone.
+    func settledPageURL(after urlBefore: String, graceMs: Double = 250,
+                        pollMs: UInt64 = 50) async -> String {
+        await settledPage(after: urlBefore, generationBefore: "", graceMs: graceMs, pollMs: pollMs).url
+    }
+
+    /// The expression ``documentGeneration()`` evaluates, a constant so a test backend can answer it.
+    static let documentGenerationExpression = #"String(window.__alohaDocGeneration || "")"#
+
+    /// The generation the DOM walk minted for the document now in the tab (`DomTreeScript`'s
+    /// `documentGeneration`): one per window, rotated when the href it was minted for changes.
+    /// "" when the document has not been walked, or did not answer.
+    func documentGeneration() async -> String { await liveDocumentGeneration() ?? "" }
+
+    private func liveDocumentGeneration() async -> String? {
+        guard let value = try? await backend.evaluateViaCdp(Self.documentGenerationExpression) else { return nil }
+        return value.stringValue
+    }
+
+    private func documentReplaced(since generationBefore: String) async -> Bool {
+        guard !generationBefore.isEmpty, let now = await liveDocumentGeneration() else { return false }
+        return now != generationBefore
     }
 
     func settleAfterNavigationRace(timeoutMs: Double = 6000, pollMs: UInt64 = 150) async -> String? {
@@ -1994,4 +2035,10 @@ public final class AgentBrowserBridge {
             return AgentActionResult(output: "page_wait_for failed: \(errorMessage(error))", isError: true)
         }
     }
+}
+
+/// Where an action left the page: its URL, and whether a new document loaded there.
+struct SettledPage: Equatable {
+    var url: String
+    var newDocument: Bool
 }
