@@ -104,12 +104,12 @@ nonisolated final class MCPHoldingStub: @unchecked Sendable {
         }
     }
 
-    /// Polls `predicate` until it holds or `seconds` pass.
-    func wait(within seconds: TimeInterval, until predicate: () -> Bool) -> Bool {
+    /// Polls `predicate` until it holds or `seconds` pass, suspended between polls.
+    func wait(within seconds: TimeInterval, until predicate: () -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while !predicate() {
             if Date() >= deadline { return false }
-            Thread.sleep(forTimeInterval: 0.01)
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
         return true
     }

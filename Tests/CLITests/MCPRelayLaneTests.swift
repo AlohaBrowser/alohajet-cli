@@ -251,7 +251,7 @@ struct MCPRelayLaneTests {
     ///
     /// stdin stays open until the answer is in: closed, it would end the call two seconds
     /// later, and the test would pass without the call ever outliving the timer.
-    @Test func aCallSlowerThanTheDefaultTimeoutDoesNotEndTheSession() throws {
+    @Test func aCallSlowerThanTheDefaultTimeoutDoesNotEndTheSession() async throws {
         let stub = AgentStubServer(hold: 62)
         try stub.start()
         defer { stub.stop() }
@@ -259,10 +259,10 @@ struct MCPRelayLaneTests {
         defer { relay.finish() }
 
         relay.send(Self.toolsCall.trimmingCharacters(in: .newlines))
-        let answer = relay.reply(1, within: 180)
+        let answer = await relay.reply(1, within: 180)
         #expect(answer?["result"] != nil, "no answer to the slow call: \(relay.stderr)")
         relay.closeInput()
-        #expect(relay.exitStatus(within: 10) == 0, "\(relay.stderr)")
+        #expect(await relay.exitStatus(within: 10) == 0, "\(relay.stderr)")
         #expect(!relay.stderr.contains("timed out"), "\(relay.stderr)")
     }
 

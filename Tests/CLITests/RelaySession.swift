@@ -126,22 +126,25 @@ nonisolated final class RelaySession: @unchecked Sendable {
             .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
     }
 
-    func reply(_ id: Int, within seconds: TimeInterval) -> [String: Any]? {
+    /// The waits below suspend rather than sleep: a test blocked on a child process must not
+    /// hold one of the few threads every async test in the run shares.
+    func reply(_ id: Int, within seconds: TimeInterval) async -> [String: Any]? {
         let deadline = Date().addingTimeInterval(seconds)
         repeat {
             if let reply = replies.first(where: { $0["id"] as? Int == id }) { return reply }
-            Thread.sleep(forTimeInterval: 0.01)
+            try? await Task.sleep(nanoseconds: 10_000_000)
         } while Date() < deadline
         return nil
     }
 
     /// The exit status, once the relay has exited by itself within `seconds`; `nil` while it
     /// runs. Polled: `waitUntilExit` cannot give up, and a relay that never ends is the defect.
-    func exitStatus(within seconds: TimeInterval) -> Int32? {
+    /// A signal's death reads as the negated signal number.
+    func exitStatus(within seconds: TimeInterval) async -> Int32? {
         let deadline = Date().addingTimeInterval(seconds)
         while process.isRunning {
             if Date() >= deadline { return nil }
-            Thread.sleep(forTimeInterval: 0.02)
+            try? await Task.sleep(nanoseconds: 20_000_000)
         }
         return process.terminationReason == .exit ? process.terminationStatus : -process.terminationStatus
     }
@@ -151,7 +154,9 @@ nonisolated final class RelaySession: @unchecked Sendable {
         closeInput()
         if process.isRunning {
             process.terminate()
-            if exitStatus(within: 5) == nil { kill(process.processIdentifier, SIGKILL) }
+            let deadline = Date().addingTimeInterval(5)
+            while process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
         try? FileManager.default.removeItem(at: sandbox)
     }
