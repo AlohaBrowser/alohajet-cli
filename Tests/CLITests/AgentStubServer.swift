@@ -32,6 +32,7 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     static let termsUrl = "https://example.com/terms"
     static let privacyUrl = "https://example.com/privacy"
     static let mcpSession = "fixture-mcp-session"
+    static let questionPrompt = "Shall I hand the check to you?"
 
     private var listenFD: Int32 = -1
     private let lock = NSLock()
@@ -45,6 +46,9 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     /// The final answer `/agent/result` reports.
     let finalText: String
     let termsAnswerableInApp: Bool?
+    /// How many `/agent/result` polls report the agent waiting on a question in the browser
+    /// before the turn is done.
+    let pendingQuestionPolls: Int
     /// Seconds to sit on a request before answering it — a browser taking its time over
     /// one tool call, which must not be mistaken for a browser that has gone away.
     let hold: TimeInterval
@@ -59,12 +63,13 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     var paths: [String] { requests.map(\.path) }
 
     init(protocolVersion: Int = 1, finalText: String = "Four.", ranOverride: String? = nil,
-         termsAnswerableInApp: Bool? = nil, hold: TimeInterval = 0,
+         termsAnswerableInApp: Bool? = nil, pendingQuestionPolls: Int = 0, hold: TimeInterval = 0,
          port: UInt16 = 0, mcpToken: String? = nil) {
         self.protocolVersion = protocolVersion
         self.finalText = finalText
         self.ranOverride = ranOverride
         self.termsAnswerableInApp = termsAnswerableInApp
+        self.pendingQuestionPolls = pendingQuestionPolls
         self.hold = hold
         self.requestedPort = port
         self.mcpToken = mcpToken
@@ -203,6 +208,9 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
             return (200, #"{"ok":true}"#)
         case ("/agent/result", _):
             let done = #"{"state":"done","result":{"finalText":\#(JSONSerialization.escaped(finalText)),"completion":"end_turn"}}"#
+            if requests(path: "/agent/result").count <= pendingQuestionPolls {
+                return (200, #"{"state":"running","result":null,"pendingQuestion":{"id":"A-1","kind":"question","prompt":\#(JSONSerialization.escaped(Self.questionPrompt)),"options":["Let me take over","Cancel"],"answerableInApp":true}}"#)
+            }
             guard let answerable = termsAnswerableInApp else { return (200, done) }
             if let reply = requests(path: "/agent/terms").last {
                 let accepted = (try? JSONSerialization.jsonObject(with: Data(reply.body.utf8)))
