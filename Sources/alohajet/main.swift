@@ -342,7 +342,8 @@ func laneKeyFor(_ args: Args) -> String? {
 /// else a Chrome for Testing build downloaded once and cached. The download is the last
 /// resort and it is announced, because it is ~150 MB the user did not ask for. Where Chrome
 /// for Testing has no build (Windows on ARM) nothing is downloaded: a Chromium installed here
-/// (`CHROME_PATH`, else `chromium` on `PATH`), or an error that says how to name one.
+/// (`CHROME_PATH`, else `chromium` on `PATH`, else the system Chrome), or an error that says
+/// how to name one.
 func provisionedExecutablePath() async throws -> String {
     let provisioner = try ChromiumProvisioner(
         browserPath: ProcessInfo.processInfo.environment["ALOHAJET_BROWSER"],

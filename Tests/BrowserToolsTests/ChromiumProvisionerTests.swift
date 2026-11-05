@@ -416,6 +416,27 @@ private let noChromeForTesting = ChromiumBuildTable(version: ChromiumBuildTable.
     #expect(downloader.callCount == 0)
 }
 
+/// Windows on ARM: its PATH is not the POSIX one the lookup reads, so a Chrome installed where
+/// Chrome installs is found as the system Chrome — after anything CHROME_PATH or PATH names.
+@Test func withoutChromeForTestingTheSystemChromeRuns() async throws {
+    let probe = ScriptedProbe()
+    probe.add("/system/chrome")
+    func provisioner(_ environment: [String: String]) throws -> ChromiumProvisioner {
+        try ChromiumProvisioner(
+            cacheRoot: "/cache",
+            platformKey: .linuxX64,
+            buildTable: noChromeForTesting,
+            systemDefaultPath: "/system/chrome",
+            environment: environment,
+            download: CountingDownloader().make(),
+            extract: RecordingExtractor().make(),
+            executableExists: probe.make())
+    }
+    #expect(try await provisioner([:]).resolveExecutablePath() == "/system/chrome")
+    probe.add("/usr/bin/chromium")
+    #expect(try await provisioner(["PATH": "/usr/bin"]).resolveExecutablePath() == "/usr/bin/chromium")
+}
+
 @Test func withoutChromeForTestingOrAChromiumTheErrorSaysHowToNameOne() async throws {
     let downloader = CountingDownloader()
     let p = try ChromiumProvisioner(

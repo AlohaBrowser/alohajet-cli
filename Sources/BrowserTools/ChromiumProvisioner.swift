@@ -208,8 +208,8 @@ public enum ChromiumProvisionerError: Error, Equatable, Sendable, CustomStringCo
 ///   4. trigger a download (fetch → extract → stage) and return the staged path.
 ///
 /// Where Chrome-for-Testing publishes no build (Windows on ARM: `platformKey` is `nil`) there is
-/// nothing to cache or download, so 2–4 do not apply: after 1 comes
-/// ``installedChromiumPath(environment:isExecutable:)``, and with nothing installed
+/// nothing to cache or download, so 2 and 4 do not apply: after 1 comes
+/// ``installedChromiumPath(environment:isExecutable:)``, then 3, and with nothing installed
 /// ``ChromiumProvisionerError/noChromiumForPlatform(_:)``, which says how to name a browser.
 @MainActor
 public final class ChromiumProvisioner {
@@ -324,6 +324,11 @@ public final class ChromiumProvisioner {
         guard let staged = stagedExecutablePath(), let platformKey, buildTable.builds[platformKey] != nil else {
             if let installed = try installedChromiumPath(environment: environment, isExecutable: { executableExists($0) }) {
                 return installed
+            }
+            // Step 3 still applies: on Windows, where the PATH lookup finds nothing, it is how a
+            // Chrome installed where Chrome installs is found.
+            if executableExists(systemDefaultPath) {
+                return systemDefaultPath
             }
             throw ChromiumProvisionerError.noChromiumForPlatform(platformName)
         }
