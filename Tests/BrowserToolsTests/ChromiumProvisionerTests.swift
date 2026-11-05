@@ -1,5 +1,8 @@
 import Testing
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 @testable import BrowserTools
 
 // Unit tests for `ChromiumProvisioner`. Every test injects a FAKE downloader and
