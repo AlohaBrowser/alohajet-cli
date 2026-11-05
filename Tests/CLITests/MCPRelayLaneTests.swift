@@ -97,19 +97,20 @@ struct MCPRelayLaneTests {
     /// The CLI an e2e build ships (`AlohaDataSuffix` e2e in its app's Info.plist) relays to ITS
     /// app's port, 8865: on 8765 it would meet the user's AlohaJet, and the user's own relay
     /// (Claude Desktop's `alohajet mcp --endpoint http://127.0.0.1:8765`) would meet the e2e app.
+    ///
+    /// Read off the binary, not off a listener: an e2e app running beside this suite owns
+    /// 8865. `mcp-stdio` relays to `AlohaAppLauncher.defaultEndpoint`, the endpoint its help
+    /// names — the `legacy-default` case above pins that it dials it.
     @Test func theCLIOfAnE2EBuildRelaysToItsOwnAppsPort() throws {
         let sandbox = try RelaySandbox()
         defer { sandbox.remove() }
-        let stub = AgentStubServer(port: 8865, mcpToken: sandbox.token)
-        try stub.start() // If 8865 is busy, fail before contacting its existing owner.
-        defer { stub.stop() }
         var environment = sandbox.environment
-        environment["ALOHA_BROWSER_APP"] = try sandbox.app(dataSuffix: "e2e")
-        let initialize = #"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"e2e-port","version":"1"}}}"#
-        let run = try runCLI(["mcp-stdio"], stdin: initialize + "\n", environment: environment, timeout: 30)
-        #expect(run.status == 0, "\(run.combined)")
-        #expect(stub.requests.count == 1)
-        #expect(stub.requests.first?.path == "/mcp")
+        for (suffix, endpoint) in [("e2e", "http://127.0.0.1:8865"), ("test", "http://127.0.0.1:8965")] {
+            environment["ALOHA_BROWSER_APP"] = try sandbox.app(dataSuffix: suffix)
+            let run = try runCLI(["mcp-stdio", "--help"], environment: environment)
+            #expect(run.status == 0, "\(run.combined)")
+            #expect(run.stdout.contains("Default endpoint: \(endpoint)."), "\(suffix): \(run.stdout)")
+        }
     }
 
     @Test("an unauthorized relay never falls back to standalone MCP", arguments: ["mcp", "mcp-stdio"])
