@@ -84,15 +84,19 @@ public struct AlohaBrowser: Sendable {
         self.attempts = attempts
     }
 
-    /// The port to look on: `ALOHA_CDP_PORT` when it names a real one, else 9222.
-    /// Anything missing, non-numeric or out of range falls back rather than failing —
-    /// the same rule the browser applies to the same variable, so the two agree.
+    /// The port to look on: `ALOHA_CDP_PORT` when it names a real one, else `fallback` —
+    /// 9222, or the port of the app this CLI drives when it has an identity of its own
+    /// (the CLI passes `HostAppIdentity.port(defaultPort)`: 9322 for the desktop's
+    /// jet-e2e; `BrowserTools` does not link `AgentDriver`). Anything missing, non-numeric
+    /// or out of range falls back rather than failing — the same rule the browser applies
+    /// to the same variable, so the two agree.
     public nonisolated static func port(
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fallback: Int = defaultPort
     ) -> Int {
         guard let raw = environment[portEnvKey], let value = Int(raw),
               (1...65535).contains(value)
-        else { return defaultPort }
+        else { return fallback }
         return value
     }
 

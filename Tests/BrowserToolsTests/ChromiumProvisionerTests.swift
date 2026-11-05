@@ -119,6 +119,26 @@ struct ChromiumProvisionerTests {
     #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/win64/chrome-win64.zip")
 }
 
+// MARK: - Where the download goes, and through what
+
+/// The download keeps nothing on disk but the staged archive: `.shared`, in the bare `alohajet`
+/// executable, keeps its cache and HTTP storage in `~/Library/Caches/alohajet` and
+/// `HTTPStorages/alohajet`, one pair for every app's copy of the CLI.
+@Test func theDownloadSessionPersistsNothing() {
+    let configuration = ChromiumProvisioner.downloadSession.configuration
+    #expect((configuration.urlCache?.diskCapacity ?? 0) == 0)
+    #expect(configuration.httpCookieStorage !== HTTPCookieStorage.shared)
+    #expect(configuration.urlCredentialStorage !== URLCredentialStorage.shared)
+}
+
+/// The CLI of an app with an identity of its own stages under that app's directory
+/// (`AlohaJet-e2e`); the default, a shipped app's, is unchanged.
+@Test func theCacheRootIsTheAppsOwnDirectory() {
+    #expect(ChromiumProvisioner.defaultCacheRoot().hasSuffix("/AlohaJet/chrome-for-testing"))
+    #expect(ChromiumProvisioner.defaultCacheRoot(appDirectory: "AlohaJet-e2e")
+        .hasSuffix("/AlohaJet-e2e/chrome-for-testing"))
+}
+
 // MARK: - (d) Extract / staged-path computation
 
 @Test func computesStagedExecutablePathPerPlatform() throws {

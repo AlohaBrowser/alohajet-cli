@@ -244,7 +244,7 @@ struct AlohaAppLauncherTests {
 
         let message = AlohaAppLaunchError
             .notReachable(endpoint: endpoint.absoluteString, seconds: 30).description
-        #expect(message.contains("http://127.0.0.1:8765"))
+        #expect(message.contains("http://127.0.0.1:8965"))
         #expect(message.contains("after 30s"))
         #expect(message.contains("Settings"))
     }
@@ -256,12 +256,14 @@ struct AlohaAppLauncherTests {
     // pay a 30s wait for an app that was never going to serve it.
     @Test("only the local app's own endpoint is launched; anything else is left alone")
     func onlyTheLocalAppIsLaunched() async throws {
-        #expect(AlohaAppLauncher.defaultEndpoint == "http://127.0.0.1:8765")
+        // A test process is the test identity: its app's port is 8965, not the shipped 8765.
+        #expect(AlohaAppLauncher.defaultEndpoint == "http://127.0.0.1:8965")
         #expect(AlohaAppLauncher.servesLocalApp(endpoint))
-        #expect(AlohaAppLauncher.servesLocalApp(URL(string: "http://localhost:8765")!))
-        #expect(AlohaAppLauncher.servesLocalApp(URL(string: "http://[::1]:8765")!))
+        #expect(AlohaAppLauncher.servesLocalApp(URL(string: "http://localhost:8965")!))
+        #expect(AlohaAppLauncher.servesLocalApp(URL(string: "http://[::1]:8965")!))
+        #expect(!AlohaAppLauncher.servesLocalApp(URL(string: "http://127.0.0.1:8765")!), "the user's AlohaJet's")
         #expect(!AlohaAppLauncher.servesLocalApp(URL(string: "http://127.0.0.1:49152")!))
-        #expect(!AlohaAppLauncher.servesLocalApp(URL(string: "https://agents.example.com:8765")!))
+        #expect(!AlohaAppLauncher.servesLocalApp(URL(string: "https://agents.example.com:8965")!))
 
         let open = OpenSpy()
         let probe = ProbeSpy()
@@ -304,7 +306,7 @@ struct AlohaAppLauncherTests {
             transport: transport(
                 status: 200, body: #"{"headless":true,"visibleWindow":false}"#, into: recorder))
         #expect(state == AlohaAppState(headless: true, visibleWindow: false))
-        #expect(recorder.requests == ["GET http://127.0.0.1:8765/state"])
+        #expect(recorder.requests == ["GET http://127.0.0.1:8965/state"])
 
         // Reachable, but the body says nothing about the launch mode: absent, not guessed.
         #expect(await AlohaAppLauncher.probe(
@@ -376,6 +378,20 @@ struct AlohaAppLauncherTests {
         #expect(HostAppIdentity.dataSuffix(info: nil, isTestProcess: false) == nil)
         #expect(HostAppIdentity.name(".alohajet") == ".alohajet-test")
         #expect(AutomationToken.defaultURL.deletingLastPathComponent().lastPathComponent == "Aloha-test")
+    }
+
+    /// The app's ports follow its identity, by the desktop's rule (`IdentityPorts`): a shipped
+    /// app's are the bases, so the user's AlohaJet CLI is unchanged; an e2e build's are +100
+    /// and a test process's +200, so neither meets the user's AlohaJet or its relay on 8765.
+    @Test("the app's ports are the shipped ones, +100 for an e2e build, +200 for a test process")
+    func portsFollowTheIdentity() {
+        #expect(HostAppIdentity.port(8765, suffix: nil) == 8765)
+        #expect(HostAppIdentity.port(9222, suffix: nil) == 9222)
+        #expect(HostAppIdentity.port(8765, suffix: "e2e") == 8865)
+        #expect(HostAppIdentity.port(9222, suffix: "e2e") == 9322)
+        #expect(HostAppIdentity.port(8765, suffix: "test") == 8965)
+        #expect(HostAppIdentity.port(9222, suffix: "test") == 9422)
+        #expect(AlohaAppLauncher.defaultPort == 8965)
     }
 
     // MARK: - The one-shot launch token

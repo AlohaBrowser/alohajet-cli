@@ -124,6 +124,10 @@ struct AlohaBrowserTests {
         #expect(AlohaBrowser.port(environment: ["ALOHA_CDP_PORT": "0"]) == 9222)
         #expect(AlohaBrowser.port(environment: ["ALOHA_CDP_PORT": "70000"]) == 9222)
         #expect(AlohaBrowser.port(environment: ["ALOHA_CDP_PORT": ""]) == 9222)
+        // The CLI's fallback is its app's port (9322 for an e2e build); a named port still wins.
+        #expect(AlohaBrowser.port(environment: [:], fallback: 9322) == 9322)
+        #expect(AlohaBrowser.port(environment: ["ALOHA_CDP_PORT": "frotz"], fallback: 9322) == 9322)
+        #expect(AlohaBrowser.port(environment: ["ALOHA_CDP_PORT": "9333"], fallback: 9322) == 9333)
     }
 
     // MARK: - How the app is opened

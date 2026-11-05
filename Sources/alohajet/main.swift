@@ -177,7 +177,7 @@ let commandHelp: [String: String] = [
         alohajet mcp-stdio [--endpoint <url>]
           Compatibility command for saved desktop MCP entries. Relay stdio to the
           running Aloha browser's MCP server; no tools are served by this process.
-          Default endpoint: http://127.0.0.1:8765. An explicit --endpoint follows
+          Default endpoint: \(AlohaAppLauncher.defaultEndpoint). An explicit --endpoint follows
           the same validation and token rules as mcp --endpoint <url>.
           Keep Aloha running; this command launches no app or Chromium.
           Use mcp --endpoint <url> for new configurations.
@@ -196,7 +196,7 @@ AGENT
   --resume <chat-id>      continue that chat (-p prints its id on stderr)
   --continue              continue the last -p chat (default: a new one)
   --headless              run the app with no window (refused if it has one)
-  --endpoint <url>        agent server (default http://127.0.0.1:8765, the
+  --endpoint <url>        agent server (default \(AlohaAppLauncher.defaultEndpoint), the
                           local app, launched if needed); http to this machine,
                           https anywhere, and no token leaves this machine
                           unless ALOHAJET_AGENT_TOKEN names one
@@ -235,7 +235,7 @@ ENVIRONMENT
                           token file, sent to loopback endpoints only)
   ALOHAJET_BROWSER        Chromium to launch (default: Chrome, else a download)
   ALOHA_BROWSER_APP       the Aloha .app to launch
-  ALOHA_CDP_PORT          the Aloha browser's CDP port (default 9222)
+  ALOHA_CDP_PORT          the Aloha browser's CDP port (default \(HostAppIdentity.port(AlohaBrowser.defaultPort)))
   ALOHAJET_NETWORK_LOG    log tabs' requests to this dir; responses unmasked
   ALOHAJET_DEBUG          log protocol chatter to stderr
 
@@ -343,7 +343,8 @@ func laneKeyFor(_ args: Args) -> String? {
 /// resort and it is announced, because it is ~150 MB the user did not ask for.
 func provisionedExecutablePath() async throws -> String {
     let provisioner = try ChromiumProvisioner(
-        browserPath: ProcessInfo.processInfo.environment["ALOHAJET_BROWSER"])
+        browserPath: ProcessInfo.processInfo.environment["ALOHAJET_BROWSER"],
+        cacheRoot: ChromiumProvisioner.defaultCacheRoot(appDirectory: HostAppIdentity.name("AlohaJet")))
     let manager = FileManager.default
     let willDownload = !(provisioner.browserPath.map(manager.isExecutableFile(atPath:)) ?? false)
         && !manager.isExecutableFile(atPath: provisioner.stagedExecutablePath())
@@ -429,7 +430,8 @@ func connect(_ args: Args) async throws -> BrowserToolSession {
                 code: exitUsage)
         }
         do {
-            let url = try await AlohaBrowser().endpoint()
+            let url = try await AlohaBrowser().endpoint(
+                port: AlohaBrowser.port(fallback: HostAppIdentity.port(AlohaBrowser.defaultPort)))
             return adopt(try await attach(url.absoluteString))
         } catch let error as AlohaBrowserError {
             throw CLIError(message: error.description, code: exitUnreachable)

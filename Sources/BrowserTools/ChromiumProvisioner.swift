@@ -202,10 +202,14 @@ public final class ChromiumProvisioner {
 
     // MARK: Pure path / URL logic (no I/O)
 
-    public static func defaultCacheRoot() -> String {
+    /// `Application Support/<appDirectory>/chrome-for-testing`. The CLI passes its app's own
+    /// directory (`HostAppIdentity.name("AlohaJet")`: `AlohaJet-e2e` for the desktop's jet-e2e
+    /// build, as the app's own `Application Support/AlohaJet` is), so an e2e run never writes
+    /// the user's AlohaJet's.
+    public static func defaultCacheRoot(appDirectory: String = "AlohaJet") -> String {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("AlohaJet").appendingPathComponent("chrome-for-testing").path
+        return base.appendingPathComponent(appDirectory).appendingPathComponent("chrome-for-testing").path
     }
 
     public func downloadURL() throws -> String {
@@ -303,8 +307,15 @@ public final class ChromiumProvisioner {
         try extract(archive.path, root.path)
     }
 
+    /// The download's session: ephemeral. `URLSession.shared`, in the bare `alohajet`
+    /// executable, keeps its cache and HTTP storage under the process name
+    /// (`~/Library/Caches/alohajet`, `HTTPStorages/alohajet`): one pair for every app's copy of
+    /// the CLI, so the desktop's jet-e2e build would write the user's AlohaJet's. The archive is
+    /// staged under ``cacheRoot`` and needs neither.
+    public nonisolated static let downloadSession = URLSession(configuration: .ephemeral)
+
     public static let defaultDownloader: Downloader = { @MainActor url in
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await ChromiumProvisioner.downloadSession.data(from: url)
         if let http = response as? HTTPURLResponse, http.statusCode < 200 || http.statusCode >= 300 {
             throw ChromiumProvisionerError.fetchFailed("fetch \(url.absoluteString) -> HTTP \(http.statusCode)")
         }

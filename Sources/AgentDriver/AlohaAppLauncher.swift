@@ -114,9 +114,10 @@ public struct AlohaAppLauncher: Sendable {
     /// (``HostAppIdentity/cliScheme``), `alohajet://attach` for a shipped one.
     public nonisolated static let attachURL = "\(HostAppIdentity.cliScheme)://attach"
 
-    /// The one fixed port the app's `AutomationServer` binds; it is not configurable on
-    /// either side, so a different port is a different server.
-    public nonisolated static let defaultPort = 8765
+    /// The one fixed port the app's `AutomationServer` binds: 8765 for a shipped app, its
+    /// identity's for one with a data suffix (``HostAppIdentity/port(_:suffix:)``: 8865 for
+    /// jet-e2e). Not configurable on either side, so a different port is a different server.
+    public nonisolated static let defaultPort = HostAppIdentity.port(8765)
     /// What `-p --endpoint` defaults to. The binary ships inside the app it drives, so
     /// the loopback server beside it is the common case and the flag is the exception.
     public nonisolated static let defaultEndpoint = "http://127.0.0.1:\(defaultPort)"

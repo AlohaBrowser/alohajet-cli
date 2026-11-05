@@ -52,6 +52,17 @@ public nonisolated enum HostAppIdentity {
         suffix.map { "\(base)-\($0)" } ?? base
     }
 
+    /// The app's loopback port for a shipped build's `base` (automation 8765, CDP 9222): `base`
+    /// for a shipped build, `base + 100` for an app with a data suffix (jet-e2e: 8865, 9322),
+    /// `base + 200` for a test process (8965, 9422). The desktop applies the same rule to the
+    /// same suffix (`IdentityPorts`), so this CLI finds ITS app, and the user's AlohaJet CLI
+    /// (`alohajet mcp --endpoint http://127.0.0.1:8765` in Claude Desktop) never meets an e2e
+    /// build or a test's listener.
+    public static func port(_ base: Int, suffix: String? = dataSuffix) -> Int {
+        guard let suffix else { return base }
+        return base + (suffix == testSuffix ? 200 : 100)
+    }
+
     static func appInfo(app: String? = AlohaAppLauncher.appBundlePath()) -> [String: Any]? {
         guard let app,
               let data = FileManager.default.contents(atPath: app + "/Contents/Info.plist")

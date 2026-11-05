@@ -88,6 +88,29 @@ struct MCPRelayLaneTests {
         }
     }
 
+    /// The CLI an e2e build ships (`AlohaDataSuffix` e2e in its app's Info.plist) relays to ITS
+    /// app's port, 8865: on 8765 it would meet the user's AlohaJet, and the user's own relay
+    /// (Claude Desktop's `alohajet mcp --endpoint http://127.0.0.1:8765`) would meet the e2e app.
+    @Test func theCLIOfAnE2EBuildRelaysToItsOwnAppsPort() throws {
+        let sandbox = try RelaySandbox()
+        defer { sandbox.remove() }
+        let app = sandbox.root.appendingPathComponent("E2E.app")
+        try FileManager.default.createDirectory(
+            at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["AlohaDataSuffix": "e2e"], format: .xml, options: 0)
+            .write(to: app.appendingPathComponent("Contents/Info.plist"))
+        let stub = AgentStubServer(port: 8865, mcpToken: sandbox.token)
+        try stub.start() // If 8865 is busy, fail before contacting its existing owner.
+        defer { stub.stop() }
+        var environment = sandbox.environment
+        environment["ALOHA_BROWSER_APP"] = app.path
+        let initialize = #"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"e2e-port","version":"1"}}}"#
+        let run = try runCLI(["mcp-stdio"], stdin: initialize + "\n", environment: environment, timeout: 30)
+        #expect(run.status == 0, "\(run.combined)")
+        #expect(stub.requests.count == 1)
+        #expect(stub.requests.first?.path == "/mcp")
+    }
+
     @Test("an unauthorized relay never falls back to standalone MCP", arguments: ["mcp", "mcp-stdio"])
     func authenticationFailureDoesNotServeStandaloneTools(_ command: String) throws {
         let sandbox = try RelaySandbox()
