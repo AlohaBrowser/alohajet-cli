@@ -10,6 +10,7 @@ import CDP
 
 @MainActor private final class FakeAttributionSource: TabAttributionSource {
     var foregroundTabId: String?
+    var personAtBrowser = true
     func owner(of tabId: String) -> TabOwner { .user }
     func attribute(_ tabId: String, to chatId: String) {}
 }
@@ -129,4 +130,41 @@ import CDP
     source.foregroundTabId = "B"
     #expect(shown() == ["A", "B", "C"])
     #expect(countLine() == "3 tab(s) open:")
+}
+
+/// A browser whose window nobody can see still has a tab in front; the row must not say the user
+/// is looking at it. Which tabs are shown does not change.
+@Test @MainActor func theTabInFrontIsNotSaidToBeSeenWhenNoOneIsAtTheBrowser() async throws {
+    let cdp = MockCDP()
+    cdp.addTarget(id: "A", url: "https://a.example/", title: "A")
+    cdp.addTarget(id: "B", url: "about:blank")
+    let source = FakeAttributionSource()
+    let tabs = try await seededModel(cdp, source: source)
+    let window = CDPTabsWindow(id: "window", model: tabs)
+    func rowA() -> String? {
+        (manageTabsList(window, nil, askingChat: "c").output ?? "")
+            .components(separatedBy: "\n").first { $0.contains("(tab-id: A)") }
+    }
+    func shown() -> Set<String> {
+        Set((manageTabsList(window, nil, askingChat: "c").tabs ?? []).map(\.id))
+    }
+
+    source.foregroundTabId = "A"
+    #expect(rowA() == "- A [https://a.example/] (tab-id: A) — the user's tab, the tab the user is looking at")
+    source.personAtBrowser = false
+    #expect(rowA() == "- A [https://a.example/] (tab-id: A) — the user's tab")
+
+    source.foregroundTabId = "B"
+    #expect(shown() == ["A", "B"])
+    source.personAtBrowser = true
+    #expect(shown() == ["A", "B"])
+}
+
+@Test("the row says the tab is looked at only when it is in front and someone can see it",
+      arguments: [true, false, nil] as [Bool?], [true, false, nil] as [Bool?])
+@MainActor func theLookingAtPhraseFollowsForegroundAndPerson(_ foreground: Bool?, _ personAtBrowser: Bool?) {
+    var row = TabRow(PageToolsStubTabHandle(id: "A", url: "https://a.example/", title: "A", owner: .user), inUseTabId: nil)
+    row.attribution = TabAttribution(owner: .user, foreground: foreground, personAtBrowser: personAtBrowser)
+    let said = renderTabRow(row, askingChat: "c").contains("the tab the user is looking at")
+    #expect(said == (foreground == true && personAtBrowser != false))
 }

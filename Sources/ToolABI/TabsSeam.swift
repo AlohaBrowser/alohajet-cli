@@ -156,10 +156,14 @@ public nonisolated struct TabAttribution: Sendable, Equatable {
     /// Whether the tab is the one shown in the browser window now; `nil` when the
     /// browser does not say.
     public var foreground: Bool?
+    /// Whether a person can see the browser now (``TabAttributionSource/personAtBrowser``);
+    /// `nil` when the browser does not say.
+    public var personAtBrowser: Bool?
 
-    public init(owner: TabOwner, foreground: Bool? = nil) {
+    public init(owner: TabOwner, foreground: Bool? = nil, personAtBrowser: Bool? = nil) {
         self.owner = owner
         self.foreground = foreground
+        self.personAtBrowser = personAtBrowser
     }
 
     /// Whether the asking chat may close the tab: only a tab its own chat owns. Reads the
@@ -188,6 +192,15 @@ public protocol TabAttributionSource: AnyObject {
     /// in is that chat's. Called once per such tab, as soon as the browser has returned the
     /// tab's id; never for a tab opened for the user, which stays the user's.
     func attribute(_ tabId: String, to chatId: String)
+    /// Whether a person can see this browser now. A browser whose window is hidden, as in a
+    /// headless run, still has a tab in front, and no one is looking at it. Asked each time a
+    /// tab's attribution is read, since a hidden browser can be shown mid-session.
+    var personAtBrowser: Bool { get }
+}
+
+public extension TabAttributionSource {
+    /// A browser that does not say is taken to have someone at it, as before this was asked.
+    var personAtBrowser: Bool { true }
 }
 
 /// The legacy/non-interactive tab read context.
