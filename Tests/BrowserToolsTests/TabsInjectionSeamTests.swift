@@ -93,6 +93,7 @@ struct TabsInjectionSeamTests {
                 log.record(url, profileId)
                 throw SimpleBrowserError("no turn")
             })
+        try #require(service.window?.tabs as? CDPTabsModel).wakeBudget = .mockBrowser
         let tab = service.window!.tabs.createTab(TabCreateSpec(
             tabType: "website", url: "https://example.com/opened", owner: .chat("agent-1")))
 
@@ -140,6 +141,7 @@ struct TabsInjectionSeamTests {
             client: client,
             seed: false,
             navigationPacer: { url, profileId, _ in log.record(url, profileId) })
+        try #require(service.window?.tabs as? CDPTabsModel).wakeBudget = .mockBrowser
         let tab = service.window!.tabs.createTab(TabCreateSpec(
             tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
         let handle = try #require(tab as? CDPTabHandle)
@@ -163,6 +165,7 @@ struct TabsInjectionSeamTests {
             client: client,
             seed: false,
             navigationPacer: { url, profileId, _ in log.record(url, profileId) })
+        try #require(service.window?.tabs as? CDPTabsModel).wakeBudget = .mockBrowser
         let tab = service.window!.tabs.createTab(TabCreateSpec(
             tabType: "website", url: "https://example.com", owner: .chat("agent-1")))
 

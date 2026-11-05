@@ -190,6 +190,17 @@ func makePageToolContext(services: NativeToolServices?, signal: AbortSignal = Ab
 // `BrowserAgent`/LLM turn loop — these tools are driven directly via
 // `execute(_:_:)`, so only the tabs-service half of that fixture is needed.
 
+extension WakeBudget {
+    /// The wake budget for a tabs model whose browser is a ``MockCDP``.
+    ///
+    /// MockCDP answers every wake command at once, and it answers on the main actor this
+    /// whole target shares. The real 18 s budget, a wall-clock one, therefore measured
+    /// nothing about the fake page and everything about the queue for that main actor: at
+    /// the start of a run on a three-core runner, every wake in flight overran it at once.
+    /// Two minutes still fails a wake that hangs, and no longer fails one that waited.
+    static let mockBrowser = WakeBudget(totalMilliseconds: 120_000, pageLoadMilliseconds: 115_000)
+}
+
 struct PageToolsCDPFixture {
     let cdp: MockCDP
     let client: CDPClient
@@ -208,6 +219,7 @@ func makePageToolsCDPFixture(url: String = "https://example.com") async throws -
     try await client.connect()
     let tabsService = await makeCDPBrowserTabsService(client: client, seed: false)
     let tabs = try #require(tabsService.window).tabs
+    try #require(tabs as? CDPTabsModel).wakeBudget = .mockBrowser
     let tab = tabs.createTab(TabCreateSpec(tabType: "website", url: url, owner: .chat("test-session")))
     tabs.setActiveTabId(tab.id)
     return PageToolsCDPFixture(cdp: cdp, client: client, tabsService: tabsService, tabId: tab.id)

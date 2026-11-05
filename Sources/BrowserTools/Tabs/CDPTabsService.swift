@@ -43,6 +43,21 @@ final class CDPAgentDOMSnapshotting: AgentDOMSnapshotting {
     }
 }
 
+/// How long ``CDPTabHandle/wake(_:)`` may take, and how much of that its wait for the page
+/// to load may use.
+///
+/// Both are wall-clock bounds measured against real browsers, and both run on the main
+/// actor. A fake browser answers at once, so in a test they can only measure how long the
+/// wake waited for that main actor — which, in a test process, is shared with every other
+/// main-actor test. That is the one reason this is not a pair of constants.
+struct WakeBudget: Sendable, Equatable {
+    var totalMilliseconds: Int
+    var pageLoadMilliseconds: Int
+
+    /// 18 s covers the 15 s load wait plus attach, `Page.enable` and `Page.bringToFront`.
+    static let standard = WakeBudget(totalMilliseconds: 18_000, pageLoadMilliseconds: 15_000)
+}
+
 /// A ``TabHandle`` over a CDP page target. It owns the target session, an
 /// ``AgentDOMService`` (for interactive snapshots, click, type, etc.), and the tab's
 /// attribution.
@@ -56,6 +71,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     public let domService: AgentDOMService
     private let snapshotting: CDPAgentDOMSnapshotting
     private let pacer: NavigationPacer?
+    private let wakeBudget: WakeBudget
 
     public let tabType: String
     private var networkRecorder: NetworkRecorder?
@@ -88,7 +104,8 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         tabType: String,
         ownerByTabsModel: TabOwner,
         attributionSource: TabAttributionSource?,
-        pacer: NavigationPacer? = nil
+        pacer: NavigationPacer? = nil,
+        wakeBudget: WakeBudget = .standard
     ) {
         self.session = session
         self.browserTab = CDPBrowserTab(session: session)
@@ -103,6 +120,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         self.ownerByTabsModel = ownerByTabsModel
         self.attributionSource = attributionSource
         self.pacer = pacer
+        self.wakeBudget = wakeBudget
     }
 
     /// Refines fallback provenance after a click; the browser source still wins.
@@ -196,11 +214,10 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
             return WakeResult(ok: false, message: "Tab \"\(id)\" is unavailable because it has no live WebContents.")
         }
         do {
-            // Asked outside the 18s deadline below, which bounds the wake, not the wait
-            // for a turn.
+            // Asked outside the deadline below, which bounds the wake, not the wait for a
+            // turn.
             try await awaitTurnToCreate(signal)
-            // 18s covers 15s load wait plus attach / Page.enable / bringToFront.
-            return try await withCDPDeadline(milliseconds: 18_000) {
+            return try await withCDPDeadline(milliseconds: Double(wakeBudget.totalMilliseconds)) {
                 let sessionId = try await self.session.ensureAttached()
                 try await self.session.ensurePageEnabled()
                 // Hidden/background tab has no compositor. `fromSurface` screenshot
@@ -268,7 +285,7 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
     /// cache-refresh and as a fallback for the race where the real load fired
     /// before the listener attached.
     private func waitForReadyState(_ signal: AbortSignal?) async throws -> Bool {
-        try await waitForMainFrameLoad(timeoutMs: 15_000, signal: signal)
+        try await waitForMainFrameLoad(timeoutMs: wakeBudget.pageLoadMilliseconds, signal: signal)
     }
 
     /// The shared main-frame load wait used by both the read gate
@@ -691,6 +708,9 @@ public final class CDPTabsModel: TabsModel {
     /// without the host's sealed-region handling.
     private let onTabCreated: (@MainActor @Sendable (CDPTabHandle) -> Void)?
 
+    /// Handed to every handle this model builds. See ``WakeBudget``.
+    var wakeBudget = WakeBudget.standard
+
     public init(
         client: CDPClient,
         chatId: String? = nil,
@@ -766,7 +786,8 @@ public final class CDPTabsModel: TabsModel {
             tabType: spec?.tabType ?? "website",
             ownerByTabsModel: owner,
             attributionSource: attributionSource,
-            pacer: navigationPacer)
+            pacer: navigationPacer,
+            wakeBudget: wakeBudget)
         register(handle)
         if case .foundInListing = origin { listingDiscoveries.insert(targetId) }
         return handle
