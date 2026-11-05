@@ -278,7 +278,7 @@ private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: Man
     if let live = tabsModel as? BrowserTabSyncing { await live.syncTabsWithBrowser() }
 
     do {
-        let url = tab.url
+        var url = tab.url
         // The id the caller should use from here on. A tab this session just opened was
         // addressed by the provisional id it was allocated with; now that it is attached,
         // its real Chrome target id is the one that outlives this process.
@@ -311,10 +311,16 @@ private func readPageBody(_ tab: TabHandle, _ tabsWindow: TabsWindow, _ ctx: Man
             // and only when the host says the page actually changed. Probed rather than
             // required, like the other tab seams: nothing in this package conforms, so
             // with no host behind it this is one read, as it was.
+            //
+            // A remediation that passed can also have moved the tab to another document,
+            // so the listing is taken again: the row the caller prints above this body,
+            // and the address returned with it, name the page the second read describes.
             if let remediating = tab as? PageReadRemediating,
                await remediating.remediateAfterRead(ctx.abortSignal) {
                 if let abortedAfterRemediation = abortedResultOrNull(ctx.abortSignal?.aborted == true) { return abortedAfterRemediation }
                 interactResult = try await readPage()
+                if let live = tabsModel as? BrowserTabSyncing { await live.syncTabsWithBrowser() }
+                url = tab.url
             }
 
             var sections: [String] = []
