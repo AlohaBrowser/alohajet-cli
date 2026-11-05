@@ -137,6 +137,9 @@ private struct LoopbackJSONEndpoint {
     /// Signalled by the serving thread as it exits, so `shutDown()` can be sure the
     /// thread is gone before the descriptor is released.
     private let threadDidExit = DispatchSemaphore(value: 0)
+    /// Raised by `shutDown()` before it wakes `accept`, so the serving thread leaves
+    /// instead of answering the connection that woke it.
+    private let stopping = StopFlag()
 
     init(body: Data, headerLinesOverride: [String]? = nil) throws {
         let fd = socket(AF_INET, sockStreamValue, 0)
@@ -182,13 +185,14 @@ private struct LoopbackJSONEndpoint {
         // Bound as a `let` so the serving closure captures an immutable value.
         let response = responseBytes
 
-        // Serve on a detached thread. `accept` blocks; `shutDown()` calls `shutdown`
-        // on the listener, which wakes it with an error and ends the loop.
+        // Serve on a detached thread. `accept` blocks; `shutDown()` wakes it and the
+        // loop ends.
         //
         // The THREAD owns closing `fd` and signals `threadDidExit` on the way out —
         // single ownership, so the descriptor number cannot be recycled under a thread
         // that is between iterations rather than parked in `accept`.
         let exitSignal = threadDidExit
+        let stop = stopping
         Thread.detachNewThread {
             defer {
                 _ = close(fd)
@@ -197,6 +201,10 @@ private struct LoopbackJSONEndpoint {
             while true {
                 let connection = accept(fd, nil, nil)
                 if connection < 0 { return }
+                if stop.isRaised {
+                    _ = close(connection)
+                    return
+                }
                 // Read the request line and headers so the client is not answered
                 // before it has finished writing (which would surface as a reset).
                 var scratch = [UInt8](repeating: 0, count: 4096)
@@ -216,16 +224,55 @@ private struct LoopbackJSONEndpoint {
 
     /// Ends the serving thread and waits for it to release the listener.
     ///
-    /// `shutdown`, not `close`: closing a descriptor another thread is blocked in
-    /// `accept` on is not guaranteed to wake it. The wait is bounded so a wedged thread
-    /// fails its own test rather than hanging the suite.
+    /// Not `close`: closing a descriptor another thread is blocked in `accept` on is not
+    /// guaranteed to wake it. `shutdown` wakes it on Linux and does NOTHING on Darwin,
+    /// where a listening socket answers `ENOTCONN` — so every test here used to sit out
+    /// the full 5 s bound below, blocking a cooperative-pool thread, while the serving
+    /// thread stayed parked in `accept` for the rest of the run. A connection is what
+    /// wakes `accept` everywhere; `stopping` makes the thread leave on it. The wait stays
+    /// bounded so a wedged thread fails its own test rather than hanging the suite.
     func shutDown() {
+        stopping.raise()
         _ = shutdown(listenFD, Int32(SHUT_RDWR))
+        knock(port: port)
         _ = threadDidExit.wait(timeout: .now() + .seconds(5))
+    }
+
+    /// Connects to the listener and hangs up, which returns the serving thread's `accept`.
+    private func knock(port: Int) {
+        let fd = socket(AF_INET, sockStreamValue, 0)
+        guard fd >= 0 else { return }
+        defer { _ = close(fd) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(UInt16(port)).bigEndian
+        addr.sin_addr.s_addr = in_addr_t(0x7f00_0001).bigEndian
+        _ = withUnsafePointer(to: &addr) { p in
+            p.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
     }
 
     enum EndpointError: Error {
         case socketFailed
         case bindFailed
+    }
+}
+
+private final class StopFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var raised = false
+
+    func raise() {
+        lock.lock()
+        raised = true
+        lock.unlock()
+    }
+
+    var isRaised: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return raised
     }
 }
