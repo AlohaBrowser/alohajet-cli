@@ -170,7 +170,9 @@ let commandHelp: [String: String] = [
           Aloha browser at <url>/mcp, for clients that can only run a command, such
           as Claude Desktop. <url> is http to this machine, or https to
           anywhere — a port forward, a second machine. A non-loopback endpoint
-          is sent no token unless ALOHAJET_AGENT_TOKEN names one.
+          is sent no token unless ALOHAJET_AGENT_TOKEN names one. The relay ends
+          when stdin does, once every request read is answered or 2 s after,
+          cancelling in the browser what is still running.
         """,
     "mcp-stdio": """
         alohajet mcp-stdio [--endpoint <url>]
@@ -179,6 +181,8 @@ let commandHelp: [String: String] = [
           Default endpoint: http://127.0.0.1:8765. An explicit --endpoint follows
           the same validation and token rules as mcp --endpoint <url>.
           Keep Aloha running; this command launches no app or Chromium.
+          Ends when stdin does, once every request read is answered or 2 s
+          after, cancelling in the browser what is still running.
           Use mcp --endpoint <url> for new configurations.
         """
 ]

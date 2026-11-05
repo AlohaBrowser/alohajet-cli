@@ -73,14 +73,23 @@ enum MCPRelay {
 
     /// Pumps frames between stdio and the browser's `/mcp` until either side ends or
     /// fails. Frames move verbatim, in both directions. Of a client frame the relay reads
-    /// only its `id` and its `method` (``RelayEnvelope``): enough to send each request on its
-    /// own once the handshake is done, so a ping, a cancel or a second call never waits
-    /// behind a call the browser is holding open.
+    /// only its `id`, its `method` and a cancel's `params.requestId` (``RelayEnvelope``):
+    /// enough to send each request on its own once the handshake is done, so a ping, a
+    /// cancel or a second call never waits behind a call the browser is holding open, and
+    /// to know which requests are still owed an answer (``OwedRequests``).
+    ///
+    /// A client that goes away leaves nothing running in the browser. The browser cannot tell
+    /// on its own: on Streamable HTTP a dropped connection is not a cancellation, so a call
+    /// would run to its end — a person asked to complete a check included — for nobody. So
+    /// whatever ends the relay first cancels in the browser, with `notifications/cancelled`,
+    /// every request still owed: the end of stdin after ``endOfInputGrace``, a request that
+    /// failed, and a stdout nobody reads.
     ///
     /// `nonisolated` so the `requestModifier` closure handed to the transport actor is a
     /// disconnected value rather than a main-actor-isolated one (this target's default
     /// isolation), which the compiler refuses to send across actors.
     static nonisolated func run(endpoint: URL) async throws {
+        let owed = OwedRequests()
         // `URLSessionConfiguration.default`'s 60 s idle timer is a deadline nobody here
         // chose, and the app holds the POST open for the WHOLE tool call without a
         // keepalive — so a page that takes a minute to wake killed the session and threw
@@ -120,7 +129,7 @@ enum MCPRelay {
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
-                try await forwardClientFrames(downstream, upstream)
+                try await forwardClientFrames(downstream, upstream, owed)
                 // Ends the receive stream once what is buffered has been read, so the
                 // writer below drains every answer and then ends the session.
                 await upstream.disconnect()
@@ -129,8 +138,16 @@ enum MCPRelay {
             // their bytes when a write is short. Answers leave in the order the browser
             // finishes them, which JSON-RPC allows; a host matches them by id.
             group.addTask {
-                for try await frame in await upstream.receive() {
-                    try await downstream.send(frame)
+                do {
+                    for try await frame in await upstream.receive() {
+                        try await downstream.send(frame)
+                        await owed.answered(frame)
+                    }
+                } catch {
+                    if !Task.isCancelled {
+                        await cancelOwed(upstream, owed, reason: "the MCP client stopped reading the relay's answers")
+                    }
+                    throw error
                 }
             }
             // A failure on either side ends the session at once, the other half cancelled: a
@@ -140,7 +157,8 @@ enum MCPRelay {
         }
     }
 
-    /// Forwards stdin to the browser until stdin ends, then waits for the requests still out.
+    /// Forwards stdin to the browser until stdin ends, then gives the requests still out
+    /// ``endOfInputGrace`` to be answered and cancels the rest in the browser.
     ///
     /// Until `initialize` has been answered every frame goes inline: its answer carries the
     /// session id every later POST must replay, and the app refuses a request without one.
@@ -153,7 +171,18 @@ enum MCPRelay {
     /// child's reading ends with it: read here, the loop would wait for the client's next
     /// frame before the failure could end the session.
     private static nonisolated func forwardClientFrames(
-        _ downstream: StdioTransport, _ upstream: HTTPClientTransport
+        _ downstream: StdioTransport, _ upstream: HTTPClientTransport, _ owed: OwedRequests
+    ) async throws {
+        do {
+            try await forwardUntilEndOfInput(downstream, upstream, owed)
+        } catch {
+            await cancelOwed(upstream, owed, reason: "the relay ended on an error")
+            throw error
+        }
+    }
+
+    private static nonisolated func forwardUntilEndOfInput(
+        _ downstream: StdioTransport, _ upstream: HTTPClientTransport, _ owed: OwedRequests
     ) async throws {
         try await withThrowingDiscardingTaskGroup { calls in
             let (frames, read) = AsyncThrowingStream<Data, any Error>.makeStream()
@@ -168,19 +197,66 @@ enum MCPRelay {
             var handshaken = false
             for try await frame in frames {
                 let envelope = RelayEnvelope(frame)
-                if handshaken, envelope.isRequest {
+                if handshaken, envelope.isRequest, let id = envelope.id {
+                    await owed.sent(id)
                     let (underway, began) = AsyncStream<Void>.makeStream()
                     calls.addTask {
-                        do { try await upstream.send(frame, underway: { began.finish() }) }
-                        catch where Task.isCancelled {}
+                        do {
+                            try await upstream.send(frame, underway: { began.finish() })
+                        } catch where Task.isCancelled {
+                        } catch {
+                            await owed.withdraw(id)
+                            throw error
+                        }
                     }
                     for await _ in underway {}
                     continue
                 }
+                if let withdrawn = envelope.cancelledRequest { await owed.withdraw(withdrawn) }
                 try await upstream.send(frame)
                 handshaken = handshaken || envelope.method == "initialize"
             }
+            // Torn down, or a request failed: not the end of stdin, and not this path's to end.
+            if Task.isCancelled || calls.isCancelled { return }
+            await owed.settle(within: endOfInputGrace)
+            guard !Task.isCancelled else { return }
+            await cancelOwed(upstream, owed, reason: "the MCP client closed its input")
+            await owed.settle(within: cancellationSettle)
+            calls.cancelAll()
         }
+    }
+
+    /// How long the answers still owed at the end of stdin get before what is still running is
+    /// cancelled. A script that writes its frames and closes stdin still gets every quick
+    /// answer. Two seconds is also how long the official SDK clients wait after closing a
+    /// server's stdin before they signal it, so a host that does both is answered either way.
+    static let endOfInputGrace: Duration = .seconds(2)
+
+    /// How long the relay waits for its cancels to be sent, and then for the browser's answers
+    /// to the cancelled calls, before it ends regardless.
+    static let cancellationSettle: Duration = .seconds(1)
+
+    /// Sends `notifications/cancelled` for every request still owed, the way the client would
+    /// have, within ``cancellationSettle``. A task of its own, so it is sent even from a task
+    /// that is being cancelled.
+    private static nonisolated func cancelOwed(
+        _ upstream: HTTPClientTransport, _ owed: OwedRequests, reason: String
+    ) async {
+        let ids = await owed.outstanding
+        guard !ids.isEmpty else { return }
+        let sending = Task {
+            for id in ids {
+                let notice = CancelledNotification.message(.init(requestId: id, reason: reason))
+                guard let frame = try? JSONEncoder().encode(notice) else { continue }
+                try? await upstream.send(frame)
+            }
+        }
+        let deadline = Task {
+            try? await Task.sleep(for: cancellationSettle)
+            sending.cancel()
+        }
+        await sending.value
+        deadline.cancel()
     }
 
     /// The app's automation endpoint, or the message that names exactly what is missing.
@@ -230,25 +306,62 @@ enum MCPRelay {
 nonisolated struct RelayEnvelope: Decodable {
     let id: ID?
     let method: String?
+    /// The request a `notifications/cancelled` names.
+    let cancelledRequest: ID?
 
     /// A request: a method the client expects an answer to.
     var isRequest: Bool { id != nil && method != nil }
+    /// An answer: an id with no method.
+    var isAnswer: Bool { id != nil && method == nil }
 
     init(_ frame: Data) {
-        self = (try? JSONDecoder().decode(Self.self, from: frame)) ?? RelayEnvelope(id: nil, method: nil)
+        self = (try? JSONDecoder().decode(Self.self, from: frame))
+            ?? RelayEnvelope(id: nil, method: nil, cancelledRequest: nil)
     }
 
-    private init(id: ID?, method: String?) {
+    private init(id: ID?, method: String?, cancelledRequest: ID?) {
         self.id = id
         self.method = method
+        self.cancelledRequest = cancelledRequest
     }
 
-    private enum Keys: String, CodingKey { case id, method }
+    private enum Keys: String, CodingKey { case id, method, params, requestId }
 
     init(from decoder: Decoder) throws {
         let frame = try decoder.container(keyedBy: Keys.self)
         id = try? frame.decodeIfPresent(ID.self, forKey: .id)
         method = try? frame.decodeIfPresent(String.self, forKey: .method)
+        let params = try? frame.nestedContainer(keyedBy: Keys.self, forKey: .params)
+        cancelledRequest = method == CancelledNotification.name
+            ? (try? params?.decodeIfPresent(ID.self, forKey: .requestId)) : nil
+    }
+}
+
+/// The requests the relay has sent to the browser and not seen answered: what it must cancel
+/// there if it ends first. Only requests sent after the handshake are tracked: `initialize`
+/// must not be cancelled, and a request sent before it is answered before the next frame is
+/// read. A request the client cancels itself is withdrawn, so it is not cancelled twice.
+actor OwedRequests {
+    private var ids: [ID] = []
+
+    var outstanding: [ID] { ids }
+
+    func sent(_ id: ID) { ids.append(id) }
+
+    func withdraw(_ id: ID) { ids.removeAll { $0 == id } }
+
+    /// Takes the request a frame the browser sent answers off the list.
+    func answered(_ frame: Data) {
+        let envelope = RelayEnvelope(frame)
+        if envelope.isAnswer, let id = envelope.id { withdraw(id) }
+    }
+
+    /// Returns once nothing is owed, or after `limit`.
+    func settle(within limit: Duration) async {
+        let deadline = ContinuousClock.now.advanced(by: limit)
+        while !ids.isEmpty, ContinuousClock.now < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
     }
 }
 

@@ -279,6 +279,13 @@ Once `initialize` is answered, each request goes to the browser as soon as it is
 ping, a cancel or a second call is never queued behind a call the browser is still working
 on. Answers come back in the order the browser finishes them.
 
+The relay ends when stdin does: once every request it has read is answered, or 2 s after
+the end of stdin, when it cancels in the browser (`notifications/cancelled`) whatever is
+still running. The browser cannot tell a client that went away from one that is waiting,
+so a call left behind would otherwise run to its end, a person asked to complete a check
+included. A request that fails, or a stdout nobody reads, ends the relay the same way,
+without the wait (exit 3).
+
 #### `mcp-stdio` — compatibility for saved desktop entries
 
 Older desktop versions saved `"args": ["mcp-stdio"]`. This command uses the same HTTP

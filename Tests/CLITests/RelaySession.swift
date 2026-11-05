@@ -12,7 +12,9 @@ import Darwin
 /// so none of that can be expressed there.
 ///
 /// stdin is a pipe written with `write(2)` (see `BinaryUnderTest` for why not `FileHandle`);
-/// stdout and stderr are files, polled for what has landed.
+/// stdout and stderr are files, polled for what has landed. `readingThroughAPipe` puts stdout on
+/// a pipe instead, read without blocking, so a test can stop reading it the way a client that
+/// went away does.
 nonisolated final class RelaySession: @unchecked Sendable {
     private let process = Process()
     private let input = Pipe()
@@ -20,8 +22,12 @@ nonisolated final class RelaySession: @unchecked Sendable {
     private let outURL: URL
     private let errURL: URL
     private var inputOpen = true
+    private let readsThroughAPipe: Bool
+    private var outputPipe: Pipe?
+    private var piped = Data()
 
-    init(endpoint: String, environment overlay: [String: String] = ["ALOHAJET_AGENT_TOKEN": "test-token"]) throws {
+    init(endpoint: String, readingThroughAPipe: Bool = false,
+         environment overlay: [String: String] = ["ALOHAJET_AGENT_TOKEN": "test-token"]) throws {
         // A write to a relay that has already exited must fail with EPIPE, not kill the test.
         signal(SIGPIPE, SIG_IGN)
         let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
@@ -40,7 +46,16 @@ nonisolated final class RelaySession: @unchecked Sendable {
         environment.merge(overlay) { _, override in override }
         process.environment = environment
         process.standardInput = input
-        process.standardOutput = try FileHandle(forWritingTo: outURL)
+        readsThroughAPipe = readingThroughAPipe
+        if readingThroughAPipe {
+            let pipe = Pipe()
+            let fd = pipe.fileHandleForReading.fileDescriptor
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+            outputPipe = pipe
+            process.standardOutput = pipe
+        } else {
+            process.standardOutput = try FileHandle(forWritingTo: outURL)
+        }
         process.standardError = try FileHandle(forWritingTo: errURL)
         try process.run()
     }
@@ -85,9 +100,28 @@ nonisolated final class RelaySession: @unchecked Sendable {
 
     func deliver(_ signalNumber: Int32) { kill(process.processIdentifier, signalNumber) }
 
+    /// Closes the read end of a piped stdout: the relay's next write fails.
+    func stopReading() {
+        drainPipe()
+        try? outputPipe?.fileHandleForReading.close()
+        outputPipe = nil
+    }
+
+    private func drainPipe() {
+        guard let fd = outputPipe?.fileHandleForReading.fileDescriptor else { return }
+        var scratch = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let got = read(fd, &scratch, scratch.count)
+            if got <= 0 { return }
+            piped.append(contentsOf: scratch[0..<got])
+        }
+    }
+
     /// Every JSON-RPC message the relay has written to stdout so far.
     var replies: [[String: Any]] {
-        String(decoding: (try? Data(contentsOf: outURL)) ?? Data(), as: UTF8.self)
+        drainPipe()
+        let output = readsThroughAPipe ? piped : (try? Data(contentsOf: outURL)) ?? Data()
+        return String(decoding: output, as: UTF8.self)
             .split(separator: "\n")
             .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
     }

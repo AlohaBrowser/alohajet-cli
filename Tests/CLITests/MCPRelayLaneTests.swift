@@ -123,6 +123,7 @@ struct MCPRelayLaneTests {
             #expect(run.stdout.contains("http://127.0.0.1:8765"))
             #expect(run.stdout.contains("mcp --endpoint"))
             #expect(run.stdout.contains("running"))
+            #expect(run.stdout.contains("cancelling in the browser"))
         }
         let usage = try runCLI(["--help"])
         #expect(usage.stdout.contains("mcp-stdio"))
@@ -246,17 +247,22 @@ struct MCPRelayLaneTests {
     /// slow to wake, a navigation that hangs — and the client's own deadline is the one
     /// that should end it. Under `URLSessionConfiguration.default`'s 60 s idle timer the
     /// relay instead dropped the WHOLE session, discarding work that had completed.
+    ///
+    /// stdin stays open until the answer is in: closed, it would end the call two seconds
+    /// later, and the test would pass without the call ever outliving the timer.
     @Test func aCallSlowerThanTheDefaultTimeoutDoesNotEndTheSession() throws {
         let stub = AgentStubServer(hold: 62)
         try stub.start()
         defer { stub.stop() }
+        let relay = try RelaySession(endpoint: stub.url, environment: Self.pinnedToken)
+        defer { relay.finish() }
 
-        let run = try runCLI(
-            ["mcp", "--endpoint", stub.url],
-            stdin: Self.toolsCall, environment: Self.pinnedToken, timeout: 180)
-
-        #expect(run.status == 0, "exited \(run.status): \(run.combined)")
-        #expect(!run.stderr.contains("timed out"), "\(run.combined)")
+        relay.send(Self.toolsCall.trimmingCharacters(in: .newlines))
+        let answer = relay.reply(1, within: 180)
+        #expect(answer?["result"] != nil, "no answer to the slow call: \(relay.stderr)")
+        relay.closeInput()
+        #expect(relay.exitStatus(within: 10) == 0, "\(relay.stderr)")
+        #expect(!relay.stderr.contains("timed out"), "\(relay.stderr)")
     }
 
     /// The relay is the only reason a Claude Desktop user has a working entry at all, so
@@ -267,6 +273,7 @@ struct MCPRelayLaneTests {
         #expect(run.stdout.contains("--endpoint"))
         #expect(run.stdout.contains("Claude Desktop"))
         #expect(run.stdout.contains("https"))
+        #expect(run.stdout.contains("cancelling in the browser"))
     }
 }
 

@@ -14,9 +14,9 @@ import Testing
 struct MCPRelayHeldCallTests {
 
     /// A relay to `stub`, past the handshake.
-    private func relay(to stub: MCPHoldingStub) throws -> RelaySession {
+    private func relay(to stub: MCPHoldingStub, readingThroughAPipe: Bool = false) throws -> RelaySession {
         try stub.start()
-        let relay = try RelaySession(endpoint: stub.url)
+        let relay = try RelaySession(endpoint: stub.url, readingThroughAPipe: readingThroughAPipe)
         relay.initialize()
         if relay.reply(0, within: 15) == nil {
             relay.finish()
@@ -120,5 +120,78 @@ struct MCPRelayHeldCallTests {
         #expect(posts.dropFirst().allSatisfy { $0.session == AgentStubServer.mcpSession })
         relay.closeInput()
         #expect(relay.exitStatus(within: 10) == 0, "\(relay.stderr)")
+    }
+
+    // MARK: - When the client goes away
+
+    /// A host that closes stdin is gone, and the browser keeps the call running for nobody until
+    /// the relay tells it otherwise: a disconnect is not a cancellation on Streamable HTTP. So
+    /// the relay gives what is owed two seconds to arrive, then cancels the rest and ends.
+    @Test func closingStdinMidCallCancelsItInTheBrowserAndEnds() throws {
+        let stub = MCPHoldingStub(maxHold: 30)
+        defer { stub.stop() }
+        let relay = try relay(to: stub)
+        defer { relay.finish() }
+
+        relay.callTool(2)
+        try #require(stub.wait(within: 10) { stub.isHeld(2) }, "the call never reached the browser")
+        let closed = Date()
+        relay.closeInput()
+
+        #expect(relay.exitStatus(within: 10) == 0, "\(relay.stderr)")
+        let cancel = try #require(stub.cancels.first, "the call was left running in the browser")
+        #expect(stub.cancels.count == 1)
+        #expect(cancel.cancels == 2)
+        #expect(cancel.reason?.isEmpty == false)
+        #expect(cancel.at.timeIntervalSince(closed) >= 1.5, "the call got no time to finish")
+    }
+
+    /// The grace is for exactly this: a script that writes its frames and closes stdin still
+    /// gets every answer that comes in time, and nothing is cancelled.
+    @Test func answersOwedAtEndOfInputStillArriveWithinTheGrace() throws {
+        let stub = MCPHoldingStub(autoRelease: 0.5)
+        defer { stub.stop() }
+        let relay = try relay(to: stub)
+        defer { relay.finish() }
+
+        relay.callTool(2)
+        relay.closeInput()
+
+        #expect(relay.exitStatus(within: 10) == 0, "\(relay.stderr)")
+        #expect(relay.reply(2, within: 1) != nil)
+        #expect(stub.cancels.isEmpty)
+    }
+
+    /// One request failing ends the relay; the call it leaves behind is cancelled first, so
+    /// it cannot keep a person waiting at the browser for nobody.
+    @Test func anUpstreamFailureStillCancelsWhatIsInFlight() throws {
+        let stub = MCPHoldingStub(failing: [3], maxHold: 30)
+        defer { stub.stop() }
+        let relay = try relay(to: stub)
+        defer { relay.finish() }
+
+        relay.callTool(2)
+        try #require(stub.wait(within: 10) { stub.isHeld(2) }, "the call never reached the browser")
+        relay.callTool(3)
+
+        #expect(relay.exitStatus(within: 10) == 3, "\(relay.stderr)")
+        #expect(stub.cancels.map(\.cancels) == [2])
+    }
+
+    /// A client that stops reading the relay's answers is gone too.
+    @Test func aClientThatStopsReadingStillGetsItsCallsCancelled() throws {
+        let stub = MCPHoldingStub(maxHold: 30)
+        defer { stub.stop() }
+        let relay = try relay(to: stub, readingThroughAPipe: true)
+        defer { relay.finish() }
+
+        relay.callTool(2)
+        relay.callTool(3)
+        try #require(stub.wait(within: 10) { stub.isHeld(2) && stub.isHeld(3) }, "the calls never reached the browser")
+        relay.stopReading()
+        stub.release(3)
+
+        #expect(relay.exitStatus(within: 10) == 3, "\(relay.stderr)")
+        #expect(stub.cancels.contains { $0.cancels == 2 }, "the call was left running in the browser")
     }
 }
