@@ -14,7 +14,8 @@ import Darwin
 //
 // KNOWN CEILING: one connection at a time, one response body, no keep-alive, no MIME table.
 // It answers every request with the same page, which is all a fixture needs. Give it a
-// route table when a test needs two pages.
+// route table when a test needs two pages. A request's body is read before the answer, so a
+// form posted to it loads the page again rather than a reset connection.
 nonisolated final class LocalPageServer: @unchecked Sendable {
     private var listenFD: Int32 = -1
     private var thread: Thread?
@@ -77,8 +78,7 @@ nonisolated final class LocalPageServer: @unchecked Sendable {
         while listenFD >= 0 {
             let client = accept(listenFD, nil, nil)
             if client < 0 { return }              // the listener was closed: we are done
-            var scratch = [UInt8](repeating: 0, count: 4096)
-            _ = recv(client, &scratch, scratch.count, 0)   // request line: read and discard
+            drainRequest(client)
             response.withUnsafeBytes { buffer in
                 var sent = 0
                 while sent < buffer.count {
@@ -89,6 +89,25 @@ nonisolated final class LocalPageServer: @unchecked Sendable {
             }
             close(client)
         }
+    }
+
+    /// Reads the headers to the blank line, then `Content-Length` more bytes, and discards them.
+    private func drainRequest(_ client: Int32) {
+        var raw = Data()
+        var scratch = [UInt8](repeating: 0, count: 4096)
+        func readMore() -> Int {
+            let got = recv(client, &scratch, scratch.count, 0)
+            if got > 0 { raw.append(contentsOf: scratch[0..<got]) }
+            return got
+        }
+        let separator = Data("\r\n\r\n".utf8)
+        while raw.range(of: separator) == nil { guard readMore() > 0 else { return } }
+        let headEnd = raw.range(of: separator)!
+        let length = String(decoding: raw[..<headEnd.lowerBound], as: UTF8.self)
+            .components(separatedBy: "\r\n")
+            .first { $0.lowercased().hasPrefix("content-length:") }
+            .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
+        while raw.count - headEnd.upperBound < length { guard readMore() > 0 else { return } }
     }
 
     enum Failure: Error { case socket(Int32), bind(Int32) }

@@ -313,6 +313,21 @@ struct AgentSessionTests {
         return (request, object["accept"] as? Bool)
     }
 
+    /// The agent asked the person at the browser and is waiting: the CLI says so once, on
+    /// stderr, and the turn is not mistaken for one that stopped moving.
+    @Test("a question the agent waits on in the browser is printed once on stderr")
+    func aPendingQuestionIsPrintedOnce() throws {
+        let stub = AgentStubServer(protocolVersion: 2, pendingQuestionPolls: 3)
+        try stub.start()
+        defer { stub.stop() }
+        let run = try runTurn(["-p", "hi"], stub: stub)
+        #expect(run.status == 0, "exited \(run.status): \(run.combined)")
+        #expect(run.stdout == "Four.\n")
+        let note = "alohajet: note: the agent is waiting for you in the browser window: "
+            + "\"\(AgentStubServer.questionPrompt)\" — options: Let me take over / Cancel\n"
+        #expect(run.stderr.components(separatedBy: note).count == 2, "\(run.stderr)")
+    }
+
     @Test("terms the app window cannot answer are declined from a pipe, and the turn says so")
     func termsDeclinedWithoutAWindow() throws {
         try withStub(protocolVersion: 2, termsAnswerableInApp: false) { stub in

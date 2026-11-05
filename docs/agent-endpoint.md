@@ -94,6 +94,7 @@ thread.
 
 ```json
 { "state": "running", "pendingTerms": { … } }
+{ "state": "running", "pendingQuestion": { … } }
 { "state": "done", "result": { … } }
 ```
 
@@ -142,6 +143,24 @@ The client asks the user once per `id` and replies `POST /agent/terms` with
 stderr notice, not a failure. Polls carrying a question draw on a separate budget of 2400
 polls (~10 minutes) before they start consuming the turn's own, so ordinary deliberation
 cannot time the turn out. Expire a question yourself rather than leaving one standing.
+
+### A question for the person at the browser, mid-run
+
+A `running` envelope may carry what the agent is waiting on the person at the browser for:
+
+```json
+{ "pendingQuestion": { "id": "…", "kind": "question", "prompt": "…",
+                       "options": ["…", "…"], "answerableInApp": true } }
+```
+
+`kind` is `question` (the agent asked the person something) or `approval` (a tool call
+waits to be approved); `options` may be empty. All five fields are required, and an object
+missing one, or with another `kind`, is ignored. `state` stays `running`: the key's presence
+is the whole capability, so a host that predates it simply never sends it.
+
+The client answers nothing. It prints one stderr note per `id`, and polls carrying the
+question draw on the same separate budget as the terms question. A wait that runs out while
+a question is open fails the turn with a reason that names the prompt.
 
 ## 4. `POST /quit`
 

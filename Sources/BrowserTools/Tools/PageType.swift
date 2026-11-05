@@ -118,6 +118,7 @@ import ToolABI
             // Two backend URL reads bracket the action so the receipt can say whether the
             // page moved — see PageDelta, and the 44-row blind-receipt measurement behind it.
             let urlBefore = bridge.currentPageURL()
+            let generationBefore = await bridge.documentGeneration()
             // Which element this was, in replayable terms — resolved before the action, since typing can
             // re-render the form and the snapshot would then hold a different node. See `PageToolReceipt`.
             var selectorNote = await PageToolReceipt.liveNote(alohaId: alohaId, tab: resolved.cdpTab, bridge: bridge, tool: "page_type")
@@ -152,9 +153,10 @@ import ToolABI
             guard submit else {
                 // Settled, not immediate: typing rarely navigates, so this costs the grace window
                 // only in the case where the receipt would have been right anyway.
-                let urlAfter = await bridge.settledPageURL(after: urlBefore)
+                let settled = await bridge.settledPage(after: urlBefore, generationBefore: generationBefore)
                 let receipt = RawToolResult(output: "Typed into element \(typedInto)." + redirectNote
-                                            + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+                                            + PageDelta.describe(urlBefore: urlBefore, urlAfter: settled.url,
+                                                                 newDocument: settled.newDocument)
                                             + selectorNote + hint,
                                             isError: nil)
                 // THE PAGE, ALWAYS -- not gated on the fingerprint the other tools use. That gate
@@ -185,7 +187,7 @@ import ToolABI
             // AFTER the Enter, which is the action that navigates. Read before it — as this was —
             // the receipt reports the URL from before the submit, so a form submission that worked
             // is announced as "The page did NOT navigate" every single time.
-            let urlAfter = await bridge.settledPageURL(after: urlBefore)
+            let settled = await bridge.settledPage(after: urlBefore, generationBefore: generationBefore)
             // A form that was SUBMITTED is the one type whose result matters most, and it was the
             // one branch sending no page at all: `type(submit: true)` returned 230 characters of
             // receipt and nothing else. Measured over 579 distinct `page_type` calls in WebArena
@@ -195,11 +197,11 @@ import ToolABI
             // because the model submitted a form and had nothing to look at.
             //
             // ONCE, AFTER THE WHOLE STRING AND THE ENTER -- never per keystroke, and after
-            // `settledPageURL` has waited out the navigation the Enter caused. Taking it before that
+            // `settledPage` has waited out the navigation the Enter caused. Taking it before that
             // wait would capture the page the form was submitted FROM, which is worse than nothing.
             let receipt = RawToolResult(
                 output: "Typed into element \(typedInto) and pressed Enter to submit." + redirectNote
-                    + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+                    + PageDelta.describe(urlBefore: urlBefore, urlAfter: settled.url, newDocument: settled.newDocument)
                     + selectorNote + PageToolReceipt.submittedNote + hint,
                 isError: nil)
             return resolved.tab.naming(await withPageSnapshot(receipt, context, resolved))
@@ -232,6 +234,7 @@ import ToolABI
         case let .success(resolved):
             let bridge = makePageBridge(resolved.cdpTab, context.signal, AnswerPageTracker.current(for: context.services))
             let urlBefore = bridge.currentPageURL()
+            let generationBefore = await bridge.documentGeneration()
             // WHICH ELEMENT EACH FIELD WAS, in replayable terms, resolved BEFORE anything is typed:
             // typing can re-render the form and the snapshot would then hold different nodes. The
             // single-field path has carried this since `PageToolReceipt` existed; this path -- the
@@ -269,8 +272,8 @@ import ToolABI
                     submittedForms.noteTyped(resolved.tab.id, scope: context.sessionId)
                 }
             }
-            let delta = PageDelta.describe(urlBefore: urlBefore,
-                                           urlAfter: await bridge.settledPageURL(after: urlBefore))
+            let typed = await bridge.settledPage(after: urlBefore, generationBefore: generationBefore)
+            let delta = PageDelta.describe(urlBefore: urlBefore, urlAfter: typed.url, newDocument: typed.newDocument)
 
             // EVERY EXIT FROM HERE CARRIES THE PAGE. This is the path the batch hint tells the
             // model to prefer -- "Pass the whole form at once" -- so a batch that returned a bare
@@ -302,7 +305,7 @@ import ToolABI
             }
             // Settled, like the single-field submit above: the Enter is what navigates, and an
             // immediate read names the page the form was submitted from.
-            let urlFinal = await bridge.settledPageURL(after: urlBefore)
+            let submitted = await bridge.settledPage(after: urlBefore, generationBefore: generationBefore)
             // WHICH FIELD THE ENTER WENT INTO. With two or more `[selector=…]` groups in the fields
             // list and one `[submitted=enter]` at the end, a mint could not bind the submit to a
             // field (agent run osm-form-r2, 2026-09-23: it distilled `submit form` and refused
@@ -312,7 +315,8 @@ import ToolABI
             let submitBinding = typedInto.last.map { " Pressed Enter in element \"\($0)\"." + (notes[$0] ?? "") } ?? ""
             let receipt = RawToolResult(output: "Filled \(filled.count) field(s): \(filled.joined(separator: ", ")) "
                                         + "and pressed Enter to submit."
-                                        + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlFinal)
+                                        + PageDelta.describe(urlBefore: urlBefore, urlAfter: submitted.url,
+                                                             newDocument: submitted.newDocument)
                                         + submitBinding
                                         + PageToolReceipt.submittedNote,
                                         isError: nil)

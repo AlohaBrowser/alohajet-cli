@@ -41,6 +41,7 @@ import ToolABI
             // Two backend URL reads bracket the action so the receipt can say whether the
             // page moved — see PageDelta, and the 44-row blind-receipt measurement behind it.
             let urlBefore = bridge.currentPageURL()
+            let generationBefore = await bridge.documentGeneration()
             let fingerprintBefore = await bridge.pageFingerprint()
             // Which element this was, in replayable terms — before the action, since selecting an option
             // commonly re-renders dependent controls. See `PageToolReceipt`.
@@ -53,15 +54,16 @@ import ToolABI
             // sort-order and page-size controls both do — commits after this line, so an immediate
             // read names the page the select just left.
             //
-            // ONLY WHEN THE SELECT LANDED. The error branch below discards `urlAfter` entirely, and
+            // ONLY WHEN THE SELECT LANDED. The error branch below discards the settled page entirely, and
             // the settle costs the WHOLE grace window whenever the page does not move — which is
             // exactly what a rejected id or a missing option does. Polling first would add that
             // window to every failed call for a value nothing reads.
-            let urlAfter = result.isError ? urlBefore
-                                          : await bridge.settledPageURL(after: urlBefore)
+            let settled = result.isError ? SettledPage(url: urlBefore, newDocument: false)
+                : await bridge.settledPage(after: urlBefore, generationBefore: generationBefore)
             let receipt = RawToolResult(
                 output: result.isError ? result.output
-                    : result.output + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+                    : result.output
+                        + PageDelta.describe(urlBefore: urlBefore, urlAfter: settled.url, newDocument: settled.newDocument)
                         + selectorNote,
                 isError: result.isError ? true : nil)
             // The page the select left behind, when it changed one: a select that re-renders

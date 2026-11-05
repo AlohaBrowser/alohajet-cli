@@ -63,7 +63,11 @@ struct MCPRelayLaneTests {
         let replies = try run.stdout.split(separator: "\n").map {
             try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
         }
-        #expect(replies.compactMap { $0["id"] as? Int } == [0, 2, 3])
+        // Requests after the handshake go out together, so their answers come back in
+        // whichever order the browser finishes them.
+        #expect(replies.first?["id"] as? Int == 0)
+        #expect(Set(replies.compactMap { $0["id"] as? Int }) == [0, 2, 3])
+        #expect(replies.count == 3)
         #expect(replies.allSatisfy { $0["jsonrpc"] as? String == "2.0" && $0["error"] == nil })
         let initialized = try #require(replies.first?["result"] as? [String: Any])
         #expect((initialized["serverInfo"] as? [String: Any])?["name"] as? String == "relay-fixture")
@@ -86,9 +90,13 @@ struct MCPRelayLaneTests {
         #expect(requests.first?.mcpSession == nil)
         #expect(requests.dropFirst().allSatisfy { $0.mcpSession == AgentStubServer.mcpSession })
         #expect(requests.allSatisfy { $0.mcpProtocol?.isEmpty == false })
-        for (request, frame) in zip(requests, frames) {
-            let sent = try JSONSerialization.jsonObject(with: Data(request.body.utf8)) as? NSDictionary
-            let expected = try JSONSerialization.jsonObject(with: Data(frame.utf8)) as? NSDictionary
+        for frame in frames {
+            let expected = try #require(try JSONSerialization.jsonObject(with: Data(frame.utf8)) as? NSDictionary)
+            let request = requests.first {
+                (try? JSONSerialization.jsonObject(with: Data($0.body.utf8)) as? NSDictionary)?["method"]
+                    as? String == expected["method"] as? String
+            }
+            let sent = try request.map { try JSONSerialization.jsonObject(with: Data($0.body.utf8)) as? NSDictionary }
             #expect(sent == expected, "a relay request changed the client's frame")
         }
     }
@@ -121,6 +129,8 @@ struct MCPRelayLaneTests {
             #expect(run.stdout.contains("http://127.0.0.1:8765"))
             #expect(run.stdout.contains("mcp --endpoint"))
             #expect(run.stdout.contains("running"))
+            #expect(run.stdout.contains("cancelling in the browser"))
+            #expect(run.stdout.contains("signal"))
         }
         let usage = try runCLI(["--help"])
         #expect(usage.stdout.contains("mcp-stdio"))
@@ -266,17 +276,22 @@ struct MCPRelayLaneTests {
     /// slow to wake, a navigation that hangs — and the client's own deadline is the one
     /// that should end it. Under `URLSessionConfiguration.default`'s 60 s idle timer the
     /// relay instead dropped the WHOLE session, discarding work that had completed.
-    @Test func aCallSlowerThanTheDefaultTimeoutDoesNotEndTheSession() throws {
+    ///
+    /// stdin stays open until the answer is in: closed, it would end the call two seconds
+    /// later, and the test would pass without the call ever outliving the timer.
+    @Test func aCallSlowerThanTheDefaultTimeoutDoesNotEndTheSession() async throws {
         let stub = AgentStubServer(hold: 62)
         try stub.start()
         defer { stub.stop() }
+        let relay = try RelaySession(endpoint: stub.url, environment: Self.pinnedToken)
+        defer { relay.finish() }
 
-        let run = try runCLI(
-            ["mcp", "--endpoint", stub.url],
-            stdin: Self.toolsCall, environment: Self.pinnedToken, timeout: 180)
-
-        #expect(run.status == 0, "exited \(run.status): \(run.combined)")
-        #expect(!run.stderr.contains("timed out"), "\(run.combined)")
+        relay.send(Self.toolsCall.trimmingCharacters(in: .newlines))
+        let answer = await relay.reply(1, within: 180)
+        #expect(answer?["result"] != nil, "no answer to the slow call: \(relay.stderr)")
+        relay.closeInput()
+        #expect(await relay.exitStatus(within: 10) == 0, "\(relay.stderr)")
+        #expect(!relay.stderr.contains("timed out"), "\(relay.stderr)")
     }
 
     /// The relay is the only reason a Claude Desktop user has a working entry at all, so
@@ -287,6 +302,8 @@ struct MCPRelayLaneTests {
         #expect(run.stdout.contains("--endpoint"))
         #expect(run.stdout.contains("Claude Desktop"))
         #expect(run.stdout.contains("https"))
+        #expect(run.stdout.contains("cancelling in the browser"))
+        #expect(run.stdout.contains("signal"))
     }
 }
 

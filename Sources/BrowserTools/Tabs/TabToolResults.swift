@@ -44,14 +44,17 @@ public func tabsShownToAgent(_ tabs: TabsModel, inUseTabId: String?) -> [TabHand
 
 /// The tab row, the one line that describes a tab to the agent, as `askingChat` is told it:
 /// `<title> [<url>] (tab-id: <id>) — <whose tab>[, the tab the user is looking at][, in use]`.
-/// Whose tab is ``ownerWords(_:askingChat:)``.
+/// Whose tab is ``ownerWords(_:askingChat:)``. The tab in front is said to be looked at only
+/// when someone can see the browser (``TabAttribution/personAtBrowser``).
 ///
 /// Words, not decorations: the agent has to know which tabs are its own and which one its
 /// page tools act on, and a pictogram it has to guess the meaning of tells it neither. A
 /// tool prints its own words about what happened around the row, never inside it.
 public func renderTabRow(_ row: TabRow, askingChat: String) -> String {
     var words = [ownerWords(row.attribution, askingChat: askingChat)]
-    if row.attribution.foreground == true { words.append("the tab the user is looking at") }
+    if row.attribution.foreground == true, row.attribution.personAtBrowser != false {
+        words.append("the tab the user is looking at")
+    }
     if row.inUse { words.append("in use") }
     return "\(row.title) [\(row.url)] (tab-id: \(row.id)) — \(words.joined(separator: ", "))"
 }
