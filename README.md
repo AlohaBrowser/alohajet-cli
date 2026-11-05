@@ -275,6 +275,10 @@ that has to be replayed as `Mcp-Session-Id`. The bearer token is read per run, n
 pasted, and plaintext `http` off this machine is refused outright (exit 2) — the same rules
 `-p` follows, written out in [docs/agent-endpoint.md](docs/agent-endpoint.md).
 
+Once `initialize` is answered, each request goes to the browser as soon as it is read, so a
+ping, a cancel or a second call is never queued behind a call the browser is still working
+on. Answers come back in the order the browser finishes them.
+
 #### `mcp-stdio` — compatibility for saved desktop entries
 
 Older desktop versions saved `"args": ["mcp-stdio"]`. This command uses the same HTTP

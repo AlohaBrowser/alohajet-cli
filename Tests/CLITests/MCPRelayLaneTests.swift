@@ -58,7 +58,11 @@ struct MCPRelayLaneTests {
         let replies = try run.stdout.split(separator: "\n").map {
             try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
         }
-        #expect(replies.compactMap { $0["id"] as? Int } == [0, 2, 3])
+        // Requests after the handshake go out together, so their answers come back in
+        // whichever order the browser finishes them.
+        #expect(replies.first?["id"] as? Int == 0)
+        #expect(Set(replies.compactMap { $0["id"] as? Int }) == [0, 2, 3])
+        #expect(replies.count == 3)
         #expect(replies.allSatisfy { $0["jsonrpc"] as? String == "2.0" && $0["error"] == nil })
         let initialized = try #require(replies.first?["result"] as? [String: Any])
         #expect((initialized["serverInfo"] as? [String: Any])?["name"] as? String == "relay-fixture")
@@ -81,9 +85,13 @@ struct MCPRelayLaneTests {
         #expect(requests.first?.mcpSession == nil)
         #expect(requests.dropFirst().allSatisfy { $0.mcpSession == AgentStubServer.mcpSession })
         #expect(requests.allSatisfy { $0.mcpProtocol?.isEmpty == false })
-        for (request, frame) in zip(requests, frames) {
-            let sent = try JSONSerialization.jsonObject(with: Data(request.body.utf8)) as? NSDictionary
-            let expected = try JSONSerialization.jsonObject(with: Data(frame.utf8)) as? NSDictionary
+        for frame in frames {
+            let expected = try #require(try JSONSerialization.jsonObject(with: Data(frame.utf8)) as? NSDictionary)
+            let request = requests.first {
+                (try? JSONSerialization.jsonObject(with: Data($0.body.utf8)) as? NSDictionary)?["method"]
+                    as? String == expected["method"] as? String
+            }
+            let sent = try request.map { try JSONSerialization.jsonObject(with: Data($0.body.utf8)) as? NSDictionary }
             #expect(sent == expected, "a relay request changed the client's frame")
         }
     }

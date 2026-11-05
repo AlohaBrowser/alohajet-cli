@@ -1,0 +1,124 @@
+import Foundation
+import Testing
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
+
+/// `alohajet mcp --endpoint <url>` as a host runs it: stdin stays open while the host waits, the
+/// host writes a frame whenever it likes, and it may close stdin or signal the relay at any
+/// point. `runCLI` feeds stdin from a file, which is at its end before the first frame is read,
+/// so none of that can be expressed there.
+///
+/// stdin is a pipe written with `write(2)` (see `BinaryUnderTest` for why not `FileHandle`);
+/// stdout and stderr are files, polled for what has landed.
+nonisolated final class RelaySession: @unchecked Sendable {
+    private let process = Process()
+    private let input = Pipe()
+    private let sandbox: URL
+    private let outURL: URL
+    private let errURL: URL
+    private var inputOpen = true
+
+    init(endpoint: String, environment overlay: [String: String] = ["ALOHAJET_AGENT_TOKEN": "test-token"]) throws {
+        // A write to a relay that has already exited must fail with EPIPE, not kill the test.
+        signal(SIGPIPE, SIG_IGN)
+        let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
+        sandbox = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alohajet-relay-session-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
+        outURL = sandbox.appendingPathComponent("stdout")
+        errURL = sandbox.appendingPathComponent("stderr")
+        FileManager.default.createFile(atPath: outURL.path, contents: nil)
+        FileManager.default.createFile(atPath: errURL.path, contents: nil)
+
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = ["mcp", "--endpoint", endpoint]
+        var environment = ProcessInfo.processInfo.environment
+        environment["TMPDIR"] = sandbox.path
+        environment.merge(overlay) { _, override in override }
+        process.environment = environment
+        process.standardInput = input
+        process.standardOutput = try FileHandle(forWritingTo: outURL)
+        process.standardError = try FileHandle(forWritingTo: errURL)
+        try process.run()
+    }
+
+    var pid: Int32 { process.processIdentifier }
+    var stderr: String { String(decoding: (try? Data(contentsOf: errURL)) ?? Data(), as: UTF8.self) }
+
+    func send(_ frame: String) {
+        let bytes = Array((frame + "\n").utf8)
+        var sent = 0
+        let fd = input.fileHandleForWriting.fileDescriptor
+        while sent < bytes.count {
+            let wrote = bytes[sent...].withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            if wrote < 0, errno == EINTR { continue }
+            if wrote <= 0 { return }
+            sent += wrote
+        }
+    }
+
+    func initialize() {
+        send(#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"relay-session","version":"1"}}}"#)
+        send(#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+    }
+
+    func callTool(_ id: Int) {
+        send(#"{"jsonrpc":"2.0","id":\#(id),"method":"tools/call","params":{"name":"fixture_wait","arguments":{}}}"#)
+    }
+
+    func ping(_ id: Int) {
+        send(#"{"jsonrpc":"2.0","id":\#(id),"method":"ping"}"#)
+    }
+
+    func cancel(_ id: Int) {
+        send(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":\#(id),"reason":"the client gave up"}}"#)
+    }
+
+    func closeInput() {
+        guard inputOpen else { return }
+        inputOpen = false
+        try? input.fileHandleForWriting.close()
+    }
+
+    func deliver(_ signalNumber: Int32) { kill(process.processIdentifier, signalNumber) }
+
+    /// Every JSON-RPC message the relay has written to stdout so far.
+    var replies: [[String: Any]] {
+        String(decoding: (try? Data(contentsOf: outURL)) ?? Data(), as: UTF8.self)
+            .split(separator: "\n")
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+    }
+
+    func reply(_ id: Int, within seconds: TimeInterval) -> [String: Any]? {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            if let reply = replies.first(where: { $0["id"] as? Int == id }) { return reply }
+            Thread.sleep(forTimeInterval: 0.01)
+        } while Date() < deadline
+        return nil
+    }
+
+    /// The exit status, once the relay has exited by itself within `seconds`; `nil` while it
+    /// runs. Polled: `waitUntilExit` cannot give up, and a relay that never ends is the defect.
+    func exitStatus(within seconds: TimeInterval) -> Int32? {
+        let deadline = Date().addingTimeInterval(seconds)
+        while process.isRunning {
+            if Date() >= deadline { return nil }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return process.terminationReason == .exit ? process.terminationStatus : -process.terminationStatus
+    }
+
+    /// Ends the relay if a test left it running, and removes its files.
+    func finish() {
+        closeInput()
+        if process.isRunning {
+            process.terminate()
+            if exitStatus(within: 5) == nil { kill(process.processIdentifier, SIGKILL) }
+        }
+        try? FileManager.default.removeItem(at: sandbox)
+    }
+}

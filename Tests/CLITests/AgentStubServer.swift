@@ -76,29 +76,7 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
     }
 
     func start() throws {
-        listenFD = socket(AF_INET, SOCK_STREAM_VALUE, 0)
-        guard listenFD >= 0 else { throw Failure.socket(errno) }
-        var yes: Int32 = 1
-        setsockopt(listenFD, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
-        var address = sockaddr_in()
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = requestedPort.bigEndian // 0 lets the kernel pick a free port
-        address.sin_addr.s_addr = INADDR_LOOPBACK_BE
-        #if canImport(Darwin)
-        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        #endif
-        let bound = withUnsafePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                bind(listenFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-            }
-        }
-        guard bound == 0, listen(listenFD, 8) == 0 else { close(listenFD); throw Failure.bind(errno) }
-        var actual = sockaddr_in()
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        _ = withUnsafeMutablePointer(to: &actual) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listenFD, $0, &length) }
-        }
-        port = Int(UInt16(bigEndian: actual.sin_port))
+        (listenFD, port) = try StubHTTP.listener(port: requestedPort)
         let thread = Thread { [weak self] in self?.serve() }
         thread.name = "alohajet.test.agent"
         thread.start()
@@ -114,52 +92,15 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
         while listenFD >= 0 {
             let client = accept(listenFD, nil, nil)
             if client < 0 { return }              // the listener closed: we are done
-            if let request = read(client) {
+            if let request = StubHTTP.read(client) {
                 lock.withLock { recorded.append(request) }
                 if hold > 0 { Thread.sleep(forTimeInterval: hold) }
                 let (status, json) = answer(request)
-                write(client, status: status, json: json,
-                      mcp: request.path == "/mcp" && mcpToken != nil)
+                StubHTTP.write(client, status: status, json: json,
+                               mcp: request.path == "/mcp" && mcpToken != nil)
             }
             close(client)
         }
-    }
-
-    /// Read one request: headers to the blank line, then exactly `Content-Length` more
-    /// bytes. Reading a fixed 4K once would be right until the day a body lands in a
-    /// second segment, which is the kind of flake nobody debugs twice.
-    private func read(_ client: Int32) -> Request? {
-        var raw = Data()
-        var scratch = [UInt8](repeating: 0, count: 4096)
-        func readMore() -> Bool {
-            let got = recv(client, &scratch, scratch.count, 0)
-            guard got > 0 else { return false }
-            raw.append(contentsOf: scratch[0..<got])
-            return true
-        }
-        let separator = Data("\r\n\r\n".utf8)
-        while raw.range(of: separator) == nil { guard readMore() else { return nil } }
-        let headEnd = raw.range(of: separator)!
-        let head = String(decoding: raw[..<headEnd.lowerBound], as: UTF8.self)
-        let lines = head.components(separatedBy: "\r\n")
-        let start = lines.first?.components(separatedBy: " ") ?? []
-        guard start.count >= 2 else { return nil }
-        func header(_ name: String) -> String? {
-            lines.dropFirst()
-                .first { $0.lowercased().hasPrefix(name.lowercased() + ":") }
-                .map { String($0.dropFirst(name.count + 1)).trimmingCharacters(in: .whitespaces) }
-        }
-        let expected = header("Content-Length").flatMap(Int.init) ?? 0
-        while raw[headEnd.upperBound...].count < expected { guard readMore() else { return nil } }
-        let body = String(decoding: raw[headEnd.upperBound...].prefix(expected), as: UTF8.self)
-        return Request(method: start[0],
-                       path: URLComponents(string: start[1])?.path ?? start[1],
-                       body: body,
-                       authorization: header("Authorization"),
-                       contentType: header("Content-Type"),
-                       accept: header("Accept"),
-                       mcpSession: header("Mcp-Session-Id"),
-                       mcpProtocol: header("Mcp-Protocol-Version"))
     }
 
     private func answer(_ request: Request) -> (status: Int, json: String) {
@@ -224,8 +165,80 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
             return (404, #"{"error":"not found"}"#)
         }
     }
+}
 
-    private func write(_ client: Int32, status: Int, json: String, mcp: Bool = false) {
+/// The POSIX halves every loopback stub here shares: a listener, one request read whole, one
+/// response written whole.
+nonisolated enum StubHTTP {
+    enum Failure: Error { case socket(Int32), bind(Int32) }
+
+    /// A listening socket on 127.0.0.1:`port` (0 lets the kernel pick), and the port it got.
+    static func listener(port requested: UInt16) throws -> (fd: Int32, port: Int) {
+        let fd = socket(AF_INET, SOCK_STREAM_VALUE, 0)
+        guard fd >= 0 else { throw Failure.socket(errno) }
+        var yes: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = requested.bigEndian
+        address.sin_addr.s_addr = INADDR_LOOPBACK_BE
+        #if canImport(Darwin)
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        #endif
+        let bound = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        guard bound == 0, listen(fd, 16) == 0 else { close(fd); throw Failure.bind(errno) }
+        var actual = sockaddr_in()
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &actual) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        }
+        return (fd, Int(UInt16(bigEndian: actual.sin_port)))
+    }
+
+    /// Read one request: headers to the blank line, then exactly `Content-Length` more
+    /// bytes. Reading a fixed 4K once would be right until the day a body lands in a
+    /// second segment, which is the kind of flake nobody debugs twice.
+    static func read(_ client: Int32) -> AgentStubServer.Request? {
+        var raw = Data()
+        var scratch = [UInt8](repeating: 0, count: 4096)
+        func readMore() -> Bool {
+            let got = recv(client, &scratch, scratch.count, 0)
+            guard got > 0 else { return false }
+            raw.append(contentsOf: scratch[0..<got])
+            return true
+        }
+        let separator = Data("\r\n\r\n".utf8)
+        while raw.range(of: separator) == nil { guard readMore() else { return nil } }
+        let headEnd = raw.range(of: separator)!
+        let head = String(decoding: raw[..<headEnd.lowerBound], as: UTF8.self)
+        let lines = head.components(separatedBy: "\r\n")
+        let start = lines.first?.components(separatedBy: " ") ?? []
+        guard start.count >= 2 else { return nil }
+        func header(_ name: String) -> String? {
+            lines.dropFirst()
+                .first { $0.lowercased().hasPrefix(name.lowercased() + ":") }
+                .map { String($0.dropFirst(name.count + 1)).trimmingCharacters(in: .whitespaces) }
+        }
+        let expected = header("Content-Length").flatMap(Int.init) ?? 0
+        while raw[headEnd.upperBound...].count < expected { guard readMore() else { return nil } }
+        let body = String(decoding: raw[headEnd.upperBound...].prefix(expected), as: UTF8.self)
+        return AgentStubServer.Request(method: start[0],
+                                       path: URLComponents(string: start[1])?.path ?? start[1],
+                                       body: body,
+                                       authorization: header("Authorization"),
+                                       contentType: header("Content-Type"),
+                                       accept: header("Accept"),
+                                       mcpSession: header("Mcp-Session-Id"),
+                                       mcpProtocol: header("Mcp-Protocol-Version"))
+    }
+
+    /// One response, then the caller closes: `Connection: close`. An MCP 200 goes out as one SSE
+    /// event carrying the session id, as the browser's server answers.
+    static func write(_ client: Int32, status: Int, json: String, mcp: Bool = false) {
         #if os(Linux)
         // The pinned SDK forwards SSE bodies verbatim on Linux. Exercise its JSON
         // response path here; macOS still covers the native server's SSE framing.
@@ -238,7 +251,7 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
         if status != 202 {
             head += "Content-Type: \(sse ? "text/event-stream" : "application/json")\r\n"
         }
-        if mcp && status == 200 { head += "Mcp-Session-Id: \(Self.mcpSession)\r\n" }
+        if mcp && status == 200 { head += "Mcp-Session-Id: \(AgentStubServer.mcpSession)\r\n" }
         head += "Content-Length: \(body.count)\r\nConnection: close\r\n\r\n"
         let response = Data(head.utf8) + body
         response.withUnsafeBytes { buffer in
@@ -250,8 +263,6 @@ nonisolated final class AgentStubServer: @unchecked Sendable {
             }
         }
     }
-
-    enum Failure: Error { case socket(Int32), bind(Int32) }
 }
 
 extension JSONSerialization {
@@ -264,9 +275,9 @@ extension JSONSerialization {
 }
 
 #if canImport(Glibc)
-private nonisolated let SOCK_STREAM_VALUE = Int32(SOCK_STREAM.rawValue)
+nonisolated let SOCK_STREAM_VALUE = Int32(SOCK_STREAM.rawValue)
 #else
-private nonisolated let SOCK_STREAM_VALUE = SOCK_STREAM
+nonisolated let SOCK_STREAM_VALUE = SOCK_STREAM
 #endif
 /// 127.0.0.1 in network byte order.
-private nonisolated let INADDR_LOOPBACK_BE: in_addr_t = (127 << 24 | 1).bigEndian
+nonisolated let INADDR_LOOPBACK_BE: in_addr_t = (127 << 24 | 1).bigEndian
