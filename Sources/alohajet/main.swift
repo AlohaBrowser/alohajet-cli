@@ -172,7 +172,8 @@ let commandHelp: [String: String] = [
           anywhere — a port forward, a second machine. A non-loopback endpoint
           is sent no token unless ALOHAJET_AGENT_TOKEN names one. The relay ends
           when stdin does, once every request read is answered or 2 s after,
-          cancelling in the browser what is still running.
+          cancelling in the browser what is still running; a signal (INT, TERM,
+          HUP) cancels it at once.
         """,
     "mcp-stdio": """
         alohajet mcp-stdio [--endpoint <url>]
@@ -182,7 +183,8 @@ let commandHelp: [String: String] = [
           the same validation and token rules as mcp --endpoint <url>.
           Keep Aloha running; this command launches no app or Chromium.
           Ends when stdin does, once every request read is answered or 2 s
-          after, cancelling in the browser what is still running.
+          after, cancelling in the browser what is still running; a signal
+          (INT, TERM, HUP) cancels it at once.
           Use mcp --endpoint <url> for new configurations.
         """
 ]

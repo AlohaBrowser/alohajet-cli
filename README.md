@@ -284,7 +284,8 @@ the end of stdin, when it cancels in the browser (`notifications/cancelled`) wha
 still running. The browser cannot tell a client that went away from one that is waiting,
 so a call left behind would otherwise run to its end, a person asked to complete a check
 included. A request that fails, or a stdout nobody reads, ends the relay the same way,
-without the wait (exit 3).
+without the wait (exit 3). So do SIGINT, SIGTERM and SIGHUP, the way most hosts stop a
+server, and the relay then exits with 128 + the signal number.
 
 #### `mcp-stdio` — compatibility for saved desktop entries
 

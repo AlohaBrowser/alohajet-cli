@@ -56,8 +56,7 @@ enum MCPRelay {
         signal(SIGPIPE, SIG_IGN)
 
         do {
-            try await run(endpoint: endpoint)
-            return exitOK
+            return try await run(endpoint: endpoint)
         } catch {
             // stdout is the JSON-RPC channel and carries nothing else, so the report of a
             // dead upstream goes to stderr — where the host's MCP log picks it up. A
@@ -83,13 +82,30 @@ enum MCPRelay {
     /// would run to its end — a person asked to complete a check included — for nobody. So
     /// whatever ends the relay first cancels in the browser, with `notifications/cancelled`,
     /// every request still owed: the end of stdin after ``endOfInputGrace``, a request that
-    /// failed, and a stdout nobody reads.
+    /// failed, a stdout nobody reads, and SIGINT, SIGTERM or SIGHUP.
+    ///
+    /// Returns the exit code: 0 at the end of stdin, 128 + the signal number when signalled.
     ///
     /// `nonisolated` so the `requestModifier` closure handed to the transport actor is a
     /// disconnected value rather than a main-actor-isolated one (this target's default
     /// isolation), which the compiler refuses to send across actors.
-    static nonisolated func run(endpoint: URL) async throws {
+    static nonisolated func run(endpoint: URL) async throws -> Int32 {
         let owed = OwedRequests()
+        let (signals, raised) = AsyncStream<Int32>.makeStream()
+        // A `DispatchSource` rather than a handler of the signal's own: the handler runs on a
+        // queue, where it may do anything. The kernel default is ignored so the source is what
+        // handles it. `@Sendable` is load-bearing: this target is main-actor by default, and a
+        // closure Dispatch calls off the main actor would trap on its isolation check before
+        // its first line (measured in `BrowserToolSession.installSignalReaper`).
+        let sources = [SIGINT, SIGTERM, SIGHUP].map { number in
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+            source.setEventHandler { @Sendable in raised.yield(number) }
+            signal(number, SIG_IGN)
+            source.resume()
+            return source
+        }
+        defer { sources.forEach { $0.cancel() } }
+
         // `URLSessionConfiguration.default`'s 60 s idle timer is a deadline nobody here
         // chose, and the app holds the POST open for the WHOLE tool call without a
         // keepalive — so a page that takes a minute to wake killed the session and threw
@@ -127,12 +143,13 @@ enum MCPRelay {
         try await upstream.connect()
         defer { Task { await upstream.disconnect(); await downstream.disconnect() } }
 
-        try await withThrowingTaskGroup(of: Void.self) { group in
+        return try await withThrowingTaskGroup(of: Ending.self) { group in
             group.addTask {
                 try await forwardClientFrames(downstream, upstream, owed)
                 // Ends the receive stream once what is buffered has been read, so the
                 // writer below drains every answer and then ends the session.
                 await upstream.disconnect()
+                return .inputForwarded
             }
             // The one writer to stdout: concurrent `StdioTransport.send`s can interleave
             // their bytes when a write is short. Answers leave in the order the browser
@@ -149,12 +166,40 @@ enum MCPRelay {
                     }
                     throw error
                 }
+                return .answersWritten
             }
-            // A failure on either side ends the session at once, the other half cancelled: a
-            // failed upstream is not recoverable from here, and a lost stdout means the client
-            // is gone. (`waitForAll` would wait for the writer, which never ends by itself.)
-            for try await _ in group {}
+            // No grace: a signalled relay is being stopped now. Its stopped answers still get
+            // `cancellationSettle` to be written for a host that reads on.
+            group.addTask {
+                for await number in signals {
+                    await cancelOwed(upstream, owed, reason: "the MCP client stopped the relay")
+                    await owed.settle(within: cancellationSettle)
+                    return .signalled(number)
+                }
+                return .notSignalled
+            }
+            // A failure on either side ends the session at once, the rest cancelled: a failed
+            // upstream is not recoverable from here, and a lost stdout means the client is gone.
+            for try await ending in group {
+                switch ending {
+                case .inputForwarded, .notSignalled: continue
+                case .answersWritten: group.cancelAll(); return exitOK
+                case .signalled(let number): group.cancelAll(); return 128 + number
+                }
+            }
+            return exitOK
         }
+    }
+
+    /// How one half of a relay session ended.
+    private enum Ending: Sendable {
+        /// stdin has ended and every request read from it has been answered or cancelled.
+        case inputForwarded
+        /// The browser's answers have all been written; the session is over.
+        case answersWritten
+        case signalled(Int32)
+        /// The session ended before any signal came.
+        case notSignalled
     }
 
     /// Forwards stdin to the browser until stdin ends, then gives the requests still out

@@ -124,6 +124,7 @@ struct MCPRelayLaneTests {
             #expect(run.stdout.contains("mcp --endpoint"))
             #expect(run.stdout.contains("running"))
             #expect(run.stdout.contains("cancelling in the browser"))
+            #expect(run.stdout.contains("signal"))
         }
         let usage = try runCLI(["--help"])
         #expect(usage.stdout.contains("mcp-stdio"))
@@ -274,6 +275,7 @@ struct MCPRelayLaneTests {
         #expect(run.stdout.contains("Claude Desktop"))
         #expect(run.stdout.contains("https"))
         #expect(run.stdout.contains("cancelling in the browser"))
+        #expect(run.stdout.contains("signal"))
     }
 }
 

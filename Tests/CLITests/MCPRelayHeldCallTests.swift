@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#endif
 import Testing
 
 // The relay while a tool call is held open. The browser holds a `tools/call` POST for as long as
@@ -193,5 +196,24 @@ struct MCPRelayHeldCallTests {
 
         #expect(relay.exitStatus(within: 10) == 3, "\(relay.stderr)")
         #expect(stub.cancels.contains { $0.cancels == 2 }, "the call was left running in the browser")
+    }
+
+    /// A host that stops its server with a signal (Claude Desktop does) is gone just as surely.
+    /// The relay cancels what is still running at once, then exits as signalled processes do
+    /// here, 128 + the signal number: a host that waits on it is not kept waiting.
+    @Test(arguments: [SIGTERM, SIGINT, SIGHUP])
+    func aSignalledRelayCancelsWhatIsInFlight(_ signalNumber: Int32) throws {
+        let stub = MCPHoldingStub(maxHold: 30)
+        defer { stub.stop() }
+        let relay = try relay(to: stub)
+        defer { relay.finish() }
+
+        relay.callTool(2)
+        try #require(stub.wait(within: 10) { stub.isHeld(2) }, "the call never reached the browser")
+        relay.deliver(signalNumber)
+
+        #expect(relay.exitStatus(within: 5) == 128 + signalNumber, "\(relay.stderr)")
+        #expect(stub.cancels.map(\.cancels) == [2], "the call was left running in the browser")
+        #expect(stub.cancels.first?.reason?.isEmpty == false)
     }
 }
