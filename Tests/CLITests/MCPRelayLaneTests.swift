@@ -7,6 +7,7 @@ import Testing
 //   alohajet mcp --endpoint <url>   a PIPE onto the MCP server a running Aloha browser
 //                                   already mounts at <url>/mcp — no tools, no browser
 //   alohajet mcp-stdio              the legacy relay entry, defaulting to loopback:8765
+//                                   (its app's port: +100 for an e2e build, +200 for test)
 //
 // A loopback fixture exercises the real subprocess and SDK transports. Its responses
 // are synthetic; these tests do not launch the desktop app or use a user's browser.
@@ -28,20 +29,25 @@ struct MCPRelayLaneTests {
     // MARK: - Saved desktop entries
 
     /// The default case executes EXACTLY the already-saved args, with a listener we
-    /// own on the legacy port. The other cases pin endpoint override and modern relay
-    /// parity. A marker executable catches even an attempted Chromium launch.
+    /// own on the default port of the app the binary ships in: a test app's (8965), never
+    /// the shipped 8765, where a stub would take the user's AlohaJet's port and the user's
+    /// own relay (`alohajet mcp --endpoint http://127.0.0.1:8765`) would hand it their
+    /// token. The other cases pin endpoint override and modern relay parity. A marker
+    /// executable catches even an attempted Chromium launch.
     @Test("authenticated MCP frames relay without launching Chromium", arguments: [
         "legacy-default", "legacy-explicit", "modern",
     ])
     func savedEntriesRelayFramesWithoutLaunchingChromium(_ mode: String) throws {
         let sandbox = try RelaySandbox()
         defer { sandbox.remove() }
-        let stub = AgentStubServer(port: mode == "legacy-default" ? 8765 : 0,
+        let stub = AgentStubServer(port: mode == "legacy-default" ? 8965 : 0,
                                    mcpToken: sandbox.token)
-        try stub.start() // If 8765 is busy, fail before contacting its existing owner.
+        try stub.start() // If 8965 is busy, fail before contacting its existing owner.
         defer { stub.stop() }
         let arguments = mode == "legacy-default" ? ["mcp-stdio"]
             : [mode == "modern" ? "mcp" : "mcp-stdio", "--endpoint", stub.url]
+        var environment = sandbox.environment
+        if mode == "legacy-default" { environment["ALOHA_BROWSER_APP"] = try sandbox.app(dataSuffix: "test") }
         let frames = [
             #"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"relay-regression","version":"1"}}}"#,
             #"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
@@ -49,7 +55,7 @@ struct MCPRelayLaneTests {
             #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fixture_tabs","arguments":{"action":"list"}}}"#,
         ]
         let run = try runCLI(arguments, stdin: frames.joined(separator: "\n") + "\n",
-                             environment: sandbox.environment, timeout: 30)
+                             environment: environment, timeout: 30)
 
         let chromiumWasLaunched = sandbox.chromiumWasLaunched
         #expect(!chromiumWasLaunched, "the relay attempted to launch Chromium")
@@ -94,16 +100,11 @@ struct MCPRelayLaneTests {
     @Test func theCLIOfAnE2EBuildRelaysToItsOwnAppsPort() throws {
         let sandbox = try RelaySandbox()
         defer { sandbox.remove() }
-        let app = sandbox.root.appendingPathComponent("E2E.app")
-        try FileManager.default.createDirectory(
-            at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
-        try PropertyListSerialization.data(fromPropertyList: ["AlohaDataSuffix": "e2e"], format: .xml, options: 0)
-            .write(to: app.appendingPathComponent("Contents/Info.plist"))
         let stub = AgentStubServer(port: 8865, mcpToken: sandbox.token)
         try stub.start() // If 8865 is busy, fail before contacting its existing owner.
         defer { stub.stop() }
         var environment = sandbox.environment
-        environment["ALOHA_BROWSER_APP"] = app.path
+        environment["ALOHA_BROWSER_APP"] = try sandbox.app(dataSuffix: "e2e")
         let initialize = #"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"e2e-port","version":"1"}}}"#
         let run = try runCLI(["mcp-stdio"], stdin: initialize + "\n", environment: environment, timeout: 30)
         #expect(run.status == 0, "\(run.combined)")
@@ -307,4 +308,14 @@ private struct RelaySandbox {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: browser.path)
     }
     func remove() { try? FileManager.default.removeItem(at: root) }
+    /// An app bundle whose Info.plist carries only this data suffix, for `ALOHA_BROWSER_APP`:
+    /// the binary under test then takes that identity's ports.
+    func app(dataSuffix: String) throws -> String {
+        let app = root.appendingPathComponent("\(dataSuffix).app")
+        try FileManager.default.createDirectory(
+            at: app.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["AlohaDataSuffix": dataSuffix], format: .xml, options: 0)
+            .write(to: app.appendingPathComponent("Contents/Info.plist"))
+        return app.path
+    }
 }
