@@ -319,7 +319,11 @@ struct ChromiumProvisionerTests {
 
 // MARK: - Archive integrity
 
-@Test func sha256MatchesKnownVectors() {
+// `@concurrent`: this target defaults to the main actor, and the million-byte vector is
+// the heaviest synchronous work in it — an unoptimised pure-Swift hash that held the main
+// actor for 16-30 s on a loaded CI runner. Every MockCDP-backed wake needs the main actor
+// to make progress, and its real 18 s deadline does not stop counting while it waits.
+@Test @concurrent nonisolated func sha256MatchesKnownVectors() async {
     #expect(sha256Hex(Data()) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
     #expect(sha256Hex(Data("abc".utf8)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     // 1 000 000 × 'a' — the NIST long message, the one that exercises multi-block padding.
