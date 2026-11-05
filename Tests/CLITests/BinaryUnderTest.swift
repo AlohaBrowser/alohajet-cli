@@ -12,28 +12,101 @@ import Darwin
 // and stdio. That is also the only way to assert an EXIT CODE, which is half of the CLI's
 // contract and is invisible to an in-process test.
 
-/// The `alohajet` binary this test run built.
+/// The `alohajet` binary this test run built, or why there is none — every case that runs
+/// it FAILS on the latter (`try alohajetBinary.get()`), it does not skip.
 ///
-/// Found from `#filePath` — `<package>/Tests/CLITests/BinaryUnderTest.swift` — because
-/// `CommandLine.arguments[0]` inside a test bundle is the `xctest` host, not anything
-/// next to the product. `ALOHAJET_BIN` overrides it so a packaged binary can be smoke
-/// tested with the same suite. `nil` is the signal to skip: the binary is a product of
-/// the same build, so its absence means the harness changed shape, not that the CLI broke.
-let alohajetBinary: String? = {
-    if let override = ProcessInfo.processInfo.environment["ALOHAJET_BIN"], !override.isEmpty {
-        return isExecutableFile(override) ? override : nil
+/// The one beside this test bundle, in the build's own products directory: `swift test`
+/// builds both there, wherever `--scratch-path` puts it. (`<package>/.build/debug` was a
+/// stale binary from another build whenever this one went elsewhere.) It must not be
+/// older than a Swift file under `<package>/Sources` (`#filePath`) that no build compiled
+/// since: that one was not rebuilt from them (`--skip-build`). `ALOHAJET_BIN` overrides it
+/// so a packaged binary can be smoke tested with the same suite; it is taken as named, but
+/// must exist.
+let alohajetBinary = Result {
+    try resolveAlohajetBinary(
+        override: ProcessInfo.processInfo.environment["ALOHAJET_BIN"],
+        testImage: testImagePath(),
+        sources: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // Tests/CLITests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // <package>
+            .appendingPathComponent("Sources"))
+}
+
+struct BinaryUnderTestError: Error, CustomStringConvertible {
+    let description: String
+}
+
+/// `testImage` is the test bundle's executable (macOS
+/// `<products>/alohajetPackageTests.xctest/Contents/MacOS/…`) or the test executable
+/// itself (Linux `<products>/alohajetPackageTests.xctest`); `alohajet` is its sibling.
+func resolveAlohajetBinary(override: String?, testImage: String?, sources: URL) throws -> String {
+    if let override, !override.isEmpty {
+        guard isExecutableFile(override) else {
+            throw BinaryUnderTestError(description: "ALOHAJET_BIN=\(override) is not an executable file")
+        }
+        return override
     }
-    let packageRoot = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()   // Tests/CLITests
-        .deletingLastPathComponent()   // Tests
-        .deletingLastPathComponent()   // <package>
-    for configuration in ["debug", "release"] {
-        let candidate = packageRoot
-            .appendingPathComponent(".build/\(configuration)/alohajet").path
-        if isExecutableFile(candidate) { return candidate }
+    var bundle = URL(fileURLWithPath: testImage ?? "/").resolvingSymlinksInPath()
+    while bundle.pathExtension != "xctest", bundle.pathComponents.count > 1 {
+        bundle.deleteLastPathComponent()
     }
-    return nil
-}()
+    guard bundle.pathExtension == "xctest" else {
+        throw BinaryUnderTestError(description: "no .xctest bundle around the test image \(testImage ?? "nil")")
+    }
+    let products = bundle.deletingLastPathComponent()
+    let binary = products.appendingPathComponent("alohajet").path
+    guard isExecutableFile(binary) else {
+        throw BinaryUnderTestError(description: "no alohajet beside the test bundle: \(binary)")
+    }
+    guard FileManager.default.fileExists(atPath: sources.path) else {
+        throw BinaryUnderTestError(description: "no sources at \(sources.path)")
+    }
+    let built = try modificationDate(binary)
+    let saved = try files(under: sources, withExtension: "swift")
+        .map { ($0, try modificationDate($0.path)) }.filter { $0.1 > built }
+    guard !saved.isEmpty else { return binary }
+
+    // Saved after the link is not yet stale. The compiler keeps an object whose content did
+    // not change, so a source saved unchanged (a checkout, a stash round trip) is recompiled
+    // and NOT relinked: newer than the binary, yet in it, and no build ever relinks it
+    // (measured, native and swiftbuild alike). That compile does rewrite the source's
+    // `<name>.d`, two levels above the products directory either way: native
+    // `<scratch>/<triple>/debug/<Target>.build/`, swiftbuild `<scratch>/out/Intermediates.noindex/…`.
+    var compiled: [String: Date] = [:]
+    for list in files(under: products.deletingLastPathComponent().deletingLastPathComponent(), withExtension: "d") {
+        let name = list.deletingPathExtension().lastPathComponent
+        compiled[name] = max(compiled[name] ?? .distantPast, try modificationDate(list.path))
+    }
+    for (file, savedAt) in saved where (compiled[file.deletingPathExtension().lastPathComponent] ?? .distantPast) < savedAt {
+        throw BinaryUnderTestError(description: """
+            \(binary) is older than \(file.path), and no build compiled it since \
+            (swift test --skip-build?). Build it, or name a binary with ALOHAJET_BIN.
+            """)
+    }
+    return binary
+}
+
+private func files(under directory: URL, withExtension pathExtension: String) -> [URL] {
+    let all = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil)?.allObjects ?? []
+    return all.compactMap { $0 as? URL }.filter { $0.pathExtension == pathExtension }
+}
+
+private func modificationDate(_ path: String) throws -> Date {
+    try FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date ?? .distantPast
+}
+
+/// The image this code is linked into: the test bundle's executable, not the `xctest` /
+/// `swiftpm-testing-helper` host that `CommandLine.arguments[0]` names on macOS.
+func testImagePath() -> String? {
+    #if canImport(Darwin)
+    var info = Dl_info()
+    guard dladdr(#dsohandle, &info) != 0, let name = info.dli_fname else { return nil }
+    return String(cString: name)
+    #else
+    return try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe")
+    #endif
+}
 
 private func isExecutableFile(_ path: String) -> Bool {
     var isDirectory: ObjCBool = false
@@ -73,7 +146,7 @@ func runCLI(
     _ arguments: [String], stdin: String? = nil, terminal: String? = nil,
     environment overlay: [String: String] = [:], timeout: TimeInterval = 30
 ) throws -> RunOutput {
-    let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
+    let binary = try alohajetBinary.get()
     let sandbox = FileManager.default.temporaryDirectory
         .appendingPathComponent("alohajet-cli-test-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)

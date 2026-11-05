@@ -54,7 +54,7 @@ struct MCPSignalTeardownTests {
         // not compile on Linux until now and so these tests had never once run there.
         signal(SIGPIPE, SIG_IGN)
 
-        let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
+        let binary = try alohajetBinary.get()
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("alohajet-mcp-signal-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true,
