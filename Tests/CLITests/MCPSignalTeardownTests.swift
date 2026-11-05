@@ -3,6 +3,7 @@ import Foundation
 import Glibc
 #endif
 import Dispatch
+import BrowserTools
 import CDP
 import ToolABI
 import Testing
@@ -20,12 +21,27 @@ import Testing
 // assertion below is the EXIT — status and wall clock — with the browser and profile
 // checks kept, and it is run for both endings a host can produce: a signal, and EOF.
 
-/// `true` when the tools/call answered with the launcher's "no browser" refusal rather
-/// than a tab. The suite skips on that unless CI demands a browser, matching
-/// `RealBrowserE2ETests`.
-private nonisolated let browserIsRequired = ProcessInfo.processInfo.environment["ALOHAJET_REQUIRE_BROWSER"] == "1"
+/// The one machine this suite skips on, with the CLI's own refusal as the reason: a platform
+/// Chrome for Testing has no build for (Windows on ARM) with no Chromium installed. Everywhere
+/// else the CLI finds or downloads a browser, so one that does not come up is a failure.
+/// `ALOHAJET_REQUIRE_BROWSER=1` makes even this a failure, as it does for `RealBrowserE2ETests`.
+private nonisolated let noBrowserHere: String? = {
+    let environment = ProcessInfo.processInfo.environment
+    guard environment["ALOHAJET_REQUIRE_BROWSER"] != "1", environment["ALOHAJET_BROWSER"] == nil else { return nil }
+    do {
+        _ = try currentChromiumPlatformKey()
+        return nil
+    } catch let unsupported as UnsupportedChromiumPlatformError {
+        // A CHROME_PATH that names nothing throws: the suite runs, and the CLI says so.
+        guard case .success(nil) = Result(catching: { try installedChromiumPath() }) else { return nil }
+        return ChromiumProvisionerError.noChromiumForPlatform("\(unsupported.platform)/\(unsupported.arch)").description
+    } catch {
+        return nil
+    }
+}()
 
-@Suite("mcp signal teardown", .serialized)
+@Suite("mcp signal teardown", .serialized,
+       .disabled(if: noBrowserHere != nil, Comment(rawValue: noBrowserHere ?? "")))
 struct MCPSignalTeardownTests {
 
     @Test func sigtermExitsAndTakesTheBrowserWithIt() throws {
@@ -122,7 +138,9 @@ struct MCPSignalTeardownTests {
         // exec preserves the actual browser PID/signals. Redirect at its owned launch
         // boundary so production cleanup cannot unlink the sole diagnostic copy.
         // The fixture opens only about:blank, with a throwaway profile.
-        let browserExecutable = environment["ALOHAJET_BROWSER"] ?? ChromeLauncher.defaultExecutablePath
+        // Where Chrome for Testing has no build, the CLI runs the Chromium installed here.
+        let installed = (try? currentChromiumPlatformKey()) == nil ? (try? installedChromiumPath()) : nil
+        let browserExecutable = environment["ALOHAJET_BROWSER"] ?? installed ?? ChromeLauncher.defaultExecutablePath
         if ChromeLauncher(executablePath: browserExecutable).isAvailable {
             let wrapper = sandbox.appendingPathComponent("chrome-with-diagnostics")
             func quoted(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'" }
@@ -171,11 +189,11 @@ struct MCPSignalTeardownTests {
         send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"manage_tabs","arguments":{"action":"open","url":"about:blank"}}}"#)
         let answer = try #require(reader.line(within: 90), "no answer to tools/call")
         phase("tools-call-received")
+        // Not a skip: the one machine with no browser to run is skipped above, by the trait.
         if answer.contains("Could not reach a browser") {
             process.terminate()
             _ = waitForExit(process, within: 10)
-            #expect(browserIsRequired == false,
-                    "ALOHAJET_REQUIRE_BROWSER is set, so a missing browser is a failure: \(answer)")
+            Issue.record("no browser came up: \(answer)")
             return
         }
 

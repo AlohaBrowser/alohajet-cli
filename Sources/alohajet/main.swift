@@ -340,20 +340,22 @@ func laneKeyFor(_ args: Args) -> String? {
 
 /// The Chromium the launch lanes run: `ALOHAJET_BROWSER` when set, else a system Chrome,
 /// else a Chrome for Testing build downloaded once and cached. The download is the last
-/// resort and it is announced, because it is ~150 MB the user did not ask for.
+/// resort and it is announced, because it is ~150 MB the user did not ask for. Where Chrome
+/// for Testing has no build (Windows on ARM) nothing is downloaded: a Chromium installed here
+/// (`CHROME_PATH`, else `chromium` on `PATH`), or an error that says how to name one.
 func provisionedExecutablePath() async throws -> String {
     let provisioner = try ChromiumProvisioner(
         browserPath: ProcessInfo.processInfo.environment["ALOHAJET_BROWSER"],
         cacheRoot: ChromiumProvisioner.defaultCacheRoot(appDirectory: HostAppIdentity.name("AlohaJet")))
     let manager = FileManager.default
-    let willDownload = !(provisioner.browserPath.map(manager.isExecutableFile(atPath:)) ?? false)
-        && !manager.isExecutableFile(atPath: provisioner.stagedExecutablePath())
-        && !manager.isExecutableFile(atPath: provisioner.systemDefaultPath)
-    if willDownload {
+    if let stagedRoot = provisioner.stagedRootDir(), let staged = provisioner.stagedExecutablePath(),
+       !(provisioner.browserPath.map(manager.isExecutableFile(atPath:)) ?? false),
+       !manager.isExecutableFile(atPath: staged),
+       !manager.isExecutableFile(atPath: provisioner.systemDefaultPath) {
         writeToStandardError("""
             alohajet: no browser found at \(provisioner.systemDefaultPath) — downloading \
             Chrome for Testing \(provisioner.buildTable.version) once into \
-            \(provisioner.stagedRootDir()). Set ALOHAJET_BROWSER to use your own.\n
+            \(stagedRoot). Set ALOHAJET_BROWSER to use your own.\n
             """)
     }
     return try await provisioner.resolveExecutablePath()

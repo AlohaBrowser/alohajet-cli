@@ -93,12 +93,17 @@ struct ChromiumProvisionerTests {
     #expect(try resolveChromiumPlatformKey("darwin", "arm64") == .macArm64)
     #expect(try resolveChromiumPlatformKey("darwin", "x64") == .macX64)
     #expect(try resolveChromiumPlatformKey("linux", "x64") == .linuxX64)
+    #expect(try resolveChromiumPlatformKey("linux", "arm64") == .linuxArm64)
     #expect(try resolveChromiumPlatformKey("win32", "x64") == .windowsX64)
 }
 
 @Test func rejectsUnsupportedPlatform() {
     #expect(throws: UnsupportedChromiumPlatformError.self) {
         _ = try resolveChromiumPlatformKey("solaris", "sparc")
+    }
+    // Google publishes no Chrome for Testing for Windows on ARM.
+    #expect(throws: UnsupportedChromiumPlatformError(platform: "win32", arch: "arm64")) {
+        _ = try resolveChromiumPlatformKey("win32", "arm64")
     }
 }
 
@@ -115,6 +120,11 @@ struct ChromiumProvisionerTests {
 @Test func resolvesDownloadURLForLinuxX64() throws {
     let p = try ChromiumProvisioner(platformKey: .linuxX64)
     #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/linux64/chrome-linux64.zip")
+}
+
+@Test func resolvesDownloadURLForLinuxArm64() throws {
+    let p = try ChromiumProvisioner(platformKey: .linuxArm64)
+    #expect(try p.downloadURL() == "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.52/linux-arm64/chrome-linux-arm64.zip")
 }
 
 @Test func resolvesDownloadURLForWindowsX64() throws {
@@ -154,6 +164,9 @@ struct ChromiumProvisionerTests {
 
     let linux = try ChromiumProvisioner(cacheRoot: root, platformKey: .linuxX64)
     #expect(linux.stagedExecutablePath() == "/cache/153.0.8010.52/linux64/chrome-linux64/chrome")
+
+    let linuxArm = try ChromiumProvisioner(cacheRoot: root, platformKey: .linuxArm64)
+    #expect(linuxArm.stagedExecutablePath() == "/cache/153.0.8010.52/linux-arm64/chrome-linux-arm64/chrome")
 
     let win = try ChromiumProvisioner(cacheRoot: root, platformKey: .windowsX64)
     #expect(win.stagedExecutablePath() == "/cache/153.0.8010.52/win64/chrome-win64/chrome.exe")
@@ -242,7 +255,7 @@ struct ChromiumProvisionerTests {
         executableExists: probe.make())
 
     // Mark the staged binary as already present.
-    probe.add(p.stagedExecutablePath())
+    probe.add(try #require(p.stagedExecutablePath()))
 
     let resolved = try await p.resolveExecutablePath()
     #expect(resolved == p.stagedExecutablePath())
@@ -265,7 +278,7 @@ struct ChromiumProvisionerTests {
 
     // Both the cached staged binary AND the system Chrome are present; the cache
     // (step 2) must win over the system default (step 3).
-    probe.add(p.stagedExecutablePath())
+    probe.add(try #require(p.stagedExecutablePath()))
     probe.add(system)
 
     let resolved = try await p.resolveExecutablePath()
@@ -294,7 +307,7 @@ struct ChromiumProvisionerTests {
         download: downloader.make(),
         extract: extractor.make(),
         executableExists: probe.make())
-    expectedExecutable = p.stagedExecutablePath()
+    expectedExecutable = try #require(p.stagedExecutablePath())
 
     let resolved = try await p.resolveExecutablePath()
     #expect(resolved == p.stagedExecutablePath())
@@ -338,6 +351,111 @@ struct ChromiumProvisionerTests {
         #expect(build.sha256.count == 64)
         #expect(build.sha256.allSatisfy { $0.isHexDigit && !$0.isUppercase })
     }
+}
+
+// MARK: - Where Chrome-for-Testing publishes no build (Windows on ARM)
+
+/// A table with no build for the platform is the provisioner's view of Windows on ARM: nothing
+/// to cache, nothing to download.
+private let noChromeForTesting = ChromiumBuildTable(version: ChromiumBuildTable.pinned.version, builds: [:])
+
+@Test func anInstalledChromiumIsLookedUpInTheConventionalOrder() throws {
+    var present: Set<String> = ["/env/chrome", "/usr/local/bin/chromium-browser", "/opt/bin/chromium-browser", "/usr/bin/google-chrome"]
+    let path = "/usr/local/bin:relative:/usr/bin::/opt/bin"
+    func lookup(_ environment: [String: String]) throws -> String? {
+        try installedChromiumPath(environment: environment, isExecutable: { present.contains($0) })
+    }
+    // CHROME_PATH before anything on PATH.
+    #expect(try lookup(["CHROME_PATH": "/env/chrome", "PATH": path]) == "/env/chrome")
+    // Then by name, each across all of PATH: chromium-browser before google-chrome, and the
+    // first PATH entry that has it.
+    #expect(try lookup(["PATH": path]) == "/usr/local/bin/chromium-browser")
+    // chromium on the LAST entry still beats chromium-browser on the first.
+    present.insert("/opt/bin/chromium")
+    #expect(try lookup(["PATH": path]) == "/opt/bin/chromium")
+    // An empty CHROME_PATH is an unset one.
+    #expect(try lookup(["CHROME_PATH": "", "PATH": path]) == "/opt/bin/chromium")
+    // A relative PATH entry is never searched.
+    present = ["relative/chromium"]
+    #expect(try lookup(["PATH": path]) == nil)
+    #expect(try lookup([:]) == nil)
+}
+
+/// The `ALOHAJET_BROWSER` rule: a named browser that is not there is an error, never a
+/// fall-through to the chromium on PATH.
+@Test func aChromePathThatIsNotExecutableIsAnError() {
+    #expect(throws: ChromiumProvisionerError.chromePathNotExecutable("/typo/chrome")) {
+        _ = try installedChromiumPath(
+            environment: ["CHROME_PATH": "/typo/chrome", "PATH": "/usr/bin"],
+            isExecutable: { $0 == "/usr/bin/chromium" })
+    }
+    #expect(ChromiumProvisionerError.chromePathNotExecutable("/typo/chrome").description
+        == "CHROME_PATH names /typo/chrome, which is not an executable file")
+}
+
+@Test func withoutChromeForTestingTheInstalledChromiumRunsAndNothingIsDownloaded() async throws {
+    let downloader = CountingDownloader()
+    let probe = ScriptedProbe()
+    probe.add("/usr/bin/chromium")
+    func provisioner(browserPath: String? = nil) throws -> ChromiumProvisioner {
+        try ChromiumProvisioner(
+            browserPath: browserPath,
+            cacheRoot: "/cache",
+            platformKey: .linuxX64,
+            buildTable: noChromeForTesting,
+            systemDefaultPath: "/nope",
+            environment: ["PATH": "/usr/local/bin:/usr/bin"],
+            download: downloader.make(),
+            extract: RecordingExtractor().make(),
+            executableExists: probe.make())
+    }
+    #expect(try await provisioner().resolveExecutablePath() == "/usr/bin/chromium")
+    // ALOHAJET_BROWSER still comes first.
+    probe.add("/opt/mine/chrome")
+    #expect(try await provisioner(browserPath: "/opt/mine/chrome").resolveExecutablePath() == "/opt/mine/chrome")
+    #expect(downloader.callCount == 0)
+}
+
+@Test func withoutChromeForTestingOrAChromiumTheErrorSaysHowToNameOne() async throws {
+    let downloader = CountingDownloader()
+    let p = try ChromiumProvisioner(
+        cacheRoot: "/cache",
+        platformKey: .linuxX64,
+        buildTable: noChromeForTesting,
+        systemDefaultPath: "/nope",
+        environment: ["PATH": "/usr/bin"],
+        download: downloader.make(),
+        extract: RecordingExtractor().make(),
+        executableExists: ScriptedProbe().make())
+
+    await #expect(throws: ChromiumProvisionerError.noChromiumForPlatform("linux64")) {
+        _ = try await p.resolveExecutablePath()
+    }
+    #expect(downloader.callCount == 0)
+    // What is unsupported, what was looked for, and the two ways to point it at a browser.
+    #expect(ChromiumProvisionerError.noChromiumForPlatform("win32/arm64").description == """
+        Chrome for Testing has no build for win32/arm64, so no browser can be downloaded here, \
+        and no Chromium is installed: CHROME_PATH is unset and none of chromium, \
+        chromium-browser, google-chrome is on PATH. Install Chromium, or set \
+        ALOHAJET_BROWSER to the path of a Chromium or Chrome executable
+        """)
+}
+
+/// Where Chrome for Testing publishes a build nothing changes: CHROME_PATH and PATH are not
+/// consulted — a CHROME_PATH that names nothing would throw if they were.
+@Test func whereChromeForTestingHasABuildTheInstalledLookupIsNotConsulted() async throws {
+    let probe = ScriptedProbe()
+    probe.add("/usr/bin/chromium")
+    let p = try ChromiumProvisioner(
+        cacheRoot: "/cache",
+        platformKey: .linuxX64,
+        systemDefaultPath: "/nope",
+        environment: ["CHROME_PATH": "/typo/chrome", "PATH": "/usr/bin"],
+        download: CountingDownloader().make(),
+        extract: RecordingExtractor().make(),
+        executableExists: probe.make())
+    probe.add(try #require(p.stagedExecutablePath()))
+    #expect(try await p.resolveExecutablePath() == p.stagedExecutablePath())
 }
 
 // MARK: - Archive integrity
