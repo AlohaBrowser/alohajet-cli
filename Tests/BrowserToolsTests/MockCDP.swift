@@ -252,9 +252,13 @@ final class MockCDP {
     }
 
     /// Handles one inbound JSON-RPC frame, returning its reply unless held by the test.
+    ///
+    /// The frame is parsed ONCE. Frames carry whole page scripts, and this runs on the main
+    /// actor that every MockCDP-backed test shares; it used to parse each frame three times.
     func handle(frame: String) -> [String] {
-        let replies = makeReplies(frame: frame)
-        if let method = JSValue.parse(frame)?["method"]?.stringValue, method == holdNextMethod {
+        let message = JSValue.parse(frame)
+        let replies = message.map(makeReplies(message:)) ?? []
+        if let method = message?["method"]?.stringValue, method == holdNextMethod {
             holdNextMethod = nil
             heldReplies.append(replies)
             for waiter in heldReplyWaiters.values where heldReplies.count >= waiter.count {
@@ -266,8 +270,8 @@ final class MockCDP {
         return replies
     }
 
-    private func makeReplies(frame: String) -> [String] {
-        guard case .object = JSValue.parse(frame), let message = JSValue.parse(frame) else { return [] }
+    private func makeReplies(message: JSValue) -> [String] {
+        guard case .object = message else { return [] }
         guard let id = message["id"]?.intValue, let method = message["method"]?.stringValue else { return [] }
         let params = message["params"] ?? .object([])
         let sessionId = message["sessionId"]?.stringValue
@@ -419,7 +423,7 @@ final class MockCDP {
             }
             // The wake-path readyState probe expects an object back; report a
             // settled page so a real wake completes without polling its budget.
-            if expression.contains("document.readyState") {
+            if scriptContains(expression, "document.readyState") {
                 let (url, title) = (pageUrl, pageTitle)
                 var value: [(String, JSValue)] = [
                     ("ready", .string("complete")),
@@ -428,7 +432,7 @@ final class MockCDP {
                 ]
                 // The page-readiness probe additionally reads the body length; a
                 // stable value lets the classifier settle on the first samples.
-                if expression.contains("innerHTML") {
+                if scriptContains(expression, "innerHTML") {
                     value.append(("len", .number(0)))
                 }
                 return .object([("result", .object([
@@ -439,7 +443,7 @@ final class MockCDP {
             // The agent-code runner wrapper returns `{ result, error, pending }`;
             // recognise it by its private pending-queue marker and hand back the
             // scripted reply so the wired tab_execute path drains real pending ops.
-            if expression.contains("__alohaPending"), let reply = agentRunnerPendingReply {
+            if scriptContains(expression, "__alohaPending"), let reply = agentRunnerPendingReply {
                 // Mirror a page whose console fires while the agent code runs:
                 // emit the scripted console events during the capture window.
                 for event in consoleEventsOnAgentEval {
@@ -450,7 +454,7 @@ final class MockCDP {
             // The interactive-markdown DOM walker script; recognized by its
             // `collectDomTree(` entry point regardless of the highlight/focusInteractive
             // args baked into it.
-            if expression.contains("collectDomTree("), let domTreeReply {
+            if scriptContains(expression, "collectDomTree("), let domTreeReply {
                 return .object([("result", .object([("type", .string("object")), ("value", .array(domTreeReply))]))])
             }
             // THE ACTION RECEIPT PROBES (`ReceiptProbes.swift`, `MainHeadingReceipt.swift`) answer
@@ -458,18 +462,18 @@ final class MockCDP {
             // a non-empty string as a finding -- the body text would become the focused element's
             // aloha-id, or a `[text="Example Domain"]` on every receipt. Recognised by the comment
             // markers the probes carry for exactly this purpose.
-            if expression.contains("/* receipt: focused element */")
-                || expression.contains("/* receipt: element text */")
-                || expression.contains("/* receipt: live selector */")
-                || expression.contains("/* receipt: anchor */") {
+            if scriptContains(expression, "/* receipt: focused element */")
+                || scriptContains(expression, "/* receipt: element text */")
+                || scriptContains(expression, "/* receipt: live selector */")
+                || scriptContains(expression, "/* receipt: anchor */") {
                 return .object([("result", .object([("type", .string("string")), ("value", .string(""))]))])
             }
             // The resolver is "already installed", so the anchor probe never ships the whole
             // resolver source to the fake page.
-            if expression.contains("window.__snips.resolveAll === 'function'") {
+            if scriptContains(expression, "window.__snips.resolveAll === 'function'") {
                 return .object([("result", .object([("type", .string("string")), ("value", .string("y"))]))])
             }
-            if expression.contains("/* receipt: main heading */") {
+            if scriptContains(expression, "/* receipt: main heading */") {
                 return .object([("result", .object([("type", .string("string")), ("value", .string("[]"))]))])
             }
             // THE CLICK RECEIPT PROBES answer "" -- nothing covered, nothing hidden, no control
@@ -477,15 +481,15 @@ final class MockCDP {
             // a non-empty string as a finding ("a layer was hidden", "the click was delivered to
             // <x>"), and the consent probe then withholds the click, so the default would turn every
             // happy-path click test into a refused one. Recognised by the markers the probes carry.
-            if expression.contains("BEGIN overlay-hider js")
-                || expression.contains("elementFromPoint")
-                || expression.contains("aria-pressed")
-                || expression.contains("input, textarea, select") {
+            if scriptContains(expression, "BEGIN overlay-hider js")
+                || scriptContains(expression, "elementFromPoint")
+                || scriptContains(expression, "aria-pressed")
+                || scriptContains(expression, "input, textarea, select") {
                 return .object([("result", .object([("type", .string("string")), ("value", .string(""))]))])
             }
             // A raw (unwrapped) `window.__aloha.<verb>(...)` call — see
             // `alohaRawCallReplies`'s doc comment.
-            if let scripted = alohaRawCallReplies.first(where: { expression.contains($0.match) }) {
+            if let scripted = alohaRawCallReplies.first(where: { scriptContains(expression, $0.match) }) {
                 return .object([("result", .object([("type", .string("object")), ("value", scripted.reply)]))])
             }
             // The `type` path's resolve-and-focus probe; the mock page always answers
@@ -495,13 +499,13 @@ final class MockCDP {
             // keystrokes put in the field, not with the page body. Recognised by the
             // `typeof el.value` test the read script performs, which is stable while the
             // surrounding selector is not.
-            if expression.contains("typeof el.value") {
+            if scriptContains(expression, "typeof el.value") {
                 return .object([("result", .object([
                     ("type", .string("string")),
                     ("value", .string(typedValue))
                 ]))])
             }
-            if expression.contains("acceptsText") {
+            if scriptContains(expression, "acceptsText") {
                 return .object([("result", .object([("type", .string("object")), ("value", .object([
                     ("found", .bool(true)),
                     ("acceptsText", .bool(true)),
@@ -525,6 +529,34 @@ final class MockCDP {
             // Page.enable / Network.enable / Input.dispatchMouseEvent / Runtime.enable
             // and any other fire-and-acknowledge command: an empty result.
             return .object([])
+        }
+    }
+}
+
+/// Whether `expression` contains `marker`, compared as UTF-8 bytes.
+///
+/// `String.contains` here is Foundation's, which walks grapheme clusters. Every
+/// `Runtime.evaluate` tests a dozen markers against scripts of up to tens of kilobytes,
+/// on the main actor that every MockCDP-backed test shares, and those scans were the
+/// largest single cost on it. Every marker is ASCII, so bytes decide the same thing.
+private func scriptContains(_ expression: String, _ marker: String) -> Bool {
+    var expression = expression
+    var marker = marker
+    return expression.withUTF8 { haystack in
+        marker.withUTF8 { needle in
+            guard let first = needle.first else { return true }
+            guard needle.count <= haystack.count,
+                  let base = haystack.baseAddress, let wanted = needle.baseAddress
+            else { return false }
+            let last = haystack.count - needle.count
+            var offset = 0
+            while offset <= last {
+                guard let hit = memchr(base + offset, Int32(first), last - offset + 1) else { return false }
+                let at = base.distance(to: hit.assumingMemoryBound(to: UInt8.self))
+                if memcmp(base + at, wanted, needle.count) == 0 { return true }
+                offset = at + 1
+            }
+            return false
         }
     }
 }

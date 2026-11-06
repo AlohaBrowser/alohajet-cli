@@ -21,7 +21,9 @@ import CDP
     let client = CDPClient(channel: channel)
     try await client.connect()
     let service = await makeCDPBrowserTabsService(client: client, attributionSource: source)
-    return try #require(service.window?.tabs as? CDPTabsModel)
+    let model = try #require(service.window?.tabs as? CDPTabsModel)
+    model.wakeBudget = .mockBrowser
+    return model
 }
 
 @Test @MainActor func aTabTheListingNoLongerNamesLeavesTheList() async throws {

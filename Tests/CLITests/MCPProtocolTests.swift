@@ -30,8 +30,8 @@ private struct MCPRun {
 }
 
 /// Sends `requests` (already-encoded JSON-RPC lines) and decodes stdout.
-private func mcp(_ requests: [String], extraArguments: [String] = ["--cdp", "1"]) throws -> MCPRun {
-    let run = try runCLI(extraArguments + ["mcp"], stdin: requests.joined(separator: "\n") + "\n", timeout: 90)
+private func mcp(_ requests: [String], extraArguments: [String] = ["--cdp", "1"]) async throws -> MCPRun {
+    let run = try await runCLI(extraArguments + ["mcp"], stdin: requests.joined(separator: "\n") + "\n", timeout: 90)
     var responses: [[String: Any]] = []
     for line in run.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
         guard let data = line.data(using: .utf8) else { continue }
@@ -53,8 +53,8 @@ struct MCPProtocolTests {
 
     // MARK: - Handshake
 
-    @Test func initializeEchoesASupportedProtocolVersion() throws {
-        let run = try mcp([
+    @Test func initializeEchoesASupportedProtocolVersion() async throws {
+        let run = try await mcp([
             #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}"#
         ])
         let result = try #require(run.result(id: 1))
@@ -70,8 +70,8 @@ struct MCPProtocolTests {
 
     /// A client asking for a revision this server does not speak gets the newest one it
     /// does, which is what the spec asks of a server that cannot meet the request.
-    @Test func initializeWithAnUnknownVersionAnswersWithTheNewestKnown() throws {
-        let run = try mcp([
+    @Test func initializeWithAnUnknownVersionAnswersWithTheNewestKnown() async throws {
+        let run = try await mcp([
             #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"1999-01-01"}}"#
         ])
         let version = try #require(run.result(id: 1)?["protocolVersion"] as? String)
@@ -79,8 +79,8 @@ struct MCPProtocolTests {
         #expect(version.hasPrefix("20"))
     }
 
-    @Test func pingIsAnsweredWithAnEmptyResult() throws {
-        let run = try mcp([#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#])
+    @Test func pingIsAnsweredWithAnEmptyResult() async throws {
+        let run = try await mcp([#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#])
         let result = try #require(run.result(id: 7))
         #expect(result.isEmpty)
     }
@@ -88,8 +88,8 @@ struct MCPProtocolTests {
     /// A notification has no `id`, and the spec forbids answering it. `initialized` is the
     /// one every host sends immediately after the handshake, so answering it would break
     /// the very first exchange of every session.
-    @Test func notificationsAreNeverAnswered() throws {
-        let run = try mcp([
+    @Test func notificationsAreNeverAnswered() async throws {
+        let run = try await mcp([
             #"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
             #"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}"#,
             #"{"jsonrpc":"2.0","method":"tools/list"}"#,
@@ -101,8 +101,8 @@ struct MCPProtocolTests {
 
     // MARK: - tools/list
 
-    @Test func toolsListIsTheNinePageToolsWithSchemasAndAnnotations() throws {
-        let run = try mcp([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#])
+    @Test func toolsListIsTheNinePageToolsWithSchemasAndAnnotations() async throws {
+        let run = try await mcp([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#])
         let tools = try #require(run.result(id: 2)?["tools"] as? [[String: Any]])
         let names = tools.compactMap { $0["name"] as? String }
         #expect(names.sorted() == [
@@ -131,16 +131,16 @@ struct MCPProtocolTests {
 
     /// Listing tools must not build a browser. A host that starts this server at boot and
     /// only ever enumerates it should never pay for a Chromium — and must exit 0 at EOF.
-    @Test func listingToolsLaunchesNoBrowserAndExitsCleanly() throws {
-        let run = try mcp([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#], extraArguments: [])
+    @Test func listingToolsLaunchesNoBrowserAndExitsCleanly() async throws {
+        let run = try await mcp([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#], extraArguments: [])
         #expect(run.result(id: 2) != nil)
         #expect(run.status == 0)
     }
 
     // MARK: - Error codes
 
-    @Test func malformedJsonIsAParseError() throws {
-        let run = try mcp(["{not json"])
+    @Test func malformedJsonIsAParseError() async throws {
+        let run = try await mcp(["{not json"])
         let response = try #require(run.responses.first)
         #expect((response["error"] as? [String: Any])?["code"] as? Int == -32700)
         #expect(response["id"] is NSNull)
@@ -148,26 +148,26 @@ struct MCPProtocolTests {
 
     /// MCP removed JSON-RPC batching in 2025-06-18. A batch is refused plainly rather
     /// than half-implemented.
-    @Test func aBatchArrayIsAnInvalidRequest() throws {
-        let run = try mcp([#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#])
+    @Test func aBatchArrayIsAnInvalidRequest() async throws {
+        let run = try await mcp([#"[{"jsonrpc":"2.0","id":1,"method":"ping"}]"#])
         let response = try #require(run.responses.first)
         #expect((response["error"] as? [String: Any])?["code"] as? Int == -32600)
     }
 
-    @Test func aRequestWithNoMethodIsAnInvalidRequest() throws {
-        let run = try mcp([#"{"jsonrpc":"2.0","id":3}"#])
+    @Test func aRequestWithNoMethodIsAnInvalidRequest() async throws {
+        let run = try await mcp([#"{"jsonrpc":"2.0","id":3}"#])
         #expect(run.errorCode(id: 3) == -32600)
     }
 
-    @Test func anUnknownMethodIsMethodNotFound() throws {
-        let run = try mcp([#"{"jsonrpc":"2.0","id":4,"method":"resources/list"}"#])
+    @Test func anUnknownMethodIsMethodNotFound() async throws {
+        let run = try await mcp([#"{"jsonrpc":"2.0","id":4,"method":"resources/list"}"#])
         #expect(run.errorCode(id: 4) == -32601)
         let message = try #require((run.response(id: 4)?["error"] as? [String: Any])?["message"] as? String)
         #expect(message.contains("resources/list"), "the error does not name the method")
     }
 
-    @Test func aToolCallWithNoNameIsInvalidParams() throws {
-        let run = try mcp([#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"arguments":{}}}"#])
+    @Test func aToolCallWithNoNameIsInvalidParams() async throws {
+        let run = try await mcp([#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"arguments":{}}}"#])
         #expect(run.errorCode(id: 5) == -32602)
     }
 
@@ -177,8 +177,8 @@ struct MCPProtocolTests {
     /// unknown tool name are both things the model can act on, so both come back as a
     /// normal result carrying `isError: true` — never as a JSON-RPC error, which the
     /// model never sees.
-    @Test func anUnreachableBrowserIsAToolErrorNotAProtocolError() throws {
-        let run = try mcp([
+    @Test func anUnreachableBrowserIsAToolErrorNotAProtocolError() async throws {
+        let run = try await mcp([
             #"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"manage_tabs","arguments":{"action":"list"}}}"#
         ])
         #expect(run.errorCode(id: 6) == nil, "an unreachable browser was reported as a protocol error")
@@ -193,8 +193,8 @@ struct MCPProtocolTests {
         #expect(run.status == 0)
     }
 
-    @Test func anUnknownToolNameIsAToolErrorNotAProtocolError() throws {
-        let run = try mcp([
+    @Test func anUnknownToolNameIsAToolErrorNotAProtocolError() async throws {
+        let run = try await mcp([
             #"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"rm_rf","arguments":{}}}"#
         ])
         #expect(run.errorCode(id: 8) == nil)
@@ -210,8 +210,8 @@ struct MCPProtocolTests {
     // are settled before a browser is contacted, so they are safe to run — nothing here
     // may probe 9222 or open the developer's real browser.
 
-    @Test func mcpRejectsAnUnknownBrowserRatherThanLaunchingOne() throws {
-        let run = try mcp([
+    @Test func mcpRejectsAnUnknownBrowserRatherThanLaunchingOne() async throws {
+        let run = try await mcp([
             #"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"manage_tabs","arguments":{"action":"list"}}}"#
         ], extraArguments: ["--browser", "frotz"])
         #expect(run.errorCode(id: 12) == nil)
@@ -222,8 +222,8 @@ struct MCPProtocolTests {
                 "the MCP server swallowed the flag instead of reporting it: \(text)")
     }
 
-    @Test func mcpRefusesAlohaAndCdpTogether() throws {
-        let run = try mcp([
+    @Test func mcpRefusesAlohaAndCdpTogether() async throws {
+        let run = try await mcp([
             #"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"manage_tabs","arguments":{"action":"list"}}}"#
         ], extraArguments: ["--browser", "aloha", "--cdp", "9222"])
         let result = try #require(run.result(id: 13))
@@ -232,7 +232,7 @@ struct MCPProtocolTests {
         #expect(text.contains("two different browsers"), "\(text)")
     }
 
-    @Test func mcpLaunchesTheBrowserTheEnvironmentNames() throws {
+    @Test func mcpLaunchesTheBrowserTheEnvironmentNames() async throws {
         let sandbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("alohajet-mcp-browser-env-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: sandbox, withIntermediateDirectories: true)
@@ -243,7 +243,7 @@ struct MCPProtocolTests {
             .write(to: wrapper, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapper.path)
 
-        let run = try runCLI(
+        let run = try await runCLI(
             ["mcp"],
             stdin: #"{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"manage_tabs","arguments":{"action":"list"}}}"# + "\n",
             environment: ["ALOHAJET_BROWSER": wrapper.path],
@@ -255,8 +255,8 @@ struct MCPProtocolTests {
 
     /// Blank lines are ignored, not answered — a host that flushes an extra newline must
     /// not receive a parse error for it.
-    @Test func blankLinesAreIgnored() throws {
-        let run = try mcp(["", "   ", #"{"jsonrpc":"2.0","id":10,"method":"ping"}"#, ""])
+    @Test func blankLinesAreIgnored() async throws {
+        let run = try await mcp(["", "   ", #"{"jsonrpc":"2.0","id":10,"method":"ping"}"#, ""])
         #expect(run.responses.count == 1)
         #expect(run.result(id: 10) != nil)
     }

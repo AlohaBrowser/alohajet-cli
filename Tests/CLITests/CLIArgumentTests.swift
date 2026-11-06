@@ -8,14 +8,14 @@ import Testing
 //
 // Exit codes: 0 ok · 1 tool error · 2 usage · 3 browser unreachable.
 
-// `.serialized`: every case here BLOCKS its thread in `waitUntilExit`. Run in parallel,
-// two dozen of them plus their pipe readers drain the cooperative thread pool and the
-// whole test process wedges — the tests do not fail, they stop.
+// `.serialized`: every case here runs the CLI as a child process. `runCLI` no longer
+// blocks a pool thread while it waits, but one child at a time per suite still keeps the
+// run from starting two dozen of them at once on a three-core runner.
 @Suite("CLI argument parsing", .serialized)
 struct CLIArgumentTests {
 
-    @Test func noArgumentsPrintsUsageAndFailsAsUsage() throws {
-        let run = try runCLI([])
+    @Test func noArgumentsPrintsUsageAndFailsAsUsage() async throws {
+        let run = try await runCLI([])
         #expect(run.status == 2)
         #expect(run.stdout.contains("USAGE"))
         #expect(run.stdout.contains("alohajet [browser options] <command> [args]"))
@@ -27,8 +27,8 @@ struct CLIArgumentTests {
         "select", "text", "goto", "back", "keys", "wait", "upload", "mcp", "mcp-stdio",
     ]
 
-    @Test func helpAloneSucceeds() throws {
-        let run = try runCLI(["--help"])
+    @Test func helpAloneSucceeds() async throws {
+        let run = try await runCLI(["--help"])
         #expect(run.status == 0)
         #expect(run.stdout.contains("COMMANDS"))
         #expect(run.stdout.contains("EXIT CODES"))
@@ -40,8 +40,8 @@ struct CLIArgumentTests {
 
     @Test("every help page fits 80 columns with one description column",
           arguments: [["--help"]] + commands.map { [$0, "--help"] })
-    func helpFitsATerminal(_ arguments: [String]) throws {
-        let run = try runCLI(arguments)
+    func helpFitsATerminal(_ arguments: [String]) async throws {
+        let run = try await runCLI(arguments)
         #expect(run.status == 0, "exited \(run.status): \(run.combined)")
         var columns = Set<Int>()
         for line in run.stdout.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -61,8 +61,8 @@ struct CLIArgumentTests {
     /// A command documented only in the summary line is how `click --double` ended up
     /// undiscoverable.
     @Test("every command has its own help page", arguments: commands)
-    func perCommandHelp(_ command: String) throws {
-        let run = try runCLI([command, "--help"])
+    func perCommandHelp(_ command: String) async throws {
+        let run = try await runCLI([command, "--help"])
         #expect(run.status == 0, "\(command) --help exited \(run.status)")
         #expect(run.stdout.contains("alohajet \(command)") || run.stdout.contains(command),
                 "\(command) --help printed nothing about itself")
@@ -71,17 +71,17 @@ struct CLIArgumentTests {
     /// `upload` is the one verb whose arguments are VARIADIC — a ref then any number of
     /// paths — so the summary line has to say so or the shape is undiscoverable, which is
     /// how `click --double` went unused.
-    @Test func uploadAdvertisesItsVariadicShape() throws {
-        let usage = try runCLI(["--help"])
+    @Test func uploadAdvertisesItsVariadicShape() async throws {
+        let usage = try await runCLI(["--help"])
         #expect(usage.stdout.contains("upload <ref> <path>"))
 
-        let help = try runCLI(["upload", "--help"])
+        let help = try await runCLI(["upload", "--help"])
         #expect(help.status == 0)
         #expect(help.stdout.contains("alohajet [--tab <id>] upload <ref> <path> [<path>...]"))
     }
 
-    @Test func helpForAnUnknownCommandIsAUsageError() throws {
-        let run = try runCLI(["frobnicate", "--help"])
+    @Test func helpForAnUnknownCommandIsAUsageError() async throws {
+        let run = try await runCLI(["frobnicate", "--help"])
         #expect(run.status == 2)
         #expect(run.stderr.contains("unknown command"))
     }
@@ -98,16 +98,16 @@ struct CLIArgumentTests {
         ["--port=frotz", "tabs"],
         ["--launch", "--port", "frotz", "tabs"],
     ])
-    func malformedPortIsAUsageError(_ arguments: [String]) throws {
-        let run = try runCLI(arguments)
+    func malformedPortIsAUsageError(_ arguments: [String]) async throws {
+        let run = try await runCLI(arguments)
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("--port expects a number"))
         #expect(!run.stderr.contains("CLIError("), "the error struct leaked into the message")
     }
 
-    @Test func aValueFlagWithNoValueIsAUsageError() throws {
+    @Test func aValueFlagWithNoValueIsAUsageError() async throws {
         for flag in ["--cdp", "--browser", "--port", "--tab", "--text", "--index", "--timeout-ms", "--max-chars"] {
-            let run = try runCLI([flag])
+            let run = try await runCLI([flag])
             #expect(run.status == 2, "\(flag) exited \(run.status)")
             #expect(run.stderr.contains("expects a value"), "\(flag): \(run.combined)")
         }
@@ -119,25 +119,25 @@ struct CLIArgumentTests {
     @Test("an unparseable --cdp endpoint is a usage error", arguments: [
         "not-an-endpoint", "example.com:not-a-port", "a:b:c",
     ])
-    func unparseableCdpEndpoint(_ endpoint: String) throws {
-        let run = try runCLI(["--cdp", endpoint, "tabs"])
+    func unparseableCdpEndpoint(_ endpoint: String) async throws {
+        let run = try await runCLI(["--cdp", endpoint, "tabs"])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("--cdp expects"))
     }
 
     /// A well-formed endpoint pointing at nothing is the OTHER answer: unreachable (3).
     /// Port 1 is privileged and unbound, so the connection is refused immediately.
-    @Test func aDeadCdpEndpointIsUnreachableNotUsage() throws {
-        let run = try runCLI(["--cdp", "1", "tabs"], timeout: 60)
+    @Test func aDeadCdpEndpointIsUnreachableNotUsage() async throws {
+        let run = try await runCLI(["--cdp", "1", "tabs"], timeout: 60)
         #expect(run.status == 3, "exited \(run.status): \(run.combined)")
     }
 
     /// `alohajet type <ref> -- -50%` — everything after `--` is a positional, so a value
     /// that looks like a flag can still be typed into a page.
-    @Test func doubleDashEndsFlagParsing() throws {
+    @Test func doubleDashEndsFlagParsing() async throws {
         // `--port` after `--` must be a positional, so it can no longer be a bad port.
         // If the terminator were ignored this would exit 2 with "--port expects a number".
-        let run = try runCLI(["--cdp", "1", "type", "ref", "--", "--port", "frotz"], timeout: 60)
+        let run = try await runCLI(["--cdp", "1", "type", "ref", "--", "--port", "frotz"], timeout: 60)
         #expect(run.status == 3, "exited \(run.status): \(run.combined)")
         #expect(!run.stderr.contains("--port expects a number"))
     }
@@ -152,8 +152,8 @@ struct CLIArgumentTests {
         ["--browser", "frotz", "tabs"],
         ["--browser=frotz", "tabs"],
     ])
-    func unknownBrowserIsAUsageError(_ arguments: [String]) throws {
-        let run = try runCLI(arguments)
+    func unknownBrowserIsAUsageError(_ arguments: [String]) async throws {
+        let run = try await runCLI(arguments)
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("--browser expects chromium or aloha"))
     }
@@ -161,8 +161,8 @@ struct CLIArgumentTests {
     /// `--browser aloha --cdp <x>` names two different browsers. Silently preferring one
     /// would drive a browser the caller did not ask for, so it is refused BEFORE either is
     /// contacted — which is also why this case is safe to run: no probe, no launch.
-    @Test func alohaAndCdpTogetherAreRefusedBeforeEitherIsContacted() throws {
-        let run = try runCLI(["--browser", "aloha", "--cdp", "9222", "tabs"])
+    @Test func alohaAndCdpTogetherAreRefusedBeforeEitherIsContacted() async throws {
+        let run = try await runCLI(["--browser", "aloha", "--cdp", "9222", "tabs"])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("two different browsers"))
     }
@@ -170,8 +170,8 @@ struct CLIArgumentTests {
     /// `--browser chromium` is the default spelled out: it must behave exactly like no
     /// flag at all, which here means falling through to `--cdp` and its dead endpoint (3),
     /// not tripping the selector's own usage error (2).
-    @Test func chromiumIsTheDefaultSpelledOut() throws {
-        let run = try runCLI(["--browser", "chromium", "--cdp", "1", "tabs"], timeout: 60)
+    @Test func chromiumIsTheDefaultSpelledOut() async throws {
+        let run = try await runCLI(["--browser", "chromium", "--cdp", "1", "tabs"], timeout: 60)
         #expect(run.status == 3, "exited \(run.status): \(run.combined)")
         #expect(!run.stderr.contains("--browser expects"))
     }
@@ -180,8 +180,8 @@ struct CLIArgumentTests {
     /// to whatever Chrome the machine happens to have — so a typo'd path ran a browser
     /// with a different profile, different extensions and a different user agent, and
     /// said nothing. It fails, and it names the variable and the path.
-    @Test func anUnusableBrowserPathFailsInsteadOfLaunchingAnotherBrowser() throws {
-        let run = try runCLI(
+    @Test func anUnusableBrowserPathFailsInsteadOfLaunchingAnotherBrowser() async throws {
+        let run = try await runCLI(
             ["--launch", "tabs"],
             environment: ["ALOHAJET_BROWSER": "/nonexistent/chrome"], timeout: 60)
         #expect(run.status == 3, "exited \(run.status): \(run.combined)")
@@ -195,8 +195,8 @@ struct CLIArgumentTests {
     /// `quit` goes to the recorded browser, not through `connect`. With a private TMPDIR
     /// there is no record, so it must say so and succeed — not launch a browser in order
     /// to close it.
-    @Test func quitWithNoSharedBrowserSucceedsQuietly() throws {
-        let run = try runCLI(["quit"])
+    @Test func quitWithNoSharedBrowserSucceedsQuietly() async throws {
+        let run = try await runCLI(["quit"])
         #expect(run.status == 0, "exited \(run.status): \(run.combined)")
         #expect(run.stdout.contains("No shared browser"))
     }
@@ -211,8 +211,8 @@ struct CLIArgumentTests {
     /// outright rather than falling back to whatever claims the scheme — which also
     /// pins the OTHER half: the default lane goes through the app launcher, so its
     /// failure is exit 3 (browser unreachable), not 2.
-    @Test func promptWithoutAnEndpointDrivesTheAppOnThisMachine() throws {
-        let run = try runCLI(
+    @Test func promptWithoutAnEndpointDrivesTheAppOnThisMachine() async throws {
+        let run = try await runCLI(
             ["-p", "book me a table"],
             environment: ["ALOHA_BROWSER_APP": "/nonexistent/NoSuch.app"])
         #expect(run.status == 3, "exited \(run.status): \(run.combined)")
@@ -223,15 +223,15 @@ struct CLIArgumentTests {
 
     /// `--endpoint "$VAR"` with the variable unset has still NAMED a host; answering it
     /// with the local default would run the prompt against a browser nobody asked for.
-    @Test func anEmptyEndpointIsAUsageError() throws {
-        let run = try runCLI(["-p", "hi", "--endpoint="])
+    @Test func anEmptyEndpointIsAUsageError() async throws {
+        let run = try await runCLI(["-p", "hi", "--endpoint="])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("--endpoint expects an http(s) URL"))
     }
 
     /// `-p ""` is a typo, not a turn.
-    @Test func anEmptyPromptIsAUsageError() throws {
-        let run = try runCLI(["-p", ""])
+    @Test func anEmptyPromptIsAUsageError() async throws {
+        let run = try await runCLI(["-p", ""])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("needs a prompt"))
     }
@@ -241,16 +241,16 @@ struct CLIArgumentTests {
     @Test("a schemeless or non-http --endpoint is a usage error", arguments: [
         "localhost:8765", "127.0.0.1:8765", "ftp://127.0.0.1:8765", "http://",
     ])
-    func aMalformedEndpointIsAUsageError(_ endpoint: String) throws {
-        let run = try runCLI(["-p", "hi", "--endpoint", endpoint])
+    func aMalformedEndpointIsAUsageError(_ endpoint: String) async throws {
+        let run = try await runCLI(["-p", "hi", "--endpoint", endpoint])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("--endpoint expects an http(s) URL"))
     }
 
     /// A well-formed endpoint pointing at nothing is a failed TURN (1), not a usage
     /// error and not the browser-unreachable code — `-p` never touches a browser.
-    @Test func aDeadAgentEndpointIsAFailedTurn() throws {
-        let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--json"], timeout: 60)
+    @Test func aDeadAgentEndpointIsAFailedTurn() async throws {
+        let run = try await runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--json"], timeout: 60)
         #expect(run.status == 1, "exited \(run.status): \(run.combined)")
         #expect(run.stdout.contains(#""isSuccess":false"#))
         #expect(run.stdout.contains("transport error"))
