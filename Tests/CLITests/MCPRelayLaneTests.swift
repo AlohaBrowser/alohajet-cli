@@ -11,8 +11,8 @@ import Testing
 // A loopback fixture exercises the real subprocess and SDK transports. Its responses
 // are synthetic; these tests do not launch the desktop app or use a user's browser.
 //
-// `.serialized` for the same reason as every other suite here: each case blocks its
-// thread in `waitUntilExit`.
+// `.serialized` for the same reason as every other suite here: each case runs the CLI
+// as a child process.
 @Suite("MCP relay lane", .serialized)
 struct MCPRelayLaneTests {
 
@@ -33,7 +33,7 @@ struct MCPRelayLaneTests {
     @Test("authenticated MCP frames relay without launching Chromium", arguments: [
         "legacy-default", "legacy-explicit", "modern",
     ])
-    func savedEntriesRelayFramesWithoutLaunchingChromium(_ mode: String) throws {
+    func savedEntriesRelayFramesWithoutLaunchingChromium(_ mode: String) async throws {
         let sandbox = try RelaySandbox()
         defer { sandbox.remove() }
         let stub = AgentStubServer(port: mode == "legacy-default" ? 8765 : 0,
@@ -48,7 +48,7 @@ struct MCPRelayLaneTests {
             #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
             #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fixture_tabs","arguments":{"action":"list"}}}"#,
         ]
-        let run = try runCLI(arguments, stdin: frames.joined(separator: "\n") + "\n",
+        let run = try await runCLI(arguments, stdin: frames.joined(separator: "\n") + "\n",
                              environment: sandbox.environment, timeout: 30)
 
         let chromiumWasLaunched = sandbox.chromiumWasLaunched
@@ -97,7 +97,7 @@ struct MCPRelayLaneTests {
     }
 
     @Test("an unauthorized relay never falls back to standalone MCP", arguments: ["mcp", "mcp-stdio"])
-    func authenticationFailureDoesNotServeStandaloneTools(_ command: String) throws {
+    func authenticationFailureDoesNotServeStandaloneTools(_ command: String) async throws {
         let sandbox = try RelaySandbox()
         defer { sandbox.remove() }
         let stub = AgentStubServer(mcpToken: sandbox.token)
@@ -105,7 +105,7 @@ struct MCPRelayLaneTests {
         defer { stub.stop() }
         var environment = sandbox.environment
         environment["ALOHAJET_AGENT_TOKEN"] = "incorrect-fixture-credential"
-        let run = try runCLI([command, "--endpoint", stub.url], stdin: Self.toolsCall,
+        let run = try await runCLI([command, "--endpoint", stub.url], stdin: Self.toolsCall,
                              environment: environment)
         #expect(run.status == 3, "\(run.combined)")
         #expect(run.stdout.isEmpty, "the relay answered with its own tools")
@@ -115,9 +115,9 @@ struct MCPRelayLaneTests {
         #expect(!chromiumWasLaunched)
     }
 
-    @Test func legacyHelpDocumentsTheDefaultAndCompatibilityScope() throws {
+    @Test func legacyHelpDocumentsTheDefaultAndCompatibilityScope() async throws {
         for flag in ["--help", "-h"] {
-            let run = try runCLI(["mcp-stdio", flag])
+            let run = try await runCLI(["mcp-stdio", flag])
             #expect(run.status == 0)
             #expect(run.stderr.isEmpty)
             #expect(run.stdout.contains("http://127.0.0.1:8765"))
@@ -126,7 +126,7 @@ struct MCPRelayLaneTests {
             #expect(run.stdout.contains("cancelling in the browser"))
             #expect(run.stdout.contains("signal"))
         }
-        let usage = try runCLI(["--help"])
+        let usage = try await runCLI(["--help"])
         #expect(usage.stdout.contains("mcp-stdio"))
     }
 
@@ -141,8 +141,8 @@ struct MCPRelayLaneTests {
     /// `--endpoint`, that same `--cdp 1` is never acted on at all: no browser is
     /// contacted, no tool runs in this process, and stdout stays EMPTY — the only thing
     /// that can ever appear on it is a frame the upstream server sent back.
-    @Test func theRelayServesNothingItselfAndContactsNoBrowser() throws {
-        let relay = try runCLI(
+    @Test func theRelayServesNothingItselfAndContactsNoBrowser() async throws {
+        let relay = try await runCLI(
             ["--cdp", "1", "mcp", "--endpoint", "http://127.0.0.1:1"],
             stdin: Self.toolsCall, environment: Self.pinnedToken, timeout: 60)
 
@@ -158,8 +158,8 @@ struct MCPRelayLaneTests {
     /// The other half of that differential, stated here rather than assumed: with no
     /// `--endpoint` the identical invocation IS this package's server, answering over its
     /// own tools.
-    @Test func withoutTheFlagTheServerLaneAnswersAsBefore() throws {
-        let server = try runCLI(
+    @Test func withoutTheFlagTheServerLaneAnswersAsBefore() async throws {
+        let server = try await runCLI(
             ["--cdp", "1", "mcp"],
             stdin: Self.toolsCall, environment: Self.pinnedToken, timeout: 90)
 
@@ -174,8 +174,8 @@ struct MCPRelayLaneTests {
     /// to avoid: the host believes it is driving the user's browser and nothing says
     /// otherwise. It is a usage error, and it names the flag.
     @Test(arguments: ["mcp", "mcp-stdio"])
-    func anEmptyEndpointIsAUsageErrorRatherThanTheOtherLane(_ command: String) throws {
-        let run = try runCLI([command, "--endpoint="], environment: Self.pinnedToken)
+    func anEmptyEndpointIsAUsageErrorRatherThanTheOtherLane(_ command: String) async throws {
+        let run = try await runCLI([command, "--endpoint="], environment: Self.pinnedToken)
         #expect(run.status == 2)
         #expect(run.stderr.contains("--endpoint"), "\(run.combined)")
         #expect(run.stdout.isEmpty, "a usage error reached the protocol channel: \(run.stdout)")
@@ -197,8 +197,8 @@ struct MCPRelayLaneTests {
         "http://127.0.0.1.evil.example:8765",
         "http://10.0.0.5:8765",
     ], ["mcp", "mcp-stdio"])
-    func nonLoopbackPlaintextIsRefused(_ endpoint: String, _ command: String) throws {
-        let run = try runCLI([command, "--endpoint", endpoint], environment: Self.pinnedToken)
+    func nonLoopbackPlaintextIsRefused(_ endpoint: String, _ command: String) async throws {
+        let run = try await runCLI([command, "--endpoint", endpoint], environment: Self.pinnedToken)
         #expect(run.status == 2, "\(endpoint) was not refused: \(run.combined)")
         #expect(run.stderr.contains("loopback"), "\(run.combined)")
         #expect(run.stdout.isEmpty)
@@ -210,8 +210,8 @@ struct MCPRelayLaneTests {
     @Test("an endpoint that is not an http(s) URL is a usage error", arguments: [
         "localhost:8765", "127.0.0.1:8765", "ws://127.0.0.1:8765", "not a url",
     ], ["mcp", "mcp-stdio"])
-    func aMalformedEndpointIsAUsageError(_ endpoint: String, _ command: String) throws {
-        let run = try runCLI([command, "--endpoint", endpoint], environment: Self.pinnedToken)
+    func aMalformedEndpointIsAUsageError(_ endpoint: String, _ command: String) async throws {
+        let run = try await runCLI([command, "--endpoint", endpoint], environment: Self.pinnedToken)
         #expect(run.status == 2, "\(endpoint) was accepted: \(run.combined)")
         #expect(run.stderr.contains("http(s) URL"), "\(run.combined)")
     }
@@ -222,8 +222,8 @@ struct MCPRelayLaneTests {
     /// RFC 2606, so this reaches DNS and nothing else: the endpoint is accepted (the run
     /// gets as far as the transport and fails there, 3) rather than refused as usage (2).
     @Test(arguments: ["mcp", "mcp-stdio"])
-    func aRemoteHttpsEndpointIsAllowed(_ command: String) throws {
-        let run = try runCLI(
+    func aRemoteHttpsEndpointIsAllowed(_ command: String) async throws {
+        let run = try await runCLI(
             [command, "--endpoint", "https://alohajet-no-such-host.invalid:8765"],
             stdin: Self.toolsCall, environment: Self.pinnedToken, timeout: 60)
         #expect(run.status == 3, "exited \(run.status): \(run.combined)")
@@ -236,8 +236,8 @@ struct MCPRelayLaneTests {
     /// token rather than as the rule it is — so the rule is stated once, on stderr,
     /// which is the only stream the JSON-RPC channel is not.
     @Test(arguments: ["mcp", "mcp-stdio"])
-    func aRemoteEndpointWithNoNamedTokenSaysSo(_ command: String) throws {
-        let run = try runCLI(
+    func aRemoteEndpointWithNoNamedTokenSaysSo(_ command: String) async throws {
+        let run = try await runCLI(
             [command, "--endpoint", "https://alohajet-no-such-host.invalid:8765"],
             stdin: Self.toolsCall, environment: ["ALOHAJET_AGENT_TOKEN": ""], timeout: 60)
         #expect(run.stderr.contains("ALOHAJET_AGENT_TOKEN"), "\(run.combined)")
@@ -268,8 +268,8 @@ struct MCPRelayLaneTests {
 
     /// The relay is the only reason a Claude Desktop user has a working entry at all, so
     /// its shape has to be discoverable from the CLI itself.
-    @Test func theHelpPageDocumentsBothLanes() throws {
-        let run = try runCLI(["mcp", "--help"])
+    @Test func theHelpPageDocumentsBothLanes() async throws {
+        let run = try await runCLI(["mcp", "--help"])
         #expect(run.status == 0)
         #expect(run.stdout.contains("--endpoint"))
         #expect(run.stdout.contains("Claude Desktop"))

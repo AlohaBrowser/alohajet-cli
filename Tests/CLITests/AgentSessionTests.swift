@@ -22,24 +22,24 @@ struct AgentSessionTests {
 
     /// A turn against the stub, with the ambient token replaced by a known one so the
     /// case neither depends on the developer's real token file nor hands it to a stub.
-    private func runTurn(_ arguments: [String], stub: AgentStubServer, terminal: String? = nil) throws -> RunOutput {
-        try runCLI(arguments + ["--endpoint", stub.url],
-                   terminal: terminal,
-                   environment: ["ALOHAJET_AGENT_TOKEN": "test-token"],
-                   timeout: 60)
+    private func runTurn(_ arguments: [String], stub: AgentStubServer, terminal: String? = nil) async throws -> RunOutput {
+        try await runCLI(arguments + ["--endpoint", stub.url],
+                         terminal: terminal,
+                         environment: ["ALOHAJET_AGENT_TOKEN": "test-token"],
+                         timeout: 60)
     }
 
     private func withStub<T>(
         protocolVersion: Int = 1, finalText: String = "Four.", ranOverride: String? = nil,
         termsAnswerableInApp: Bool? = nil,
-        _ body: (AgentStubServer) throws -> T
-    ) throws -> T {
+        _ body: (AgentStubServer) async throws -> T
+    ) async throws -> T {
         let stub = AgentStubServer(
             protocolVersion: protocolVersion, finalText: finalText, ranOverride: ranOverride,
             termsAnswerableInApp: termsAnswerableInApp)
         try stub.start()
         defer { stub.stop() }
-        return try body(stub)
+        return try await body(stub)
     }
 
     // MARK: - The invocations that never reach a host
@@ -49,16 +49,16 @@ struct AgentSessionTests {
     /// a brand-new conversation, reported as a success — the exact thing `--resume`
     /// exists to prevent. It must exit 2 and run nothing.
     @Test("--resume with an empty value is a usage error, not a fresh conversation")
-    func emptyResumeIsAUsageError() throws {
-        let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--resume", ""])
+    func emptyResumeIsAUsageError() async throws {
+        let run = try await runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--resume", ""])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("--resume expects a chat id"))
     }
 
     /// The same hole one space wider: a variable holding whitespace.
     @Test("--resume with a whitespace-only value is a usage error", arguments: [" ", "\n"])
-    func whitespaceResumeIsAUsageError(_ value: String) throws {
-        let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--resume", value])
+    func whitespaceResumeIsAUsageError(_ value: String) async throws {
+        let run = try await runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--resume", value])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("--resume expects a chat id"))
     }
@@ -67,16 +67,16 @@ struct AgentSessionTests {
     /// recent chat, so a typo is a write into a conversation nobody named, reported as a
     /// successful resume — caught here, at parse time, one round trip earlier.
     @Test("--resume refuses a non-UUID", arguments: ["probe-me", "chat-42", "not a uuid"])
-    func nonUUIDResumeIsAUsageError(_ value: String) throws {
-        let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--resume", value])
+    func nonUUIDResumeIsAUsageError(_ value: String) async throws {
+        let run = try await runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--resume", value])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("--resume expects a chat id (a UUID)"))
     }
 
     @Test("-p with a help flag prints the help and contacts nothing", arguments: ["--help", "-h"])
-    func promptHelpContactsNothing(_ flag: String) throws {
-        try withStub(protocolVersion: 2) { stub in
-            let run = try runTurn(["-p", flag], stub: stub)
+    func promptHelpContactsNothing(_ flag: String) async throws {
+        try await withStub(protocolVersion: 2) { stub in
+            let run = try await runTurn(["-p", flag], stub: stub)
             #expect(run.status == 0, "exited \(run.status): \(run.combined)")
             #expect(run.stdout.contains("-p <prompt>"), "\(run.combined)")
             #expect(stub.requests.isEmpty, "contacted \(stub.paths)")
@@ -90,8 +90,8 @@ struct AgentSessionTests {
         ["--continue", "--resume", chatA],
         ["--resume=\(chatA)", "--continue"],
     ])
-    func resumeAndContinueTogetherAreRefused(_ session: [String]) throws {
-        let run = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1"] + session)
+    func resumeAndContinueTogetherAreRefused(_ session: [String]) async throws {
+        let run = try await runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1"] + session)
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("both name a conversation"))
     }
@@ -102,12 +102,12 @@ struct AgentSessionTests {
     /// flag WITH a value must get past parsing into the turn (exit 1 on a dead endpoint,
     /// never 2).
     @Test("--resume consumes the following token")
-    func resumeIsAValueFlag() throws {
-        let bare = try runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--resume"])
+    func resumeIsAValueFlag() async throws {
+        let bare = try await runCLI(["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--resume"])
         #expect(bare.status == 2, "exited \(bare.status): \(bare.combined)")
         #expect(bare.stderr.contains("--resume expects a value"), "\(bare.combined)")
 
-        let withValue = try runCLI(
+        let withValue = try await runCLI(
             ["-p", "hi", "--endpoint", "http://127.0.0.1:1", "--resume", Self.chatA, "--json"],
             timeout: 60)
         #expect(withValue.status == 1, "exited \(withValue.status): \(withValue.combined)")
@@ -118,9 +118,9 @@ struct AgentSessionTests {
 
     /// The default: a conversation is MINTED for this turn — `/agent/new` with no id.
     @Test("a bare -p asks the host to mint a conversation")
-    func freshIsTheDefault() throws {
-        try withStub { stub in
-            let run = try runTurn(["-p", "two plus two"], stub: stub)
+    func freshIsTheDefault() async throws {
+        try await withStub { stub in
+            let run = try await runTurn(["-p", "two plus two"], stub: stub)
             #expect(run.status == 0, "exited \(run.status): \(run.combined)")
             #expect(stub.paths == ["/agent/lane", "/agent/new", "/agent/permissions", "/agent/task", "/agent/result"])
             #expect(stub.requests(path: "/agent/new").first?.body == "")
@@ -133,9 +133,9 @@ struct AgentSessionTests {
     /// uppercased (the canonical spelling the host files chats under and echoes back —
     /// send the other one and the resume guard refuses a chat that was resumed correctly).
     @Test("--resume sends the trimmed, canonical id and nothing else")
-    func resumeSendsTheCanonicalId() throws {
-        try withStub { stub in
-            let run = try runTurn(["-p", "and again", "--resume", "  \(Self.chatA)\t"], stub: stub)
+    func resumeSendsTheCanonicalId() async throws {
+        try await withStub { stub in
+            let run = try await runTurn(["-p", "and again", "--resume", "  \(Self.chatA)\t"], stub: stub)
             #expect(run.status == 0, "exited \(run.status): \(run.combined)")
             let body = try #require(stub.requests(path: "/agent/new").first?.body)
             #expect(body == #"{"sessionId":"\#(Self.chatA.uppercased())"}"#, "sent \(body)")
@@ -145,9 +145,9 @@ struct AgentSessionTests {
     /// `--continue` runs where the host already is. Under the legacy protocol that means
     /// moving no lane at all — and having chosen nothing, there is nothing to report.
     @Test("--continue moves no lane on a legacy host, and reports no id")
-    func continueLeavesTheLegacyLaneAlone() throws {
-        try withStub { stub in
-            let run = try runTurn(["-p", "carry on", "--continue"], stub: stub)
+    func continueLeavesTheLegacyLaneAlone() async throws {
+        try await withStub { stub in
+            let run = try await runTurn(["-p", "carry on", "--continue"], stub: stub)
             #expect(run.status == 0, "exited \(run.status): \(run.combined)")
             #expect(stub.requests(path: "/agent/new").isEmpty, "it moved the lane")
             #expect(stub.paths == ["/agent/lane", "/agent/permissions", "/agent/task", "/agent/result"])
@@ -159,9 +159,9 @@ struct AgentSessionTests {
     /// sends it explicitly, so the turn cannot land wherever the app drifted to — and the
     /// id becomes printable and resumable like any other.
     @Test("--continue pins and sends the host's conversation on a protocol-2 host")
-    func continuePinsTheLaneOnProtocol2() throws {
-        try withStub(protocolVersion: 2) { stub in
-            let run = try runTurn(["-p", "carry on", "--continue"], stub: stub)
+    func continuePinsTheLaneOnProtocol2() async throws {
+        try await withStub(protocolVersion: 2) { stub in
+            let run = try await runTurn(["-p", "carry on", "--continue"], stub: stub)
             #expect(run.status == 0, "exited \(run.status): \(run.combined)")
             #expect(stub.paths == ["/agent/lane", "/agent/run", "/agent/result"])
             let body = try #require(stub.requests(path: "/agent/run").first?.body)
@@ -175,9 +175,9 @@ struct AgentSessionTests {
     /// A host that answers with a different conversation than the one asked for would
     /// have appended the turn somewhere else. It is refused, and the turn never starts.
     @Test("a host that ignores the requested id fails the turn before it runs")
-    func aHostThatIgnoresTheIdIsRefused() throws {
-        try withStub(ranOverride: "99999999-9999-4999-8999-999999999999") { stub in
-            let run = try runTurn(["-p", "and again", "--resume", Self.chatA], stub: stub)
+    func aHostThatIgnoresTheIdIsRefused() async throws {
+        try await withStub(ranOverride: "99999999-9999-4999-8999-999999999999") { stub in
+            let run = try await runTurn(["-p", "and again", "--resume", Self.chatA], stub: stub)
             #expect(run.status == 1, "exited \(run.status): \(run.combined)")
             #expect(run.stderr.contains(Self.chatA.uppercased()))
             #expect(stub.requests(path: "/agent/task").isEmpty, "the turn ran anyway")
@@ -187,10 +187,10 @@ struct AgentSessionTests {
     /// A turn that fails is the one that most needs its id printed: the work may still be
     /// running in the app, and `--resume` is the only way back to it.
     @Test("a failed turn prints the chat id and says the turn may still be running")
-    func aFailedTurnPrintsTheChatId() throws {
+    func aFailedTurnPrintsTheChatId() async throws {
         let ran = "99999999-9999-4999-8999-999999999999"
-        try withStub(protocolVersion: 2, ranOverride: ran) { stub in
-            let run = try runTurn(["-p", "and again", "--resume", Self.chatA], stub: stub)
+        try await withStub(protocolVersion: 2, ranOverride: ran) { stub in
+            let run = try await runTurn(["-p", "and again", "--resume", Self.chatA], stub: stub)
             #expect(run.status == 1, "exited \(run.status): \(run.combined)")
             #expect(run.stderr.contains("chat \(ran)"), "\(run.combined)")
             #expect(run.stderr.contains("--resume \(ran)"), "\(run.combined)")
@@ -203,9 +203,9 @@ struct AgentSessionTests {
     /// STDOUT IS THE ANSWER. The conversation id is prose ABOUT the run, so it goes to
     /// stderr — `alohajet -p … > answer.txt` must capture the answer and nothing else.
     @Test("the answer goes to stdout and the conversation id to stderr")
-    func theIdIsOnStderrNotStdout() throws {
-        try withStub(finalText: "Four.") { stub in
-            let run = try runTurn(["-p", "two plus two"], stub: stub)
+    func theIdIsOnStderrNotStdout() async throws {
+        try await withStub(finalText: "Four.") { stub in
+            let run = try await runTurn(["-p", "two plus two"], stub: stub)
             #expect(run.status == 0, "exited \(run.status): \(run.combined)")
             #expect(run.stdout == "Four.\n", "stdout was \(run.stdout.debugDescription)")
             #expect(!run.stdout.contains(AgentStubServer.minted), "the id leaked into the piped answer")
@@ -217,9 +217,9 @@ struct AgentSessionTests {
     /// `--json` is the other surface: ONE object on stdout carrying the id as a field, so
     /// a harness never parses prose off stderr — and the prose is not printed twice.
     @Test("--json carries the id as a field and leaves stderr clean of it")
-    func jsonReportsTheIdOnStdout() throws {
-        try withStub { stub in
-            let run = try runTurn(["-p", "two plus two", "--json"], stub: stub)
+    func jsonReportsTheIdOnStdout() async throws {
+        try await withStub { stub in
+            let run = try await runTurn(["-p", "two plus two", "--json"], stub: stub)
             #expect(run.status == 0, "exited \(run.status): \(run.combined)")
             let object = try #require(
                 try JSONSerialization.jsonObject(with: Data(run.stdout.utf8)) as? [String: Any])
@@ -237,9 +237,9 @@ struct AgentSessionTests {
     /// the ambient token is withheld from a host that is NOT this machine — is pinned by
     /// `AutomationTokenTests`.)
     @Test("every agent request to a loopback endpoint carries the bearer token")
-    func loopbackGetsTheToken() throws {
-        try withStub { stub in
-            _ = try runTurn(["-p", "two plus two"], stub: stub)
+    func loopbackGetsTheToken() async throws {
+        try await withStub { stub in
+            _ = try await runTurn(["-p", "two plus two"], stub: stub)
             #expect(!stub.requests.isEmpty)
             for request in stub.requests {
                 #expect(request.authorization == "Bearer test-token",
@@ -256,8 +256,8 @@ struct AgentSessionTests {
         "http://127.0.0.1.evil.example",   // carries the prefix, is not this machine
         "http://192.168.1.9:8765",
     ])
-    func nonLoopbackPlaintextIsRefused(_ endpoint: String) throws {
-        let run = try runCLI(["-p", "hi", "--endpoint", endpoint])
+    func nonLoopbackPlaintextIsRefused(_ endpoint: String) async throws {
+        let run = try await runCLI(["-p", "hi", "--endpoint", endpoint])
         #expect(run.status == 2, "exited \(run.status): \(run.combined)")
         #expect(run.stderr.contains("must be http to a loopback address"))
         #expect(run.stderr.contains("provider API key"))
@@ -268,8 +268,8 @@ struct AgentSessionTests {
     @Test("loopback http and https are accepted", arguments: [
         "http://127.0.0.1:1", "http://localhost:1", "http://[::1]:1", "https://example.invalid",
     ])
-    func allowedEndpointsReachTheTurn(_ endpoint: String) throws {
-        let run = try runCLI(["-p", "hi", "--endpoint", endpoint, "--json"], timeout: 60)
+    func allowedEndpointsReachTheTurn(_ endpoint: String) async throws {
+        let run = try await runCLI(["-p", "hi", "--endpoint", endpoint, "--json"], timeout: 60)
         #expect(run.status == 1, "exited \(run.status): \(run.combined)")
         #expect(!run.stderr.contains("must be http to a loopback address"))
     }
@@ -292,11 +292,11 @@ struct AgentSessionTests {
     /// The agent asked the person at the browser and is waiting: the CLI says so once, on
     /// stderr, and the turn is not mistaken for one that stopped moving.
     @Test("a question the agent waits on in the browser is printed once on stderr")
-    func aPendingQuestionIsPrintedOnce() throws {
+    func aPendingQuestionIsPrintedOnce() async throws {
         let stub = AgentStubServer(protocolVersion: 2, pendingQuestionPolls: 3)
         try stub.start()
         defer { stub.stop() }
-        let run = try runTurn(["-p", "hi"], stub: stub)
+        let run = try await runTurn(["-p", "hi"], stub: stub)
         #expect(run.status == 0, "exited \(run.status): \(run.combined)")
         #expect(run.stdout == "Four.\n")
         let note = "alohajet: note: the agent is waiting for you in the browser window: "
@@ -305,9 +305,9 @@ struct AgentSessionTests {
     }
 
     @Test("terms the app window cannot answer are declined from a pipe, and the turn says so")
-    func termsDeclinedWithoutAWindow() throws {
-        try withStub(protocolVersion: 2, termsAnswerableInApp: false) { stub in
-            let run = try runTurn(["-p", "hi"], stub: stub)
+    func termsDeclinedWithoutAWindow() async throws {
+        try await withStub(protocolVersion: 2, termsAnswerableInApp: false) { stub in
+            let run = try await runTurn(["-p", "hi"], stub: stub)
             #expect(run.status == 1, "exited \(run.status): \(run.combined)")
             #expect(run.stderr.hasSuffix(Self.declined), "\(run.stderr)")
             #expect(run.stdout.isEmpty)
@@ -320,9 +320,9 @@ struct AgentSessionTests {
     }
 
     @Test("terms the app window can answer are left to it when stdin is a pipe")
-    func termsLeftToTheAppWindow() throws {
-        try withStub(protocolVersion: 2, termsAnswerableInApp: true) { stub in
-            let run = try runTurn(["-p", "hi"], stub: stub)
+    func termsLeftToTheAppWindow() async throws {
+        try await withStub(protocolVersion: 2, termsAnswerableInApp: true) { stub in
+            let run = try await runTurn(["-p", "hi"], stub: stub)
             #expect(run.status == 0, "exited \(run.status): \(run.combined)")
             #expect(run.stdout == "Four.\n")
             #expect(run.stderr.components(separatedBy: Self.inTheApp).count == 2, "\(run.stderr)")
@@ -332,9 +332,9 @@ struct AgentSessionTests {
 
 #if canImport(Darwin)
     @Test("a terminal answers the terms prompt", arguments: [("y\n", true), ("YES\n", true), ("n\n", false), ("\n", false)])
-    func terminalAnswersTheTerms(input: String, accept: Bool) throws {
-        try withStub(protocolVersion: 2, termsAnswerableInApp: false) { stub in
-            let run = try runTurn(["-p", "hi"], stub: stub, terminal: input)
+    func terminalAnswersTheTerms(input: String, accept: Bool) async throws {
+        try await withStub(protocolVersion: 2, termsAnswerableInApp: false) { stub in
+            let run = try await runTurn(["-p", "hi"], stub: stub, terminal: input)
             #expect(run.status == (accept ? 0 : 1), "exited \(run.status): \(run.combined)")
             #expect(run.stderr.hasPrefix(Self.prompt), "\(run.stderr)")
             #expect(try termsAnswer(stub).accept == accept)
@@ -343,9 +343,9 @@ struct AgentSessionTests {
     }
 
     @Test("a terms prompt answered in the app window is closed and posts nothing")
-    func terminalPromptAnsweredInTheApp() throws {
-        try withStub(protocolVersion: 2, termsAnswerableInApp: true) { stub in
-            let run = try runTurn(["-p", "hi"], stub: stub, terminal: "")
+    func terminalPromptAnsweredInTheApp() async throws {
+        try await withStub(protocolVersion: 2, termsAnswerableInApp: true) { stub in
+            let run = try await runTurn(["-p", "hi"], stub: stub, terminal: "")
             #expect(run.status == 0, "exited \(run.status): \(run.combined)")
             #expect(run.stdout == "Four.\n")
             #expect(run.stderr.hasPrefix(Self.prompt + "\n"), "\(run.stderr)")

@@ -67,7 +67,7 @@ struct RunOutput {
 func runCLI(
     _ arguments: [String], stdin: String? = nil, terminal: String? = nil,
     environment overlay: [String: String] = [:], timeout: TimeInterval = 30
-) throws -> RunOutput {
+) async throws -> RunOutput {
     let binary = try #require(alohajetBinary, "alohajet binary not found next to the test runner")
     let sandbox = FileManager.default.temporaryDirectory
         .appendingPathComponent("alohajet-cli-test-\(UUID().uuidString)")
@@ -101,14 +101,21 @@ func runCLI(
     process.standardError = try FileHandle(forWritingTo: errURL)
     try process.run()
 
-    // A watchdog rather than a poll loop: `waitUntilExit` blocks this thread, and a CLI
-    // that wedges must fail the test rather than hang the run.
+    // A watchdog, so a CLI that wedges fails the test rather than hanging the run.
     let watchdog = DispatchWorkItem { [weak process] in
         guard let process, process.isRunning else { return }
         process.terminate()
     }
     DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
-    process.waitUntilExit()
+    // SUSPENDED, never blocked. This runs on the cooperative pool, which is as wide as
+    // the machine has cores — three on a hosted macOS runner. `waitUntilExit()` held a
+    // pool thread for the whole life of the child, so the CLI suites alone could take
+    // every thread there is, and every async test in the process (the MockCDP tool
+    // tests, whose wake runs under a real 18 s deadline) stalled behind them.
+    // `isRunning` is also the reliable signal: see `MCPSignalTeardownTests.waitForExit`.
+    while process.isRunning {
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
     let timedOut = !watchdog.isCancelled && process.terminationReason == .uncaughtSignal
     watchdog.cancel()
     if timedOut {

@@ -28,16 +28,16 @@ private nonisolated let browserIsRequired = ProcessInfo.processInfo.environment[
 @Suite("mcp signal teardown", .serialized)
 struct MCPSignalTeardownTests {
 
-    @Test func sigtermExitsAndTakesTheBrowserWithIt() throws {
-        try teardown(ending: .signal(SIGTERM), expectedStatus: 128 + SIGTERM)
+    @Test func sigtermExitsAndTakesTheBrowserWithIt() async throws {
+        try await teardown(ending: .signal(SIGTERM), expectedStatus: 128 + SIGTERM)
     }
 
-    @Test func sigintExitsAndTakesTheBrowserWithIt() throws {
-        try teardown(ending: .signal(SIGINT), expectedStatus: 128 + SIGINT)
+    @Test func sigintExitsAndTakesTheBrowserWithIt() async throws {
+        try await teardown(ending: .signal(SIGINT), expectedStatus: 128 + SIGINT)
     }
 
-    @Test func closingStdinExitsAndTakesTheBrowserWithIt() throws {
-        try teardown(ending: .eof, expectedStatus: 0)
+    @Test func closingStdinExitsAndTakesTheBrowserWithIt() async throws {
+        try await teardown(ending: .eof, expectedStatus: 0)
     }
 
     private enum Ending {
@@ -45,7 +45,7 @@ struct MCPSignalTeardownTests {
         case eof
     }
 
-    private func teardown(ending: Ending, expectedStatus: Int32) throws {
+    private func teardown(ending: Ending, expectedStatus: Int32) async throws {
         // This test writes to a child it has just signalled, so the write can land on a
         // pipe whose reader is already gone. On Linux the default SIGPIPE disposition
         // then kills the TEST process — reported as "Exited with unexpected signal code
@@ -155,7 +155,7 @@ struct MCPSignalTeardownTests {
 
         phase("initialize-send")
         send(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#)
-        _ = try #require(reader.line(within: 15), "no answer to initialize")
+        _ = try #require(await reader.line(within: 15), "no answer to initialize")
 
         phase("initialize-received")
 
@@ -163,11 +163,11 @@ struct MCPSignalTeardownTests {
         // reaper installed. A server with no browser has nothing to hang on.
         phase("tools-call-send")
         send(#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"manage_tabs","arguments":{"action":"open","url":"about:blank"}}}"#)
-        let answer = try #require(reader.line(within: 90), "no answer to tools/call")
+        let answer = try #require(await reader.line(within: 90), "no answer to tools/call")
         phase("tools-call-received")
         if answer.contains("Could not reach a browser") {
             process.terminate()
-            _ = waitForExit(process, within: 10)
+            _ = await exited(process, within: 10)
             #expect(browserIsRequired == false,
                     "ALOHAJET_REQUIRE_BROWSER is set, so a missing browser is a failure: \(answer)")
             return
@@ -186,7 +186,7 @@ struct MCPSignalTeardownTests {
         // teardown (0.15s signalled, 0.25s at EOF) and still finite, which "hangs
         // forever" is not. The margin is for the EOF ending, which reaps the browser
         // gracefully — `terminate()` alone may spend 7s escalating on a loaded machine.
-        guard waitForExit(process, within: 20) else {
+        guard await exited(process, within: 20) else {
             kill(process.processIdentifier, SIGKILL)
             Issue.record("alohajet mcp did not exit within 20s of \(ending)")
             return
@@ -221,6 +221,19 @@ struct MCPSignalTeardownTests {
         while process.isRunning {
             if Date() >= deadline { return false }
             Thread.sleep(forTimeInterval: 0.02)
+        }
+        return true
+    }
+
+    /// ``waitForExit(_:within:)`` for the test's own waits, SUSPENDED rather than asleep.
+    /// They run on the cooperative pool, three threads wide on a hosted macOS runner, and
+    /// a 20 s `Thread.sleep` there is a third of every async test's capacity gone. Only
+    /// the cleanup in a `defer`, which cannot await, still blocks.
+    private func exited(_ process: Process, within seconds: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while process.isRunning {
+            if Date() >= deadline { return false }
+            try? await Task.sleep(nanoseconds: 20_000_000)
         }
         return true
     }
@@ -274,16 +287,19 @@ private final class LineReader: @unchecked Sendable {
         }.start()
     }
 
-    func line(within seconds: TimeInterval) -> String? {
+    func line(within seconds: TimeInterval) async -> String? {
         let deadline = Date().addingTimeInterval(seconds)
         repeat {
-            lock.lock()
-            let next = lines.isEmpty ? nil : lines.removeFirst()
-            lock.unlock()
-            if let next { return next }
-            Thread.sleep(forTimeInterval: 0.01)
+            if let next = takeLine() { return next }
+            try? await Task.sleep(nanoseconds: 10_000_000)
         } while Date() < deadline
         return nil
+    }
+
+    private func takeLine() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines.isEmpty ? nil : lines.removeFirst()
     }
 }
 
