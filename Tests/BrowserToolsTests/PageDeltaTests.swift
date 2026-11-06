@@ -22,13 +22,34 @@ struct PageDeltaTests {
                 == " Navigated to http://host/b")
     }
 
+    /// A form posted to its own address loads a new document at the URL it was on. That is
+    /// not "did NOT navigate", and the sentence does not start with "Navigated to" either: a
+    /// program that captures `Navigated to (\S+)` would take "a" for the URL.
+    @Test func aNewDocumentAtTheSameUrlIsSaidToBeANewPage() {
+        #expect(PageDelta.describe(urlBefore: "http://host/a", urlAfter: "http://host/a", newDocument: true)
+                == " A new page loaded at the same URL http://host/a")
+    }
+
+    @Test func aChangedUrlWinsOverANewDocument() {
+        #expect(PageDelta.describe(urlBefore: "http://host/a", urlAfter: "http://host/b", newDocument: true)
+                == " Navigated to http://host/b")
+    }
+
+    @Test func theSameDocumentAtTheSameUrlStillDidNotNavigate() {
+        #expect(PageDelta.describe(urlBefore: "http://host/a", urlAfter: "http://host/a", newDocument: false)
+                == PageDelta.describe(urlBefore: "http://host/a", urlAfter: "http://host/a"))
+        #expect(PageDelta.describe(urlBefore: "", urlAfter: "http://host/b", newDocument: true) == " Now at http://host/b")
+        #expect(PageDelta.describe(urlBefore: "http://host/a", urlAfter: "", newDocument: true) == "")
+    }
+
     /// A URL is never followed by punctuation: a program that copies the receipt's URL verbatim
     /// navigated to `…/search/home.` (agent run jacket-bag-luna-ge43) and got "Access Denied".
     @Test func aUrlEndsItsSentenceWithoutAMark() throws {
         let url = "http://host/search/home"
         for receipt in [PageDelta.describe(urlBefore: "", urlAfter: url),
                         PageDelta.describe(urlBefore: "http://host/", urlAfter: url),
-                        PageDelta.describe(urlBefore: url, urlAfter: url)] {
+                        PageDelta.describe(urlBefore: url, urlAfter: url),
+                        PageDelta.describe(urlBefore: url, urlAfter: url, newDocument: true)] {
             let range = try #require(receipt.range(of: url))
             let after = receipt[range.upperBound...]
             #expect(after.isEmpty || after.first == " ", "\(receipt)")
@@ -46,13 +67,16 @@ struct PageDeltaTests {
         #expect(PageDelta.describe(urlBefore: "", urlAfter: "http://host/b") == " Now at http://host/b")
     }
 
-    /// One wording, three tools. Three tools saying the same thing three slightly different ways is how a
-    /// model learns to distrust all three.
+    /// One wording, four tools. Tools saying the same thing slightly different ways is how a
+    /// model learns to distrust all of them. Each reads the document generation next to the url,
+    /// so a same-URL page load is told apart from a page that did not move.
     @Test("every action tool uses the shared helper",
-          arguments: ["PageClick", "PageType", "PageSelect"])
+          arguments: ["PageClick", "PageType", "PageSelect", "PagePressKeys"])
     func everyActionToolUsesTheSharedHelper(_ file: String) throws {
         let source = try packageSource("Sources/BrowserTools/Tools/\(file).swift")
         #expect(source.contains("PageDelta.describe("), "\(file) still ships a stateless receipt")
         #expect(source.contains("bridge.currentPageURL()"), "\(file) never reads the url")
+        #expect(source.contains("bridge.documentGeneration()"), "\(file) never reads the document generation")
+        #expect(!source.contains("settledPageURL("), "\(file) settles on the url alone")
     }
 }

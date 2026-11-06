@@ -616,3 +616,106 @@ struct RemoteAutomationDriverTermsTests {
         #expect(await stub.termsRequests.isEmpty)
     }
 }
+
+func pendingQuestionEnvelope(
+    id: String = "A-1", kind: String = "question", prompt: String = "Shall I hand the check to you?",
+    options: [String] = ["Let me take over", "Cancel"], answerableInApp: Bool = true
+) throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
+        "state": "running",
+        "result": NSNull(),
+        "pendingQuestion": [
+            "id": id, "kind": kind, "prompt": prompt, "options": options, "answerableInApp": answerableInApp,
+        ],
+    ])
+}
+
+/// While the agent waits on the person at the browser, `/agent/result` stays `running` and may
+/// carry the question. The CLI says so once, and the wait is not a turn that has stopped moving.
+@Suite("RemoteAutomationDriver hand-off question")
+struct RemoteAutomationDriverHandOffTests {
+    static let done = { try! remoteResultEnvelope(state: "done", result: remoteSuccessFixture) }()
+    static let running = { try! remoteResultEnvelope(state: "running", result: nil) }()
+
+    private func waitingNotes(_ notes: NoteSink) -> [String] { notes.all.filter { $0.contains("waiting") } }
+
+    @Test("a repeating question is noted once, with its options")
+    func aRepeatingQuestionIsNotedOnce() async throws {
+        let pending = try pendingQuestionEnvelope()
+        let stub = RemoteStubServer(resultBodies: [pending, pending, pending, Self.done])
+        let notes = NoteSink()
+
+        let result = try await makeRemoteDriver(stub: stub, notes: notes).runTask(prompt: "hi")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(waitingNotes(notes) == [
+            #"the agent is waiting for you in the browser window: "Shall I hand the check to you?" — options: Let me take over / Cancel"#,
+        ])
+    }
+
+    @Test("a new question is noted again, and an approval says where to give it")
+    func eachNewQuestionIsNoted() async throws {
+        let first = try pendingQuestionEnvelope()
+        let approval = try pendingQuestionEnvelope(id: "A-2", kind: "approval", prompt: "Run page_click on the Pay button?", options: [])
+        let stub = RemoteStubServer(resultBodies: [first, Self.running, approval, approval, Self.done])
+        let notes = NoteSink()
+
+        _ = try await makeRemoteDriver(stub: stub, notes: notes).runTask(prompt: "hi")
+
+        #expect(waitingNotes(notes) == [
+            #"the agent is waiting for you in the browser window: "Shall I hand the check to you?" — options: Let me take over / Cancel"#,
+            #"the agent is waiting for you in the browser window: "Run page_click on the Pay button?" — approve or reject it in the app"#,
+        ])
+    }
+
+    @Test("a question the browser has no window for says that")
+    func aQuestionWithNoWindowSaysSo() async throws {
+        let stub = RemoteStubServer(resultBodies: [try pendingQuestionEnvelope(answerableInApp: false), Self.done])
+        let notes = NoteSink()
+
+        _ = try await makeRemoteDriver(stub: stub, notes: notes).runTask(prompt: "hi")
+
+        #expect(waitingNotes(notes) == [
+            #"the agent is waiting for an answer to "Shall I hand the check to you?", and the browser has no window to give it in"#,
+        ])
+    }
+
+    @Test("polls that wait on the person do not spend the turn's budget")
+    func questionWaitHasItsOwnBudget() async throws {
+        let pending = try pendingQuestionEnvelope()
+        let stub = RemoteStubServer(resultBodies: [pending, pending, pending, Self.running, Self.running, Self.done])
+
+        let result = try await makeRemoteDriver(stub: stub, maxPollAttempts: 3).runTask(prompt: "hi")
+
+        #expect(result == remoteSuccessFixture)
+        #expect(await stub.resultCount == 6)
+    }
+
+    @Test("a wait that runs out names the question it was waiting on")
+    func anExhaustedWaitNamesTheQuestion() async throws {
+        let stub = RemoteStubServer(resultBodies: [try pendingQuestionEnvelope()])
+
+        let result = try await makeRemoteDriver(stub: stub, maxPollAttempts: 3).runTask(prompt: "hi")
+
+        #expect(result.completion == .failed)
+        #expect(result.failureReason
+            == #"timed out after 6 polls while the agent was waiting for an answer in the browser: "Shall I hand the check to you?""#)
+    }
+
+    @Test("an envelope whose question is malformed is an ordinary running poll", arguments: [
+        #"{"id":"A-1","kind":"question","prompt":"p","options":["a"]}"#,
+        #"{"id":"A-1","kind":"riddle","prompt":"p","options":["a"],"answerableInApp":true}"#,
+        #"{"kind":"question","prompt":"p","options":["a"],"answerableInApp":true}"#,
+        #""A-1""#,
+    ])
+    func aMalformedQuestionIsIgnored(_ question: String) async throws {
+        let pending = Data(#"{"state":"running","result":null,"pendingQuestion":\#(question)}"#.utf8)
+        let stub = RemoteStubServer(resultBodies: [pending])
+        let notes = NoteSink()
+
+        let result = try await makeRemoteDriver(stub: stub, maxPollAttempts: 3, notes: notes).runTask(prompt: "hi")
+
+        #expect(result.failureReason == "timed out waiting for the automation task after 3 polls")
+        #expect(waitingNotes(notes).isEmpty)
+    }
+}

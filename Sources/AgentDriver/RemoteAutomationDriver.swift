@@ -126,6 +126,31 @@ public nonisolated struct TermsQuestion: Sendable, Equatable {
     public let answerableInApp: Bool
 }
 
+/// What the agent is waiting on the person at the browser for: a question it asked, or a tool
+/// call it needs approved. A running `/agent/result` carries it as `pendingQuestion`; a host
+/// that predates the key never sends it.
+public nonisolated struct HandOffQuestion: Sendable, Equatable {
+    public enum Kind: String, Sendable { case question, approval }
+    public let id: String
+    public let kind: Kind
+    public let prompt: String
+    public let options: [String]
+    /// Whether the browser has a window the person can answer in.
+    public let answerableInApp: Bool
+
+    /// The one-line note `alohajet -p` prints when the question first appears.
+    var note: String {
+        guard answerableInApp else {
+            return "the agent is waiting for an answer to \"\(prompt)\", and the browser has no window to give it in"
+        }
+        let how = switch kind {
+        case .approval: " — approve or reject it in the app"
+        case .question: options.isEmpty ? "" : " — options: \(options.joined(separator: " / "))"
+        }
+        return "the agent is waiting for you in the browser window: \"\(prompt)\"" + how
+    }
+}
+
 public struct RemoteAutomationDriver: AlohaJetDriver {
     /// The transport seam: issue ONE HTTP request (method + absolute URL + optional
     /// body) and yield its status + body. Injected so tests are hermetic (a stub, no
@@ -430,8 +455,10 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
 
     private func poll(taskId: String, answering: inout (id: String, task: Task<Void, Never>)?) async throws -> CLIRunResult {
         var asked: Set<String> = []
+        var noted: Set<String> = []
+        var waitingOn: HandOffQuestion?
         var attempt = 0
-        var termsPolls = 0
+        var waitPolls = 0
         var failures = 0
         while attempt < maxPollAttempts {
             let response: RemoteAutomationHTTPResponse
@@ -469,7 +496,11 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
                 if let terms, let question, asked.insert(question.id).inserted {
                     answering = (question.id, Task { await answer(question, with: terms) })
                 }
-                if question != nil, termsPolls < maxPollAttempts { termsPolls += 1 } else { attempt += 1 }
+                // A turn waiting on the person is not a turn that stopped moving, so those polls
+                // have a budget of their own, as the terms question's do.
+                waitingOn = Self.handOffQuestion(envelope["pendingQuestion"])
+                if let waitingOn, noted.insert(waitingOn.id).inserted { warn(waitingOn.note) }
+                if question != nil || waitingOn != nil, waitPolls < maxPollAttempts { waitPolls += 1 } else { attempt += 1 }
                 try await Task.sleep(for: pollInterval)
             case "done":
                 return Self.decodeTerminal(envelope["result"])
@@ -480,6 +511,10 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
             default:
                 return Self.failed("automation task returned an unknown state '\(state)'")
             }
+        }
+        if let waitingOn {
+            return Self.failed("timed out after \(attempt + waitPolls) polls while the agent was waiting"
+                               + " for an answer in the browser: \"\(waitingOn.prompt)\"")
         }
         return Self.failed("timed out waiting for the automation task after \(maxPollAttempts) polls")
     }
@@ -495,6 +530,16 @@ public struct RemoteAutomationDriver: AlohaJetDriver {
         } catch {
             if !Task.isCancelled { warn("automation transport error on /agent/terms: \(error)") }
         }
+    }
+
+    static func handOffQuestion(_ value: Any?) -> HandOffQuestion? {
+        guard let object = value as? [String: Any],
+              let id = object["id"] as? String,
+              let kind = (object["kind"] as? String).flatMap(HandOffQuestion.Kind.init(rawValue:)),
+              let prompt = object["prompt"] as? String,
+              let options = object["options"] as? [String],
+              let answerableInApp = object["answerableInApp"] as? Bool else { return nil }
+        return HandOffQuestion(id: id, kind: kind, prompt: prompt, options: options, answerableInApp: answerableInApp)
     }
 
     private static func termsQuestion(_ value: Any?) -> TermsQuestion? {

@@ -92,11 +92,13 @@ public final class CDPTabHandle: TabHandle, StepTraceTab {
         // The browser answers by the ids it serves. A tab this model opened has none until
         // the browser makes it, so the browser has nothing to say about it yet.
         guard session.effectiveTargetId != nil else {
-            return TabAttribution(owner: ownerByTabsModel, foreground: false)
+            return TabAttribution(owner: ownerByTabsModel, foreground: false,
+                                  personAtBrowser: attributionSource.personAtBrowser)
         }
         return TabAttribution(
             owner: attributionSource.owner(of: id),
-            foreground: attributionSource.foregroundTabId == id)
+            foreground: attributionSource.foregroundTabId == id,
+            personAtBrowser: attributionSource.personAtBrowser)
     }
 
     init(

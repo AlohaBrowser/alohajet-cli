@@ -42,6 +42,16 @@ struct PagePressKeysReceiptTests {
         #expect(out.hasSuffix(PageToolReceipt.submittedNote))
     }
 
+    /// Enter that posted the form to its own address: the URL held and the document did not.
+    @Test func enterThatLoadedANewPageAtTheSameUrl() {
+        let out = PagePressKeysExecutorTool.receipt(
+            keys: "Enter", focusedAlohaId: "1a", urlBefore: "https://h/search", urlAfter: "https://h/search",
+            newDocument: true, selectorNote: " [selector=[name=\"q\"]] [matches=1]")
+        #expect(out.contains(" A new page loaded at the same URL https://h/search"))
+        #expect(!out.contains("did NOT navigate"))
+        #expect(out.hasSuffix(PageToolReceipt.submittedNote))
+    }
+
     /// Nothing focused: the receipt says so, carries no selector and no submit token -- the
     /// key press was not aimed at an element, so there is nothing for a mint to build a step from.
     @Test func nothingHadFocus() {

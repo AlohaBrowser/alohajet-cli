@@ -39,6 +39,9 @@ import ToolABI
             // WHERE THE PAGE WAS BEFORE THE CLICK. Two cheap backend reads bracket the action so the
             // receipt can state whether anything moved; see `PageDelta`.
             let urlBefore = bridge.currentPageURL()
+            // AND WHICH DOCUMENT, so a form posted to its own address is a new page and not a
+            // standstill -- see settledPage.
+            let generationBefore = await bridge.documentGeneration()
             // AND WHAT THE PAGE'S STRUCTURE WAS, so the receipt can carry the page only when the
             // click changed it -- see pageFingerprint.
             let fingerprintBefore = await bridge.pageFingerprint()
@@ -107,7 +110,10 @@ import ToolABI
             // not move, which is what a failed click always does.
             let clickLanded = !result.isError
                 && (result.pendingResults.first(where: { $0.type == route.pendingType })?.success ?? false)
-            let urlAfter = clickLanded ? await bridge.settledPageURL(after: urlBefore) : urlBefore
+            let settled = clickLanded
+                ? await bridge.settledPage(after: urlBefore, generationBefore: generationBefore)
+                : SettledPage(url: urlBefore, newDocument: false)
+            let urlAfter = settled.url
             // Read -- and stop -- the watch on every path; a navigation took its document with it.
             let effect = watching ? await bridge.clickEffects() : nil
             // A CLICK THAT MOVED THE PAGE off a filled-in form is what a submission looks like from
@@ -118,7 +124,7 @@ import ToolABI
             }
             var receipt = Self.interpret(result, route: route, alohaId: alohaId, clickType: clickType,
                                          urlBefore: urlBefore, urlAfter: urlAfter,
-                                         selectorNote: selectorNote)
+                                         newDocument: settled.newDocument, selectorNote: selectorNote)
             // SAY WHAT WAS HIDDEN, on every path: the model must learn the layer is gone (so it does
             // not go looking for it) and that no consent was given on the user's behalf.
             if let overlayNote { receipt.output += overlayNote }
@@ -129,7 +135,8 @@ import ToolABI
                let elsewhere = otherTabNote(alohaId, context, excluding: resolved.tab.id) {
                 receipt = RawToolResult(output: receipt.output + elsewhere, isError: true)
             }
-            // A click that LANDED and moved nothing is the case worth explaining: either the control
+            // A click that LANDED and moved nothing is the case worth explaining (a new document at
+            // the same URL moved everything, so none of this applies to it): either the control
             // itself changed, or something is covering the element, or a form refused to submit --
             // and none of that is visible in the page the model gets back. Only on that path.
             //
@@ -143,7 +150,7 @@ import ToolABI
             // nothing else explained the click.
             let fingerprintAfter = await bridge.pageFingerprint()
             let pageMoved = AgentBrowserBridge.pageMoved(before: fingerprintBefore, after: fingerprintAfter)
-            if clickLanded, urlAfter == urlBefore {
+            if clickLanded, urlAfter == urlBefore, !settled.newDocument {
                 let stateAfter = await bridge.controlState(alohaId: alohaId)
                 // The watch's answer when it ran: the fingerprint also counts the cursor marker the
                 // click draws and fades, so it moves on a click that changed nothing on the page.
@@ -190,7 +197,7 @@ import ToolABI
     /// included — because `executeAgentCode` stays `isError: false` even when an individual
     /// drained pending op failed.
     static func interpret(_ result: AgentActionResult, route: ClickRoute, alohaId: String, clickType: String,
-                          urlBefore: String = "", urlAfter: String = "",
+                          urlBefore: String = "", urlAfter: String = "", newDocument: Bool = false,
                           selectorNote: String = "") -> RawToolResult {
         if result.isError {
             return RawToolResult(output: result.output, isError: true)
@@ -203,7 +210,7 @@ import ToolABI
         }
         return RawToolResult(
             output: "Clicked element \"\(alohaId)\" (\(clickType))."
-                + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter)
+                + PageDelta.describe(urlBefore: urlBefore, urlAfter: urlAfter, newDocument: newDocument)
                 + selectorNote,
             isError: nil)
     }

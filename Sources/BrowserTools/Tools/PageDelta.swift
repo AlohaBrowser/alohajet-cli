@@ -28,10 +28,16 @@ public nonisolated enum PageDelta {
     /// full stop included, the replay navigated to `…/search/home.`, the site answered "Access
     /// Denied", and the scenario was over at step 2 (agent run jacket-bag-luna-ge43, 2026-09-21).
     /// Every URL here ends its sentence, and the sentence ends without a mark.
-    public static func describe(urlBefore: String, urlAfter: String) -> String {
+    ///
+    /// `newDocument` is the case the URL cannot see: a form posted to its own address loads a new
+    /// document at the URL it was on, and was told it "did NOT navigate". It is not phrased
+    /// "Navigated to …" either, since a program that captures `Navigated to (\S+)` would take the
+    /// next word for the URL. A changed URL still wins.
+    public static func describe(urlBefore: String, urlAfter: String, newDocument: Bool = false) -> String {
         guard !urlAfter.isEmpty else { return "" }
         if urlBefore.isEmpty { return " Now at \(urlAfter)" }
         if urlBefore == urlAfter {
+            if newDocument { return " A new page loaded at the same URL \(urlAfter)" }
             return " The page did NOT navigate — if you expected a new page, the action did not do what "
                 + "you assumed: read the page before acting again. The URL is still \(urlAfter)"
         }
