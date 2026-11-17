@@ -538,6 +538,8 @@ Every variable the sources actually read, checked with
 | `ALOHAJET_MAX_OBS_TOKENS` | off | cap one observation's estimated tokens, so a single huge page cannot blow the context |
 | `ALOHAJET_COMPACT_TOOLS` | off | tighter default caps, for a small model |
 | `ALOHAJET_CHROME_USER_AGENT` | Chrome's own | override the user agent of a browser alohajet launches. See the HeadlessChrome limitation below. |
+| `ALOHAJET_CHROME_PROXY` | none | `[scheme://]host:port` passed to a launched browser as `--proxy-server`. Credentials in the value are refused: the proxy must admit by source address. |
+| `ALOHAJET_CHROME_MEDIA` | off | `1` launches the browser with `--autoplay-policy=no-user-gesture-required --disable-audio-output`, so a page's media plays with no click and no audio device. |
 | `ALOHAJET_DEBUG` | off | protocol chatter to stderr |
 | `ALOHA_CDP_PORT` | `9222` | where `--browser aloha` looks for the Aloha browser's CDP listener |
 | `ALOHA_BROWSER_APP` | the `.app` this binary ships inside | path to the Aloha `.app` that `--browser aloha` launches. Unset, the lane launches the bundle this executable sits in — never another registered copy, which would be a second instance on one profile. |
