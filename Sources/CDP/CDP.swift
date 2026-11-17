@@ -852,6 +852,41 @@ public struct ChromeLauncher: Sendable {
         #endif
     }
 
+    /// The Chrome arguments the environment asks for, in a fixed order.
+    ///
+    /// - `ALOHAJET_CHROME_USER_AGENT` — GCE hunters: a Safari-like UA so Cloudflare does not
+    ///   treat Chromium as a bot. Unset or empty keeps Chrome's own default. This is the UA
+    ///   STRING only — Chromium still derives Sec-CH-UA client hints from its real build, so
+    ///   a site reading those is not fooled by this alone.
+    /// - `ALOHAJET_CHROME_PROXY` — `[scheme://]host:port` for `--proxy-server`. Credentials
+    ///   are REFUSED rather than passed on: Chrome ignores `user:pass@` in this flag, and an
+    ///   environment variable is recorded by whatever runs the process (a sandbox's operation
+    ///   log, `/proc/<pid>/environ`), so the proxy must admit by source address instead.
+    /// - `ALOHAJET_CHROME_MEDIA` — `1` lets a page's media play with no user gesture and
+    ///   with no audio device: `--autoplay-policy=no-user-gesture-required` and
+    ///   `--disable-audio-output` (a null sink on a real-time clock). A headless box has no
+    ///   sound card and no one to click "play", and decoding audio needs neither.
+    static func environmentArguments(_ environment: [String: String]) throws -> [String] {
+        var arguments: [String] = []
+        if let userAgent = environment["ALOHAJET_CHROME_USER_AGENT"], !userAgent.isEmpty {
+            arguments.append("--user-agent=\(userAgent)")
+        }
+        if let proxy = environment["ALOHAJET_CHROME_PROXY"], !proxy.isEmpty {
+            guard proxy.wholeMatch(of: /((https?|socks[45]):\/\/)?[A-Za-z0-9.\-]+:[0-9]{1,5}/) != nil else {
+                throw CDPError.discoveryFailed(
+                    "ALOHAJET_CHROME_PROXY must be [scheme://]host:port with no credentials")
+            }
+            arguments.append("--proxy-server=\(proxy)")
+        }
+        if environment["ALOHAJET_CHROME_MEDIA"] == "1" {
+            arguments.append(contentsOf: [
+                "--autoplay-policy=no-user-gesture-required",
+                "--disable-audio-output",
+            ])
+        }
+        return arguments
+    }
+
     /// Launch Chrome with remote debugging enabled.
     ///
     /// - Parameters:
@@ -932,14 +967,7 @@ public struct ChromeLauncher: Sendable {
         if !ownsUserDataDir, let profileDirectory {
             arguments.append("--profile-directory=\(profileDirectory)")
         }
-        // GCE hunters: a Safari-like UA so Cloudflare does not treat Chromium as a
-        // bot. Unset or empty keeps Chrome's own default. This is the UA STRING
-        // only — Chromium still derives Sec-CH-UA client hints from its real
-        // build, so a site reading those is not fooled by this alone.
-        if let userAgent = ProcessInfo.processInfo.environment["ALOHAJET_CHROME_USER_AGENT"],
-           !userAgent.isEmpty {
-            arguments.append("--user-agent=\(userAgent)")
-        }
+        arguments.append(contentsOf: try Self.environmentArguments(ProcessInfo.processInfo.environment))
         arguments.append("about:blank")
         process.arguments = arguments
         // stdout stays silenced; stderr is captured to a file, since it is the only place
